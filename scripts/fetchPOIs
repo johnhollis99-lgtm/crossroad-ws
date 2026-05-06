@@ -1,0 +1,158 @@
+/**
+ * RoadStory — POI Data Pipeline
+ * scripts/fetchPOIs.ts
+ *
+ * SOURCE: OpenStreetMap Overpass API (free, no key needed)
+ * STORES: Supabase `pois` table
+ *
+ * Run with: npx ts-node scripts/fetchPOIs.ts
+ *
+ * SUPABASE TABLE SCHEMA (run this SQL in Supabase dashboard first):
+ *
+ * create extension if not exists postgis;
+ *
+ * create table pois (
+ *   id          text primary key,
+ *   name        text not null,
+ *   category    text not null,
+ *   lat         double precision not null,
+ *   lng         double precision not null,
+ *   location    geography(Point, 4326),
+ *   tags        jsonb,
+ *   description text,
+ *   created_at  timestamptz default now()
+ * );
+ *
+ * create index pois_location_idx on pois using gist(location);
+ * create index pois_category_idx on pois(category);
+ */
+
+import { createClient } from '@supabase/supabase-js';
+
+const SUPABASE_URL = process.env.SUPABASE_URL!;
+const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY!; // use service key for bulk inserts
+const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
+
+// ── Overpass query — fetches POIs along a bounding box ──────────────────
+// Covers California by default — narrow this for faster seeding
+const OVERPASS_QUERY = (south: number, west: number, north: number, east: number) => `
+[out:json][timeout:60];
+(
+  node["historic"]["name"](${south},${west},${north},${east});
+  node["tourism"~"attraction|viewpoint|museum|artwork"]["name"](${south},${west},${north},${east});
+  node["natural"~"peak|cliff|cave_entrance|waterfall"]["name"](${south},${west},${north},${east});
+  node["geological"]["name"](${south},${west},${north},${east});
+  node["leisure"~"nature_reserve|park"]["name"](${south},${west},${north},${east});
+  node["amenity"~"restaurant|cafe"]["cuisine"~"regional"]["name"](${south},${west},${north},${east});
+  way["historic"]["name"](${south},${west},${north},${east});
+  way["tourism"~"attraction|viewpoint"]["name"](${south},${west},${north},${east});
+  way["natural"~"peak|cliff|waterfall"]["name"](${south},${west},${north},${east});
+);
+out center tags;
+`;
+
+// ── Map OSM tags to RoadStory categories ────────────────────────────────
+function mapCategory(tags: Record<string, string>): string {
+  if (tags.historic)                          return 'History';
+  if (tags.geological)                        return 'Geology';
+  if (tags.natural === 'peak')                return 'Scenic views';
+  if (tags.natural === 'cliff')               return 'Geology';
+  if (tags.natural === 'waterfall')           return 'Nature';
+  if (tags.natural === 'cave_entrance')       return 'Nature';
+  if (tags.leisure === 'nature_reserve')      return 'Nature';
+  if (tags.tourism === 'viewpoint')           return 'Scenic views';
+  if (tags.tourism === 'museum')              return 'History';
+  if (tags.tourism === 'artwork')             return 'Architecture';
+  if (tags.tourism === 'attraction')          return 'Scenic views';
+  if (tags.amenity === 'restaurant')          return 'Food';
+  if (tags.amenity === 'cafe')                return 'Food';
+  return 'Hidden gems';
+}
+
+// ── Fetch from Overpass ──────────────────────────────────────────────────
+async function fetchFromOverpass(bbox: [number, number, number, number]) {
+  const [s, w, n, e] = bbox;
+  const query = OVERPASS_QUERY(s, w, n, e);
+  const res = await fetch('https://overpass-api.de/api/interpreter', {
+    method: 'POST',
+    body: query,
+    headers: { 'Content-Type': 'text/plain' },
+  });
+  if (!res.ok) throw new Error(`Overpass error: ${res.status}`);
+  const data = await res.json();
+  return data.elements as any[];
+}
+
+// ── Transform OSM element → RoadStory POI ───────────────────────────────
+function transformElement(el: any): { id: string; name: string; category: string; lat: number; lng: number; tags: object } | null {
+  const name = el.tags?.name;
+  if (!name || name.trim().length < 2) return null;
+
+  const lat = el.type === 'way' ? el.center?.lat : el.lat;
+  const lng = el.type === 'way' ? el.center?.lon : el.lon;
+  if (!lat || !lng) return null;
+
+  return {
+    id: `osm-${el.type}-${el.id}`,
+    name: name.trim(),
+    category: mapCategory(el.tags ?? {}),
+    lat,
+    lng,
+    tags: el.tags ?? {},
+  };
+}
+
+// ── Upsert batch to Supabase ─────────────────────────────────────────────
+async function upsertPOIs(pois: any[]) {
+  // Add PostGIS geography column from lat/lng
+  const rows = pois.map(p => ({
+    ...p,
+    location: `POINT(${p.lng} ${p.lat})`, // PostGIS WKT format
+  }));
+
+  const { error } = await supabase
+    .from('pois')
+    .upsert(rows, { onConflict: 'id' });
+
+  if (error) throw error;
+  return rows.length;
+}
+
+// ── Main: run pipeline for a bounding box ───────────────────────────────
+async function run() {
+  // California bounding box — tighten to your target region
+  // Format: [south, west, north, east]
+  const BBOX: [number, number, number, number] = [32.5, -124.5, 42.0, -114.1];
+
+  // For large areas, split into tiles to avoid Overpass timeout
+  const TILE_SIZE = 2; // degrees
+  const tiles: [number, number, number, number][] = [];
+  for (let s = BBOX[0]; s < BBOX[2]; s += TILE_SIZE) {
+    for (let w = BBOX[1]; w < BBOX[3]; w += TILE_SIZE) {
+      tiles.push([s, w, Math.min(s + TILE_SIZE, BBOX[2]), Math.min(w + TILE_SIZE, BBOX[3])]);
+    }
+  }
+
+  console.log(`Fetching ${tiles.length} tiles...`);
+  let totalInserted = 0;
+
+  for (const tile of tiles) {
+    try {
+      console.log(`Tile ${tile}...`);
+      const elements = await fetchFromOverpass(tile);
+      const pois = elements.map(transformElement).filter(Boolean) as any[];
+      if (pois.length === 0) continue;
+      const count = await upsertPOIs(pois);
+      totalInserted += count;
+      console.log(`  → ${count} POIs inserted`);
+      // Rate limit: Overpass asks for 1 req / 2s
+      await new Promise(r => setTimeout(r, 2500));
+    } catch (err) {
+      console.error(`Tile ${tile} failed:`, err);
+    }
+  }
+
+  console.log(`Done. Total inserted: ${totalInserted}`);
+}
+
+run().catch(console.error);

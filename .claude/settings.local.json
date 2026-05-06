@@ -1,0 +1,41 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell(Test-Path *)",
+      "PowerShell(Test-Path -Path \"e:\\\\Dev XRoad\\\\roadstory\\\\scripts\\\\narrative-extraction\" && \\(Get-ChildItem -Path \"e:\\\\Dev XRoad\\\\roadstory\\\\scripts\\\\narrative-extraction\"\\) -or \"Directory does not exist\")",
+      "Skill(claude-api)",
+      "Skill(claude-api:*)",
+      "PowerShell(Get-ChildItem -Path \"e:\\\\Dev XRoad\\\\roadstory\" -Directory | Where-Object Name -NotMatch \"^node_modules\" | ForEach-Object { Get-ChildItem -Path $_.FullName -Directory -Depth 0 -ErrorAction SilentlyContinue | ForEach-Object { [PSCustomObject]@{ Path = $_.FullName; Name = $_.Name } } })",
+      "PowerShell(Get-ChildItem -Path \"e:\\\\Dev XRoad\\\\roadstory\\\\server\" -Recurse | Where-Object {$_.PSIsContainer -eq $false} | Select-Object Name, @{Name=\"RelativePath\";Expression={$_.FullName.Replace\\(\"e:\\\\Dev XRoad\\\\roadstory\\\\server\\\\\", \"\"\\)}} | Sort-Object RelativePath)",
+      "PowerShell(Get-ChildItem -Path \"e:\\\\Dev XRoad\\\\roadstory\" -Force | Select-Object Name, @{Name=\"Type\";Expression={if\\($_.PSIsContainer\\){\"Dir\"}else{\"File\"}}} | Sort-Object Name)",
+      "PowerShell(Get-ChildItem -Path \"e:\\\\Dev XRoad\\\\roadstory\\\\server\" -Force | Select-Object Name, @{Name=\"Type\";Expression={if\\($_.PSIsContainer\\){\"Dir\"}else{\"File\"}}} | Sort-Object Name)",
+      "PowerShell(Get-ChildItem -Path \"e:\\\\Dev XRoad\\\\roadstory\" -Directory | Where-Object {$_.Name -notmatch \"node_modules|\\\\.git|\\\\.next|\\\\.expo\"} | ForEach-Object {$_.Name})",
+      "PowerShell(Get-ChildItem -Path \"e:\\\\Dev XRoad\\\\roadstory\\\\app\" -Recurse | Select-Object @{Name=\"RelativePath\";Expression={$_.FullName.Replace\\(\"e:\\\\Dev XRoad\\\\roadstory\\\\app\\\\\", \"\"\\)}} | Sort-Object RelativePath)",
+      "PowerShell(@\\(\"server\", \"app\", \"components\", \"hooks\", \"lib\", \"scripts\", \"supabase\"\\) | ForEach-Object { if \\(Test-Path \"e:\\\\Dev XRoad\\\\roadstory\\\\$_\\\\package.json\"\\) { Write-Output \"$_\" } })",
+      "PowerShell(Get-ChildItem -Path \"e:\\\\Dev XRoad\\\\roadstory\" -Force | Where-Object {-not $_.PSIsContainer} | Select-Object Name | Sort-Object Name)",
+      "PowerShell(Get-ChildItem -Path \"e:\\\\Dev XRoad\\\\roadstory\" -MaxDepth 1 -Force | Where-Object {-not $_.PSIsContainer} | Select-Object Name | Sort-Object Name)",
+      "PowerShell(Get-ChildItem -Path \"e:\\\\Dev XRoad\\\\roadstory\" -Depth 0 | Where-Object {-not $_.PSIsContainer} | Select-Object Name | Sort-Object Name)",
+      "PowerShell(python -c \"import sys,json; p=json.load\\(sys.stdin\\); print\\('exports:', list\\(p.get\\('exports',{}\\).keys\\(\\)\\)[:5]\\); print\\('types:', p.get\\('types'\\)\\); print\\('main:', p.get\\('main'\\)\\)\")",
+      "PowerShell(Get-ChildItem -Path \"e:\\\\Dev XRoad\\\\roadstory\\\\scripts\" -Recurse | Select-Object -Property FullName, @{Name='Type';Expression={if\\($_.PSIsContainer\\){'DIR'}else{'FILE'}}} | Sort-Object FullName | Format-Table -AutoSize)",
+      "PowerShell(Get-ChildItem -Path \"e:\\\\Dev XRoad\\\\roadstory\\\\server\\\\lib\" -Force | Select-Object -Property FullName, @{Name='Type';Expression={if\\($_.PSIsContainer\\){'DIR'}else{'FILE'}}} | Format-Table -AutoSize)",
+      "PowerShell(Get-ChildItem -Path \"e:\\\\Dev XRoad\\\\roadstory\\\\scripts\" -Recurse | Where-Object { $_.PSIsContainer -eq $false } | Select-Object -Property FullName | Sort-Object FullName | ForEach-Object { $_.FullName.Replace\\(\"E:\\\\Dev XRoad\\\\roadstory\\\\scripts\\\\\", \"scripts/\"\\) } | Format-List)",
+      "PowerShell(tree \"e:\\\\Dev XRoad\\\\roadstory\\\\scripts\" /f /L 3 2>$null)",
+      "PowerShell(tree \"e:\\\\Dev XRoad\\\\roadstory\\\\scripts\" -L 2 2>$null)",
+      "PowerShell(Head -200)",
+      "PowerShell(Get-ChildItem -Path \"e:\\\\Dev XRoad\\\\roadstory\\\\scripts\" -Directory | ForEach-Object { Write-Host $_.Name; Get-ChildItem -Path $_.FullName -Force | Select-Object -Property Name })",
+      "PowerShell(ls -Recurse \"e:\\\\Dev XRoad\\\\roadstory\\\\scripts\" -File | Select-Object Name, Directory | Sort-Object { $_.Directory.FullName } | Format-Table -AutoSize)",
+      "PowerShell(gcloud auth application-default print-access-token 2>&1)",
+      "PowerShell(Get-ChildItem \"e:\\\\Dev XRoad\\\\roadstory\\\\supabase\\\\migrations\" | Where-Object { $_.Name -match \"000010|000011\" } | Select-Object Name)",
+      "PowerShell(cmd /c \"dir /b \"\"e:\\\\Dev XRoad\\\\roadstory\\\\supabase\\\\migrations\"\"\")",
+      "Read(//c/Users/johnh/.claude/**)",
+      "PowerShell(Get-ChildItem -Path \"e:\\\\Dev XRoad\\\\roadstory\\\\scripts\\\\lib\\\\tts\\\\\" -Recurse | Select-Object FullName | ForEach-Object { $_.FullName })",
+      "PowerShell(cd \"e:\\\\Dev XRoad\\\\roadstory\\\\scripts\\\\voice-audition\" && node_modules\\\\.bin\\\\tsx ../audition-voices.ts --list 2>&1; Write-Host \"---\"; node_modules\\\\.bin\\\\tsx ../audition-voices.ts --commit --mode=family 2>&1; Write-Host \"---\"; foreach \\($m in @\\('kids','unfiltered','local'\\)\\) { node_modules\\\\.bin\\\\tsx ../audition-voices.ts --mode=$m --dry-run 2>&1 | Select-Object -First 4 })",
+      "PowerShell(npx supabase --version 2>&1)",
+      "PowerShell(npx supabase db push --help 2>&1)",
+      "Read(//c/Program Files/**)",
+      "PowerShell($gitExe = Get-ChildItem \"C:\\\\Users\\\\johnh\\\\AppData\\\\Local\\\\GitHubDesktop\\\\\" -Recurse -Filter \"git.exe\" -ErrorAction SilentlyContinue | Select-Object -First 1; $gitExe.FullName)",
+      "PowerShell(& \"C:\\\\Users\\\\johnh\\\\AppData\\\\Local\\\\GitHubDesktop\\\\app-3.5.8\\\\resources\\\\app\\\\git\\\\cmd\\\\git.exe\" -C \"e:\\\\Dev XRoad\\\\roadstory\" status 2>&1)",
+      "PowerShell(Get-ChildItem \"e:\\\\Dev XRoad\\\\roadstory\\\\scripts\\\\poi-import\\\\.gitignore\" -Force -ErrorAction SilentlyContinue | ForEach-Object { Get-Content $_.FullName }; Write-Host \"=tts=\"; Get-ChildItem \"e:\\\\Dev XRoad\\\\roadstory\\\\scripts\\\\lib\\\\tts\" -Force | ForEach-Object { $_.Name }; Write-Host \"=narrative=\"; Get-ChildItem \"e:\\\\Dev XRoad\\\\roadstory\\\\scripts\\\\narrative-extraction\" -Force | ForEach-Object { $_.Name }; Write-Host \"=audition-output=\"; Test-Path \"e:\\\\Dev XRoad\\\\roadstory\\\\scripts\\\\audition-output\")"
+    ]
+  }
+}

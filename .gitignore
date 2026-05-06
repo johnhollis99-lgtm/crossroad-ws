@@ -1,0 +1,62 @@
+# Learn more https://docs.github.com/en/get-started/getting-started-with-git/ignoring-files
+
+# ── Dependencies ──────────────────────────────────────────────────────────────
+node_modules/
+
+# ── Environment / Secrets ────────────────────────────────────────────────────
+# Root .env holds API keys — never commit
+.env
+.env.local
+.env.*.local
+# Server runtime secrets
+server/.env
+
+# ── Expo ─────────────────────────────────────────────────────────────────────
+.expo/
+dist/
+web-build/
+expo-env.d.ts
+
+# ── Native builds ────────────────────────────────────────────────────────────
+/ios
+/android
+.kotlin/
+*.orig.*
+*.jks
+*.p8
+*.p12
+*.key
+*.mobileprovision
+
+# ── Metro ────────────────────────────────────────────────────────────────────
+.metro-health-check*
+
+# ── TypeScript ───────────────────────────────────────────────────────────────
+*.tsbuildinfo
+
+# ── Next.js (admin/) ─────────────────────────────────────────────────────────
+admin/.next/
+admin/out/
+
+# ── Scripts: caches and generated audio ──────────────────────────────────────
+scripts/poi-import/cache/
+scripts/narrative-extraction/cache/
+scripts/voice-audition/output/
+scripts/audition-output/
+*.opus
+
+# ── One-off utility scripts ───────────────────────────────────────────────────
+scripts/verify-migrations.mjs
+
+# ── Logs ─────────────────────────────────────────────────────────────────────
+*.log
+npm-debug.*
+yarn-debug.*
+yarn-error.*
+
+# ── OS ───────────────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+
+# ── Certs ────────────────────────────────────────────────────────────────────
+*.pem

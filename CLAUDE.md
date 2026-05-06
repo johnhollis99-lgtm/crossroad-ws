@@ -1,0 +1,556 @@
+# XRoad — Claude Code Project Context
+
+## App identity
+
+XRoad (rebranded from RoadStory 2026-05-04) — GPS-triggered AI narration for road trips and hikes.
+Package/slug names still say "roadstory" internally; all user-facing strings say "XRoad".
+
+## Stack
+
+- **Frontend:** React Native / Expo (no Draftbit — all UI is hand-coded) — compiles to iOS + Android from one codebase
+- **Navigation:** `createNativeStackNavigator` in App.tsx (NOT Expo Router). All new screens must be registered there.
+  - Registered: index, filters, customize, drive, driving, hiking, trail
+- **Backend:** Supabase + PostGIS, Node.js + Express + Socket.io on :3001
+- **Maps:** Google Maps / Directions / Elevation (native); Mapbox shim for web
+- **LLM:** xAI/Grok; TTS is provider-abstracted via `scripts/lib/tts/`. Primary provider is Google Cloud TTS. ElevenLabs, OpenAI, Polly, and self-hosted are pluggable but inactive.
+- **Design tokens:** `lib/theme.ts` → `C` object. `lib/mapStyle.ts` → `MAP_STYLES`.
+
+## Screen flows
+
+```
+index.tsx → customize.tsx → drive.tsx     (narrator-aware driving — primary flow)
+index.tsx → filters.tsx   → driving.tsx   (legacy flow, still functional)
+hiking.tsx → filters.tsx (mode='hiking') → trail.tsx
+```
+
+## Hard rules — never break these
+
+**Units:** Miles and feet only in any user-facing text. Meters only for internal calculations and DB storage. Never show "km" or "m" to the user.
+
+**DB architecture:** Always reuse existing Supabase tables and RPC functions. Do not create parallel or shadow tables for new features. Extend with new columns / RLS policies / updated RPC params instead.
+
+**Category slug mapping:** UI labels ≠ DB slugs. The `get_corridor_pois` RPC filters by `c.slug = ANY(category_filter)` (case-sensitive). Always apply `CAT_SLUG` mapping from `app/customize.tsx` before any RPC call:
+- History→history, Nature→nature, Architecture→architecture
+- Food→food_drink, Music→local_culture, Weird→hidden_gems
+- Roadside→local_culture, Film→art, Science→geology
+
+**Scenic badge:** Never assign "Scenic" by elimination. Only award it when a route has strictly more POIs than the fastest route (`poiCount`). If POI data is null, show no badge.
+
+**Mobile-only:** No desktop UI. Design at 390×844 (iPhone) / 412×915 (Android). Touch targets ≥ 64pt on the Drive screen.
+
+**Drive screen safety:** No primary info as readable text while driving. "End trip" always visible and oversized. No nested menus on Drive.
+
+## Screen pages (primary flow)
+
+User mental model / naming convention used in conversation:
+- **Page 1 — Home:** `app/index.tsx` — route search, map
+- **Page 2 — Configuration:** `app/customize.tsx` — narrator + filters
+- **Page 3 — Trip:** `app/drive.tsx` — active driving/hiking screen
+
+## Key files
+
+| File | Purpose |
+|------|---------|
+| `app/index.tsx` | Map screen — route search, POI display. Sheet starts at `peek`, auto-snaps to 85% when routes load. No trail mode state here — always fetches in `'driving'` mode. |
+| `app/customize.tsx` | Narrator + filter selection; saves trip; live story count |
+| `app/drive.tsx` | Full-screen map + draggable sheet; socket narration; GPS. Route polyline: `#4A90D9` blue, strokeWidth 5, rounded. `fitToCoordinates` on mount (400ms delay). Contains `trailMode` state. |
+| `app/driving.tsx` | Legacy driving screen |
+| `app/hiking.tsx` / `trail.tsx` | Hiking flow |
+| `lib/supabase.ts` | All DB functions + type exports |
+| `lib/theme.ts` | Color tokens (`C`) |
+| `lib/mapStyle.ts` | Map style config + persistence |
+| `lib/routeBadges.ts` | `computeBadges()` + `computeRouteTags()` — pure, unit-tested |
+| `hooks/useSheetSnap.ts` | Draggable bottom-sheet with 3 snap levels |
+| `hooks/usePOIStream.ts` | GPS watch + proximity trigger |
+| `hooks/useTTS.ts` | Cache-first narration hook — voice_configs lookup → pois.narration_cache → narration_audio table → server generation |
+| `scripts/precache-popular-routes.ts` | CLI: pre-generates narration for POIs along a named route or GeoJSON file |
+| `scripts/sweep-orphaned-narration.ts` | Sweeper: deletes stale pending rows (> 1 h) and old failed rows (> 24 h) from narration_audio + tries Storage cleanup. Run hourly. |
+| `components/MapStylePicker.tsx` | Floating map style selector. Button shows 22×22 thumbnail of active style (not a bars icon). Trail mode toggle prop still exists but is not wired from any screen. |
+| `components/XRoadLogo.tsx` | Brand wordmark — "X" teal #2EC4B6 + "Road" cream; sizes `sm`/`md`; road-intersection icon |
+| `server/` | Node.js + Express + Socket.io on :3001 |
+
+## drive.tsx UI details
+
+- **Back button** — top-left map overlay, inside `overlayTL` row before the narrator avatar chip. Circular dark button `←`. Shows confirmation alert before navigating back to customize.
+- **Sheet snap points** — two states only: `peek` (96px) and `expanded` (82% screen height). `default === expanded` so the hook naturally collapses to two snaps. Sheet starts expanded.
+- **Peek state** — shows only: play/pause + skip forward + End Trip. Everything else hidden, map visible above.
+- **Expanded state** — single ScrollView containing: now-playing card, feedback/rating card, ⏮/▶/⏭ controls, up next queue (5 items, sorted by arc-length along route), story corridor slider. Below the scroll (pinned): mode segment + action row.
+- **Story corridor slider** — `PoiSlider` component (same as customize.tsx) in the expanded sheet. State: `poiDist` initialized from `filters.corridorMi`. Changes trigger POI re-fetch.
+- **Up next queue** — sorted by `arcLengthAlongRoute()` (projected arc-distance from route start). Display distance (`distanceMi`) comes from `liveQueue` — haversine from user's GPS position once available, arc-length from route start before GPS is acquired.
+- **Top-right counter** — shows `pois.length` (total POIs loaded along route), falling back to `routePreview.storyCount` before POIs load. Label is "stories" / "story".
+- **Distance field trap** — `get_corridor_pois` RPC returns `dist_from_route_m` (perpendicular distance to route line), NOT `distance_m`. Never sort or display distances using `p.distance_m` from corridor queries — it will always be `undefined`. Use `arcLengthAlongRoute()` for sequential ordering and `haversineM()` from user position for live display.
+- **Mode segmented control** — `[🚗 Driving | 🥾 Hiking]` pinned above action row, outside the ScrollView. Active side fills with `ACCENT_LIGHT`. Toggling hiking re-fetches POIs in `'hiking'` mode and auto-switches map to Topo. Switching back restores the previous map style (`prevStyleRef`).
+- **Recenter button** — `CompassIcon` component (teal north triangle + muted south triangle + "N" label). Positioned at `bottom: DRIVE_SNAPS.peek + 64` (above the MapStylePicker pill at `+16`) to avoid overlap.
+- **MapStylePicker** — `buttonBottom: DRIVE_SNAPS.peek + 16`, `buttonRight: 12`.
+- **POI callout card** — tapping any POI marker shows a floating overlay card at `bottom: DRIVE_SNAPS.peek + 20`. Displays POI name, category (teal uppercase), and tags as chips (underscores → spaces, up to 5). Tapping the same marker again or pressing `×` dismisses it. State: `selectedPoi: POI | null`. Markers use `tracksViewChanges={false}` for performance.
+
+## customize.tsx UI details
+
+- **Back button** — top-left of map header overlay (`s.backBtn`, circular dark, `←`). Calls `navigation.goBack()` → returns to index (home).
+
+## Supabase schema (key tables)
+
+- `pois` — geography(Point,4326), category_id FK, tags[], significance_score numeric(4,2) **0-100 integer-point scale** (importers write 0-1 fractions; recompute-significance.ts normalises to 0-100), trip_mode('driving'|'hiking'|'city'|'all'). Provenance columns (added 20260504000005): source_type CHECK ∈ {osm,wikidata,nrhp,state_landmark,gnis,narrative_extracted,editorial,user_contributed}, source_id, source_citation, confidence_score(0–1, default 1.0), verified bool, additional_sources text[], merged_into uuid (self-FK, set when row is a merged duplicate), imported_at. Partial UNIQUE(source_type, source_id) WHERE merged_into IS NULL. `significance_breakdown jsonb` (added 20260504000006): `{ source_base, cross_source, pageviews, route_adjacency, total }` in integer points — populated by recompute-significance.ts. `narration_cache jsonb` (**PENDING MIGRATION** — populated by server after generation): `{ "{mode}-{depth}-{voice_id}": "{audio_url}" }` — O(1) lookup on the same row as the POI, checked before the narration_audio table.
+- `poi_categories` — id, slug, display_name, sort_order, relevant_driving bool
+- `narrators` — preset narrator rows; 4 seeded with fixed UUIDs `00000000-0000-0000-0000-00000000000{1-4}`
+- `user_narrators` — user-created narrators; slug GENERATED as `'user-' || id`
+- `trips` — route_id, narrator_id, user_narrator_id, depth, category_filter[], status, started_at
+- `narration_audio` — poi_id, narrator_slug (= voice_id), depth, audio_url (nullable — NULL while pending), mode, status CHECK('pending','ready','failed') DEFAULT 'ready'. UNIQUE(poi_id, narrator_slug, depth). 30-day TTL. Added columns (migration 20260504000011): provider, character_count, duration_ms, cost_usd, prompt_version. Added (migration 20260504000013): status, mode, audio_url made nullable.
+- `user_contributions`, `user_badges`, `contribution_rewards` — contribution/points system
+- `user_recent_locations` — **PENDING MIGRATION** (SQL is in lib/supabase.ts as a comment)
+
+Key RPCs: `get_corridor_pois`, `get_nearby_pois`, `get_available_narrators`, `submit_contribution`, `get_cached_narration`, `cache_narration`, `batch_route_adjacency_scores(poi_ids uuid[])` (returns per-POI adjacency points from `highway_routes`), `batch_update_significance(p_ids, p_scores, p_breakdowns)` (batch UPDATE used by recompute script), `update_poi_narration_cache(p_poi_id, p_cache_key, p_audio_url)` (**PENDING MIGRATION** — atomic jsonb merge used by narration generation route; hook falls back to read-modify-write if missing)
+
+## Narration cache key
+
+Always: `{poi_id}-{mode}-{depth}-{voice_id}.opus` (Storage path) / `{mode}-{depth}-{voice_id}` (JSON key in pois.narration_cache)
+
+## hooks/useTTS.ts — architecture (rewritten this session)
+
+**Options:** `{ mode: NarrationMode, depth: NarrationDepth }` — no longer takes `voice`, `guideName`, or `tone`.
+
+**Lookup chain (fastest → authoritative):**
+1. `poi.narration_cache["{mode}-{depth}-{voice_id}"]` — O(1) if POI row includes this field
+2. `narration_audio` table query by `(poi_id, narrator_slug=voice_id, depth, status='ready')`
+3. `POST /api/narration/generate` — only when `generateIfMissing=true`
+
+**Public API:**
+- `narratePOI(poi, depth?, generateIfMissing=false)` — depth defaults to hook's `options.depth`
+- `getNarrationUrl(poiId, depth, poi?, generateIfMissing=false)` → `string | null`
+- `prefetchPOIs(upcomingPOIs, depth?)` — batch URL resolution, no generation
+- `cacheAllPOIs(pois, onProgress?, depth?)` — generate-if-missing, used by hiking offline-first flow
+- `speakText(text)` — delegates to `POST /api/narration/preview` for voice preview (filters.tsx)
+- `stop()`, `speaking`, `loading`, `error`
+
+**Callers updated:**
+- `driving.tsx`: `useTTS({ mode: 'driving', depth: filters.depth ?? 'ride_along' })`
+- `trail.tsx`: `useTTS({ mode: 'hiking', depth: filters.depth ?? 'ride_along' })`
+- `filters.tsx`: `useTTS({ mode: 'driving', depth: filters.depth })`
+- Q&A feature (`askQuestion`) stubbed out — was xAI-specific, not yet reimplemented
+
+**voice_configs RLS note:** Hook reads this table via anon key. Add an anon SELECT policy for `is_active = true` rows before voice picks are committed, or every narration call will throw with a clear "no active voice configured" error (fail-loud — no silent fallback).
+
+## Server narration routes (`server/routes/narration.js`)
+
+Registered at `app.use('/api/narration', narrationRouter)` in `server/index.js`.
+
+**`POST /api/narration/generate`** — body: `{ poi_id, poi_name, poi_category, poi_tags, mode, depth, voice_id? }`  
+`voice_id` is optional — server looks it up from `voice_configs` (fail-loud) if absent.
+
+Write ordering (atomic, status-tracked):
+1. INSERT `narration_audio` with `status='pending'`, `audio_url=NULL` → get `pendingId`
+2. Generate Claude text → fire-and-forget log `llm_calls` (`call_type='claude'`, `related_id=pendingId`)
+3. Synthesize Google TTS → fire-and-forget log `llm_calls` (`call_type='tts'`, `related_id=pendingId`)
+4. Upload Opus to Storage at `{poi_id}/{mode}/{depth}/{voice_id}.opus`
+5. UPDATE `narration_audio` SET `status='ready'`, `audio_url`, `duration_ms`, `cost_usd` WHERE `id=pendingId`
+6. Fire-and-forget: patch `pois.narration_cache`
+7. Returns `{ audio_url }`
+
+On error at steps 2-5: UPDATE `status='failed'`, rethrow. Do NOT delete Storage inline — sweeper handles it.
+
+**`POST /api/narration/preview`** — body: `{ text, voice_id }` — synthesizes arbitrary text for voice preview. Uploads to `preview/{voice_id}.opus` (transient, overwritten). No DB row. Returns `{ audio_url }`.
+
+**New server dep:** `@google-cloud/text-to-speech: ^5.3.0` — run `npm install` in `server/`.
+**New env vars for server:** `ANTHROPIC_API_KEY`, `GOOGLE_APPLICATION_CREDENTIALS` (added to `server/.env.example`).
+
+## Narrator preset UUIDs (hardcoded + seeded)
+
+```
+00000000-0000-0000-0000-000000000001  the-professor
+00000000-0000-0000-0000-000000000002  the-truck-driver
+00000000-0000-0000-0000-000000000003  the-junior-ranger
+00000000-0000-0000-0000-000000000004  the-local
+```
+`PRESET_NARRATORS` in customize.tsx is a fallback for when `getAvailableNarrators()` fails. The DB is seeded with these same IDs so FK constraints on trips.narrator_id always pass.
+
+## Testing
+
+```
+npm run test   # Jest + ts-jest
+```
+Tests in `lib/__tests__/routeBadges.test.ts` (10 tests, all passing).
+
+## End-trip navigation pattern
+
+The only reliable pattern for navigating to root on both platforms:
+```ts
+navigation.dispatch(CommonActions.reset({ index: 0, routes: [{ name: 'index' }] }));
+```
+Web fallback uses `window.confirm()` before calling `doEndTrip()`.
+
+## POI ingestion pipeline (in progress)
+
+Multi-source POI pipeline plan, executed in phases:
+
+1. **Schema migration** — written but NOT YET APPLIED (audited 2026-05-05). Migration file 20260504000005_poi_source_provenance.sql exists; DB still missing all provenance columns. Apply `supabase/apply_pending_migrations.sql` first. After apply: existing rows will be backfilled with source_type='editorial', source_id=id::text, verified=true.
+2. **ETL scaffolding** — done (`scripts/poi-import/`). Isolated package.json (commander, chalk, tsx, dotenv, **xlsx 0.18.5**). Implements: `lib/types.ts` (NormalizedPOI, ImportOptions, ImportResult), `lib/supabase.ts` (admin client via SUPABASE_SERVICE_ROLE_KEY), `lib/dedupe.ts` (token-set ratio + Levenshtein + haversine), `lib/geocode.ts` (Nominatim, 1 req/sec, disk cache), `lib/significance.ts` (weighted signal scoring), `lib/category-map.ts` (OSM/Wikidata tags → CategorySlug), `lib/upsert.ts` (500-row batches, ON CONFLICT source_type+source_id), `lib/wikidata-types.ts` (26 Wikidata P31 class definitions with bonus weights). CLI: `run.ts` with `--source=osm|wikidata|nrhp|ca-landmarks|gnis|all --bbox --county --state --limit --dry-run --force`.
+3. **Source importers** — all 5 done.
+   - **`sources/osm.ts`** ✅ — Overpass API, 18-filter union query (historic/tourism/natural/leisure/amenity/man_made), 1°×1° tiling for large bboxes, 2s rate limit + exponential backoff on 429/504, per-cell JSON cache, significance additive formula (+20 wikipedia, +10 wikidata, +15 heritage, +10 tourism=attraction, +5 image).
+   - **`sources/wikidata.ts`** ✅ — SPARQL endpoint, 26 P31 classes via `lib/wikidata-types.ts`, `geof:latitude/longitude` bbox filter, LIMIT 1000/OFFSET pagination, per-class fallback on 60s timeout, Wikipedia REST summary fetch for items with enwiki sitelinks (cached in `cache/wikipedia/`), significance: +0.25 wikipedia +0.05 image +classBonus/100.
+   - **`sources/nrhp.ts`** ✅ — Scrapes NPS downloads page for current XLSX URL, downloads with 30-day file cache (`cache/nrhp/*.meta.json` sidecar), parses with SheetJS, filters State='CA', geocodes all entries via Nominatim (NPS spreadsheet has no coordinates) with 3-tier fallback (full address → city+county → county centroid), NHL flag detected from "NHL Designation Date" column, significance 0.30 base +0.10 NHL bonus.
+   - **`sources/ca-landmarks.ts`** ✅ — Fetches Wikipedia "List of California Historical Landmarks" HTML (30-day cache). Sequential scanner tracks `<h2>` county headings then parses `wikitable` rows: CHL number, name, wikilink, `<span class="geo">lat;lon</span>` coordinates, plaque/notes text. Falls back to Nominatim geocoding for rows missing embedded coords. Keyword classifier covers missions, gold rush, indigenous, military, churches, courthouses, geology, nature — defaults to `history`. source_type='state_landmark', source_id='CHL-{number}', significance=0.25, confidence=1.0.
+   - **`sources/gnis.ts`** ✅ — Queries USGS S3 listing API (`prd-tnm.s3.amazonaws.com`) to discover latest `CA_Features_YYYYMMDD.zip`. Downloads + caches 30 days. Minimal built-in ZIP extractor using `zlib.inflateRaw` (no extra deps). Allowlisted classes: Summit, Falls, Cape, Arch, Bay, Pillar, Crater, Geyser, Hot Spring, Lava, Lake, Island, Range. Flexible pipe-delimited column detection; skips zero-zero stale coords. significance=0.05 (intentionally low — dedup boosts if cross-referenced), confidence=0.8.
+   - Note: `import` is reserved — all importers export `runImport(opts): Promise<ImportResult>`.
+4. **Dedup** — done (`scripts/poi-import/dedupe.ts`, standalone script). Loads all active POIs (`merged_into IS NULL`) with `geom::text` cast, builds 0.001° spatial grid, finds pairs within 50m, confirms by name similarity (tokenSetRatio > 0.9 OR levenshteinRatio > 0.85 OR substring). Picks primary by source priority (editorial > state_landmark > nrhp > wikidata > osm > gnis > narrative_extracted > user_contributed) then significance then UUID. Merges: primary gains `additional_sources[]` entry + longest description + +0.10 sig per source (max +0.30 cap, incremental delta). Secondary gets `merged_into = primary.id`. Chain-merge guard: outer POI breaks inner loop if it becomes secondary mid-scan. Run: `npx tsx dedupe.ts [--dry-run] [--county <name>] [--limit <n>]`. Prints source-pair merge table + partial index DDL suggestion.
+5. **Significance recompute** — done (`scripts/poi-import/recompute-significance.ts`). Runs after import + dedup. Four components capped at 100: (a) `source_base` — existing score normalised to 0-100 pts (idempotent: reads from `breakdown.source_base` on re-runs); (b) `cross_source` — +10 per `additional_sources` entry, max 30; (c) `pageviews` — Wikipedia 30-day views via Wikimedia REST monthly API on log scale 0-20 pts (100→5, 1k→10, 10k→15, 100k+→20), 7-day file cache in `cache/pageviews/`; (d) `route_adjacency` — +10 within 1km of major CA highways (I-5, US-101, CA-1, I-80, I-15), +5 within 5km of any Interstate/US highway, via `batch_route_adjacency_scores` RPC against `highway_routes` table (0 if table empty). Writes `significance_score` (0-100) + `significance_breakdown` jsonb. Run: `npm run recompute [-- --dry-run] [-- --skip-pageviews] [-- --force-pageviews] [-- --batch-size 1000]`. **highway_routes table must be populated separately before adjacency scoring works.**
+6. **Narrative extraction** — not started. Pull/structure source text; rows get source_type='narrative_extracted' with `source_citation` (URL + verbatim passage).
+
+### Importer cache layout (`scripts/poi-import/cache/`)
+```
+cache/
+  osm-cells/          cell-{lat}_{lon}.json        (Overpass raw JSON per tile)
+  wikidata-sparql/    {prefix}-p{page}.json        (SPARQL result pages)
+  wikipedia/          {sha1}.json                  (Wikipedia REST summary)
+  pageviews/          {sha1}.json                  (Wikimedia pageviews, 7-day TTL)
+  geocode/            geocode-{hash}.json          (Nominatim results)
+  geocode/            county-bbox-{slug}.json      (county bbox from Nominatim)
+  nrhp/               national-register-listed_*.xlsx + *.meta.json
+  ca-landmarks/       chl-list.html + .meta.json   (Wikipedia CHL list page, 30-day)
+  gnis/               CA_Features_*.zip + *.meta.json (USGS S3 download, 30-day)
+  osm-{ts}.json       run summary
+  wikidata-{ts}.json  run summary
+  nrhp-{ts}.json      run summary
+  ca-landmarks-{ts}.json  run summary
+  gnis-{ts}.json      run summary
+```
+
+Old `source` text column (default 'curated') is now redundant with `source_type` — leave it for now; deprecate in a later migration once importers are live.
+
+## Vehicle routing roadmap (future — not started)
+
+Do not implement any of these yet; confirm with user first. When touching the route data model, leave room for a `vehicleProfile` field.
+
+- **Height/weight/width restrictions:** OSM `maxheight`/`maxweight`/`maxwidth` tags via Overpass API; corridor query same pattern as `countPOIsAlongRoute`
+- **RV/trailer-safe routing:** Requires truck-aware engine (Google Routes API newer tier, HERE, or TomTom) — standard Google Directions ignores vehicle type
+- **Steep grades:** Google Elevation API or Open-Elevation; flag segments > ~6% grade for trailer brake risk
+- **Weather:** Open-Meteo (free, no key); sample 3–5 points along route; append to `fetchRoute` after routes load
+
+## XRoadLogo placement (all screens)
+
+`<XRoadLogo size="sm" />` — import from `../components/XRoadLogo`.
+
+| Screen | Position |
+|--------|----------|
+| index.tsx | Centered above search pill (mobile SafeAreaView) |
+| customize.tsx | Center of map header row (replaces "Customize trip" title text) |
+| hiking.tsx | Center of top header bar (replaces "Trail Mode" text) |
+| filters.tsx | Right side of header row |
+| trail.tsx | Centered above bottom button bar, opacity 0.6 |
+| drive.tsx | Below drag handle in bottom sheet, opacity 0.5 |
+
+## Automation hooks (.claude/settings.json)
+
+- **PreCompact**: injects `additionalContext` telling Claude to update CLAUDE.md before compaction + shows `systemMessage` in UI
+- **Stop**: shows `systemMessage` reminder to update CLAUDE.md after each response
+- Both use `shell: "powershell"`
+
+## Mobile preview during development
+
+- **Fastest:** `npx expo start --web` → Chrome DevTools → device toolbar → iPhone 14 (390×844). Uses Mapbox shim, layout accurate.
+- **Most accurate:** `npx expo start` → scan QR with Expo Go on physical device.
+- **Android native:** Android Studio emulator (Pixel 6, 412×915) → `npx expo start --android`.
+
+## Narrative extraction pipeline (`scripts/narrative-extraction/`)
+
+Ingests historical text corpora into `narrative_documents` for future RAG / semantic search.
+
+### Schema (migration 20260504000007)
+- `narrative_documents` — id, source, title, date, url, full_text (chunk_index=0 only), chunk_index, chunk_text. UNIQUE(source, url, chunk_index). GIN FTS index on chunk_text. RLS anon-read. `search_narrative_documents()` RPC.
+
+### Package layout
+```
+scripts/narrative-extraction/
+  run.ts                 CLI: npm run ingest -- -s wpa-guide [--dry-run] [--force] [--limit N]
+  lib/types.ts           DocumentChunk, IngestOptions, IngestResult
+  lib/supabase.ts        admin client (same pattern as poi-import)
+  lib/chunker.ts         chunkText() — ~8000 chars (~2000 tokens), 800-char overlap, sentence-aware
+  lib/upsert.ts          upsertChunks() — 500-row batches, onConflict source+url+chunk_index
+  sources/wpa-guide.ts   DONE — full implementation (see below)
+  sources/bancroft.ts    STUB — implementation notes inline
+  sources/cdnc.ts        STUB — implementation notes inline
+```
+
+### WPA Guide source (`sources/wpa-guide.ts`)
+- Archive.org identifier: `californiastatea00fedeworkspr` ("California: A Guide to the Golden State", 1939)
+- Fetches item metadata → finds DjVuTXT file → downloads and caches 30 days in `cache/wpa-guide/`
+- Pre-process: strips form feeds, standalone page numbers, running headers (lines appearing 10+ times)
+- Section detection: all-caps blocks ≥ 85% uppercase letters, 5–120 chars, multi-word → section heading. Stub sections (< 150 chars body) merged into next.
+- Chunks via `chunkText()`; `full_text` stored only on `chunk_index === 0`
+- Upserts via `upsertChunks()`
+
+### Extraction + verification pipeline
+```
+cd scripts/narrative-extraction
+npm run extract -- --dry-run            # preview LLM extraction
+npm run extract -- --limit 20           # process 20 chunks
+npm run extract -- --source wpa-guide   # full run for one source
+npm run verify  -- --dry-run            # preview verification pass
+npm run verify  -- --source wpa-guide   # verify + auto-approve ≥0.85 conf
+```
+- `extract.ts` — calls `claude-sonnet-4-6` per chunk, geocodes via Nominatim, inserts into `poi_review_queue`. Rate: 5/sec. Tracks token cost. Marks `extracted_at` on chunks.
+- `verify.ts` — re-checks source_quote supports claim. `confidence < 0.7` → needs_human (no LLM). `confidence ≥ 0.7` → LLM verify; pass + `conf ≥ 0.85` → auto-approved. Idempotent.
+
+### Migrations
+- `20260504000008_poi_review_queue.sql` — `poi_review_queue` table + `extracted_at` on `narrative_documents`
+- `20260504000009_poi_review_queue_verification.sql` — `verification_passed` + `verification_reasoning` columns
+
+## Admin app (`admin/`)
+
+Standalone Next.js 15 app at port 3010. Human-in-the-loop review for narrative-extracted POI candidates.
+
+### Auth
+Supabase Auth via `@supabase/ssr`. Middleware checks session + `user_metadata.is_admin === true`. Set the flag in Supabase Dashboard → Authentication → Users → Edit user → Raw user meta data: `{"is_admin": true}`.
+
+### Running
+```
+cd admin
+cp .env.local.example .env.local   # fill in your keys
+npm install
+npm run dev                         # http://localhost:3010
+```
+
+### Layout
+```
+admin/
+  middleware.ts                   — auth guard (all routes)
+  app/
+    login/page.tsx                — email+password login
+    admin/
+      layout.tsx                  — header + sign-out
+      poi-review/
+        page.tsx                  — server component: fetches queue + categories
+        actions.ts                — approve(id, edits?), reject(id) server actions
+        ReviewCard.tsx            — card per candidate (approve/reject/edit buttons)
+        EditModal.tsx             — edit form + drag-pin map (Mapbox)
+        MapEditor.tsx             — dynamic (ssr:false) react-map-gl/mapbox map
+  lib/
+    supabase-server.ts            — service role client
+    supabase-browser.ts           — browser client (login)
+    types.ts                      — ReviewRow, Category, EditedFields
+    category-map.ts               — LLM category_guess → poi_categories slug
+    location.ts                   — geography GeoJSON/WKT parsing helpers
+    get-user.ts                   — session user from cookies (audit trail)
+```
+
+### Approve action
+Inserts into `pois` with `source_type='narrative_extracted'`, `source_citation='<url> :: "<quote>"'`, `confidence_score=llm_confidence`, `verified=true`, `editorial_status='draft'`, `significance_score=round(conf*60)`. Sets `promoted_poi_id` + `review_status='approved'` on the queue row.
+
+### Static map in ReviewCard
+Mapbox Static Images API — no client-side map JS for the list view. Full interactive drag-pin map only in EditModal.
+
+## TTS abstraction layer (`scripts/lib/tts/`)
+
+Standalone package (own `package.json`) — same isolation pattern as `scripts/poi-import/` and `scripts/narrative-extraction/`.
+
+### Package layout
+```
+scripts/lib/tts/
+  types.ts              — all interfaces + ProviderName union
+  index.ts              — generateNarration() entrypoint + provider registry
+  audio-utils.ts        — convertToOpus() via ffmpeg (Google is exempt — it outputs OGG_OPUS natively)
+  cost-tracker.ts       — logCost() → inserts into llm_calls table
+  declarations.d.ts     — type shim for @ffmpeg-installer/ffmpeg (no official types)
+  tsconfig.json         — ESNext/Bundler; excludes __tests__
+  package.json          — jest + ts-jest with CommonJS override + moduleNameMapper
+  providers/
+    google.ts           — GoogleTTSProvider (DONE — primary provider)
+    elevenlabs.ts       — stub (throw new Error('not yet implemented'))
+    openai.ts           — stub
+    self-hosted.ts      — stub
+  __tests__/
+    integration.test.ts — real Google TTS call; skips if GOOGLE_APPLICATION_CREDENTIALS unset
+```
+
+### Key types (`types.ts`)
+- `ProviderName = 'google' | 'elevenlabs' | 'openai' | 'self-hosted'` — defined once, used on both `TTSProvider.name` and `TTSOutput.provider`
+- `TTSInput` — text, voiceId, speakingRate?, pitch?, outputFormat?, modelOverride?
+- `TTSOutput` — audioBuffer, mimeType (`'audio/ogg; codecs=opus'`), durationMs, characterCount, costUsd, provider, voiceId
+- `TTSProvider` — interface: name, generateNarration(), estimateCost(), getAvailableVoices()
+- `VoiceConfig` — provider, voiceId, speakingRate?, pitch?, modelOverride?
+- `CostRecord` — callType ('claude'|'tts'), provider, modelOrVoice, inputChars?, costUsd, relatedId?
+
+### Google provider (`providers/google.ts`)
+- Auth: `TextToSpeechClient()` reads `GOOGLE_APPLICATION_CREDENTIALS` automatically
+- Default voice: `en-US-Chirp3-HD-Aoede`; fallback on HD error: `en-US-Neural2-D`
+- Encoding: `OGG_OPUS` natively — no ffmpeg needed
+- Duration heuristic: `Math.round((charCount / 14) * (1000 / speakingRate))`
+- Pricing: HD/Neural2/WaveNet = $16/M chars, Standard = $4/M chars
+- `tierFromVoiceId()` exported — reads voice name string for pricing tier
+
+### generateNarration() (`index.ts`)
+- Retry: 4 total attempts, delays `[1000, 4000, 16000]` ms between (typed `readonly number[]` for noUncheckedIndexedAccess)
+- Default voice config: `{ provider: 'google', voiceId: 'en-US-Chirp3-HD-Aoede' }`
+- Cost logging: fire-and-forget (`logCost().catch(err => console.error(...))`)
+- Returns `TTSOutput | null` (null after all retries fail)
+
+### Migrations added this session
+- `20260504000010_llm_calls.sql` — `llm_calls` table: id, call_type CHECK('claude','tts'), provider, model_or_voice, input_chars, input_tokens, output_tokens, cost_usd numeric(10,6), related_id, created_at. RLS: service_role only.
+- `20260504000011_narration_audio_provider.sql` — adds to `narration_audio`: provider text NOT NULL DEFAULT 'google', character_count int, duration_ms int, cost_usd numeric(10,6), prompt_version int NOT NULL DEFAULT 1
+- `20260504000013_narration_audio_status.sql` — adds to `narration_audio`: status text CHECK('pending','ready','failed') DEFAULT 'ready'; mode text CHECK('driving','hiking','city') DEFAULT 'driving'; makes audio_url nullable; index on (status, generated_at).
+- `20260504000014_narration_cache_rpc.sql` — adds `pois.narration_cache jsonb DEFAULT '{}'`; `update_poi_narration_cache(p_poi_id, p_cache_key, p_audio_url)` RPC (atomic jsonb merge); anon SELECT policy on `voice_configs WHERE is_active=true` (unblocks useTTS.ts voice lookup).
+
+### Required env vars (scripts — NOT EXPO_PUBLIC_ prefixed)
+These go in the root `.env` alongside the Expo vars:
+```
+GOOGLE_APPLICATION_CREDENTIALS=C:\path\to\service-account.json
+SUPABASE_URL=https://<project-ref>.supabase.co          # scripts use this name (not EXPO_PUBLIC_SUPABASE_URL)
+SUPABASE_SERVICE_ROLE_KEY=<service-role-key>             # scripts use this name (not SUPABASE_SERVICE_KEY)
+ANTHROPIC_API_KEY=<key>                                  # used by precache script + server narration route
+```
+
+Also add `ANTHROPIC_API_KEY` and `GOOGLE_APPLICATION_CREDENTIALS` to `server/.env` — the narration generation route needs both.
+
+### Running the integration test
+```
+cd scripts/lib/tts
+npx jest --testPathPattern=integration
+```
+Skips gracefully if `GOOGLE_APPLICATION_CREDENTIALS` is not set. When credentials are present, validates: mimeType = `'audio/ogg; codecs=opus'`, audioBuffer.length > 0, durationMs > 0, costUsd > 0, and writes a row to `llm_calls`.
+
+### voice_configs table (migration 20260504000012)
+- Columns: id, mode CHECK('family','kids','unfiltered','local'), provider, voice_id, voice_settings jsonb, display_name, description, is_active, version, created_at
+- Partial unique index: `idx_voice_configs_active_mode ON voice_configs(mode) WHERE is_active = true` — one active voice per mode at all times
+- RLS: service_role only
+- Audience modes: family (warm doc narrator), kids (Junior Explorer), unfiltered (Off the Leash deadpan), local (insider neighbor)
+
+### Voice audition tooling
+
+Two tools exist. **Use `audition-voices.ts` for picking voices** (it integrates with the TTS abstraction + voice_configs table). `run.ts` is the older HTML-based tool kept for reference.
+
+#### Primary: `scripts/audition-voices.ts`
+Single-file CLI run from `scripts/voice-audition/`. Uses `generateNarration()` with `voiceConfigOverride` (no voice_configs table required), logs to `llm_calls`, writes Opus to `scripts/audition-output/{mode}/{voice_id}.opus`.
+
+New helper file: `scripts/lib/tts/supabase-admin.ts` — exports `getAdminClient()` for `--commit` writes.
+
+```
+# All commands run from: scripts/voice-audition/
+
+pnpm audition --list
+  # Live Google API catalog: 30 Chirp3-HD + 9 Neural2 en-US voices (★ = default candidate)
+
+pnpm audition --mode=family
+  # Generates 3 candidate .opus files, prints cost estimate first
+
+pnpm audition --mode=family --voices=en-US-Chirp3-HD-Aoede,en-US-Chirp3-HD-Charon
+  # Narrow to specific voices
+
+pnpm audition --mode=family --dry-run
+  # Preview without generating
+
+pnpm audition --mode=family --force
+  # Regenerate even if .opus already exists
+
+pnpm audition --commit --mode=family --voice=en-US-Chirp3-HD-Aoede --rate=1.0 --pitch=0
+  # After listening: deactivates existing active row, inserts new voice_configs row
+```
+
+Listen: OGG/Opus — Chrome or Firefox (not Safari). Output: `scripts/audition-output/{mode}/`.
+
+#### Legacy: `scripts/voice-audition/run.ts`
+Generates samples + builds `scripts/voice-audition/output/index.html` browser player. Calls Google TTS directly without TTS abstraction.
+```
+cd scripts/voice-audition
+pnpm audition:old    # generate candidates, build HTML
+pnpm audition:all    # generate ALL Chirp3-HD + Neural2 voices
+pnpm html            # rebuild index.html only
+```
+
+### Voice candidate shortlist (Step 3 — user has not yet picked)
+
+3 candidates per mode. Default speaking rates: family 1.0, kids 1.1, unfiltered 0.95, local 1.0.
+
+| Mode | Candidate voice_id | Reasoning |
+|------|--------------------|-----------|
+| family | `en-US-Chirp3-HD-Aoede` | Warm, clear; default HD voice used throughout TTS build — solid doc baseline |
+| family | `en-US-Chirp3-HD-Charon` | Male, measured; resonant rather than bright — authoritative without being stiff |
+| family | `en-US-Chirp3-HD-Kore` | Slightly softer register than Aoede; good contrast candidate |
+| kids | `en-US-Chirp3-HD-Puck` | Named for Shakespeare's sprite; tends toward playful, lighter delivery |
+| kids | `en-US-Chirp3-HD-Zephyr` | Airy, expressive; energetic without being shrill |
+| kids | `en-US-Chirp3-HD-Leda` | Clear, accessible; enthusiastic without going over the top |
+| unfiltered | `en-US-Chirp3-HD-Fenrir` | Named for Norse wolf; drier, lower-register — good deadpan candidate |
+| unfiltered | `en-US-Chirp3-HD-Orus` | Deeper, more measured; slower pace for comedy should land |
+| unfiltered | `en-US-Neural2-D` | Neural2 male, widely noted for dry/natural quality; non-HD control |
+| local | `en-US-Chirp3-HD-Umbriel` | Conversational; sits between formal and casual |
+| local | `en-US-Chirp3-HD-Sulafat` | Warm, casual inflection |
+| local | `en-US-Chirp3-HD-Schedar` | Natural; slightly more informal than Aoede |
+
+### Migration backlog status (audited 2026-05-05)
+
+**DB watermark: `20260504000001`** — the actual DB is missing migrations 000002–000013.
+Migration 000004 (`trips_anon_select`) was applied out-of-band and must NOT be re-run.
+
+**Combined apply script:** `supabase/apply_pending_migrations.sql` — single file covering 000002→000014, safe to re-run (all DDL guarded with IF NOT EXISTS). Run via:
+- Supabase Dashboard → SQL Editor → paste → Run
+- OR: `npx supabase db query -f supabase/apply_pending_migrations.sql --db-url "postgresql://postgres:[DB_PASSWORD]@db.eusozlexmllovlmngmug.supabase.co:5432/postgres"`
+
+**Pending (as of 2026-05-05 — NOT YET APPLIED):**
+- 20260504000002 `contributions` — user_contributions, user_badges, contribution_rewards tables + RPCs
+- 20260504000003 `narration_cache` — narration_audio table + user_narrators.slug + RPCs
+- 20260504000004 `trips_anon_select` — **SKIP SQL; watermark-only** (already live out-of-band)
+- 20260504000005 `poi_source_provenance` — pois provenance columns (source_type, source_id, etc.)
+- 20260504000006 `poi_significance_breakdown` — pois.significance_breakdown + highway_routes + RPCs
+- 20260504000007 `narrative_documents` — narrative_documents table + FTS index + RPC
+- 20260504000008 `poi_review_queue` — poi_review_queue table + narrative_documents.extracted_at
+- 20260504000009 `poi_review_queue_verification` — verification_passed, verification_reasoning columns
+- 20260504000010 `llm_calls` — llm_calls audit table
+- 20260504000011 `narration_audio_provider` — narration_audio.provider/character_count/duration_ms/cost_usd/prompt_version
+- 20260504000012 `voice_configs` — voice_configs table + partial unique index + RLS
+- 20260504000013 `narration_audio_status` — narration_audio.status/mode + audio_url nullable
+- **20260504000014 `narration_cache_rpc`** (NEW — written this session) — pois.narration_cache jsonb + update_poi_narration_cache RPC + anon SELECT policy on voice_configs
+
+**After migrations land:**
+- `GOOGLE_APPLICATION_CREDENTIALS` is set and working in root `.env` ✓
+- `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` aliases set in root `.env` ✓
+- Add `ANTHROPIC_API_KEY` to root `.env` and `server/.env`
+- Run `cd server && npm install` to get `@google-cloud/text-to-speech`
+- Run `pnpm audition --mode=<mode>` for all 4 modes → listen to output → run `pnpm audition --commit` for each
+- After 4 commits: voice_configs has one active row per mode → Phase 7 (lazy cache population) is unblocked
+- After picks confirmed: wire voice_configs lookup into `generateNarration()` in `scripts/lib/tts/index.ts`
+- Run precache: `cd scripts && npx tsx precache-popular-routes.ts --named-route pch-sf-la --dry-run`
+
+## Narration precache script (`scripts/precache-popular-routes.ts`)
+
+Standalone script (run with `npx tsx` from `scripts/`). Pre-generates narration audio for all eligible POIs along a route, covering the top (mode, depth) combos from the trips table.
+
+```
+cd scripts
+npx tsx precache-popular-routes.ts --named-route pch-sf-la
+npx tsx precache-popular-routes.ts --route-file ./routes/pch.geojson
+npx tsx precache-popular-routes.ts --named-route pch-sf-la --dry-run
+npx tsx precache-popular-routes.ts --named-route pch-sf-la --mode driving --depth glance
+```
+
+**Options:** `--route-file <geojson>`, `--named-route <id>`, `--corridor-mi <n>` (default 10), `--mode`, `--depth`, `--dry-run`, `--limit <n>`
+
+**Named routes:** `pch-sf-la`, `i5-sf-la`, `us101-la-sf` (hardcoded WKT waypoints)
+
+**Logic:**
+1. Calls `get_corridor_pois` RPC → re-fetches full POI rows for `narration_cache`, `source_type`
+2. Skips `source_type = 'narrative_extracted'` (need user validation first)
+3. Queries `trips.depth` distribution → derives top mode×depth combos (default: driving + hiking × top 3 depths)
+4. Reads active voice per mode from `voice_configs`
+5. For each POI × combo: checks `narration_cache` JSON → checks `narration_audio` table (status='ready') → generates if missing
+6. Generation: Claude text → Google TTS → Storage upload → `narration_audio` upsert (status='ready', mode set) → `narration_cache` patch → `llm_calls` log (2 rows: claude + tts)
+7. 500ms pause between generations to stay within API rate limits
+
+**Uses:** same imports as `scripts/audition-voices.ts` — `registerProvider`, `generateNarration` from `./lib/tts/index.js`, `GoogleTTSProvider`, `getAdminClient`.
+
+## Narration orphan sweeper (`scripts/sweep-orphaned-narration.ts`)
+
+Cleans up stale narration_audio rows left by failed or interrupted generation runs.
+
+```
+cd scripts
+npx tsx sweep-orphaned-narration.ts           # live run
+npx tsx sweep-orphaned-narration.ts --dry-run  # preview only
+```
+
+**Rules:**
+- `status='pending'` rows older than 1 hour: generation never completed; `audio_url` is NULL so no Storage object. DB row deleted only.
+- `status='failed'` rows older than 24 hours: may have a Storage object if upload succeeded but ready-update failed. Attempts Storage delete at `{poi_id}/{mode}/{depth}/{narrator_slug}.opus` (404 is ignored), then deletes DB row.
+
+**Intended cadence:** hourly cron. Schedule via `crontab` or a task scheduler once the server is deployed.
+
+## Session workflow
+
+When context fills (PreCompact hook fires), update this CLAUDE.md with current project state, then `/clear` to restart fresh. Proactively save when significant new screens, migrations, or server routes are completed. This file is the single source of truth — MEMORY.md just points here.

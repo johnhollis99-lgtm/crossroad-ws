@@ -1,0 +1,55 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell(Get-ChildItem -Path \"e:\\\\Dev XRoad\\\\roadstory\" -Force | Where-Object { $_.Name -match \"metro|error|\\\\.log\" } | Select-Object Name)",
+      "PowerShell(Start-Process \"http://localhost:8082\")",
+      "PowerShell(Get-ChildItem -Path 'e:\\\\Dev XRoad\\\\roadstory' -Recurse -Exclude 'node_modules' | Where-Object { -not $_.PSIsContainer } | Select-Object FullName, Length | Sort-Object FullName)",
+      "PowerShell(Get-ChildItem -Path 'e:\\\\Dev XRoad\\\\roadstory\\\\app' -Recurse -File | Select-Object Name, @{Name='Path';Expression={$_.FullName}}, Length)",
+      "PowerShell(Get-ChildItem -Path 'e:\\\\Dev XRoad\\\\roadstory\\\\scripts' -Recurse -File | Select-Object Name, @{Name='Path';Expression={$_.FullName}}, Length)",
+      "PowerShell(@\\('app', 'lib', 'hooks', 'scripts', 'web'\\) | ForEach-Object { $path = \"e:\\\\Dev XRoad\\\\roadstory\\\\$_\"; Write-Host \"=== $_ ===\" -ForegroundColor Yellow; if \\(Test-Path $path\\) { ls -Recurse $path } else { \"NOT FOUND\" } })",
+      "PowerShell(npx supabase db execute --help 2>&1)",
+      "PowerShell(head -40)",
+      "PowerShell(npx supabase db query --help 2>&1)",
+      "PowerShell($env:SUPABASE_ACCESS_TOKEN)",
+      "Read(//mnt/skills/user/xroad-roadstory/**)",
+      "WebFetch(domain:www.nps.gov)",
+      "WebSearch",
+      "WebFetch(domain:irma.nps.gov)",
+      "WebFetch(domain:npgallery.nps.gov)",
+      "WebFetch(domain:public-nps.opendata.arcgis.com)",
+      "WebFetch(domain:catalog.data.gov)",
+      "WebFetch(domain:services1.arcgis.com)",
+      "WebFetch(domain:mapservices.nps.gov)",
+      "PowerShell(Get-ChildItem -Path \"e:\\\\Dev XRoad\\\\roadstory\\\\scripts\\\\poi-import\" -Recurse -Exclude node_modules | Where-Object { $_.PSIsContainer -eq $false } | Select-Object -ExpandProperty FullName | Sort-Object)",
+      "PowerShell(Get-ChildItem -Path \"e:\\\\Dev XRoad\\\\roadstory\\\\scripts\\\\poi-import\" -Recurse -File | Where-Object { $_.FullName -notmatch 'node_modules' } | Select-Object FullName | Sort-Object FullName)",
+      "PowerShell(Get-ChildItem -Path \"e:\\\\Dev XRoad\\\\roadstory\\\\scripts\\\\poi-import\" -File -Recurse 2>$null | Where-Object { -not $_.FullName.Contains\\('node_modules'\\) } | ForEach-Object { $_.FullName })"
+    ],
+    "additionalDirectories": [
+      "e:\\Dev XRoad\\roadstory\\supabase"
+    ]
+  },
+  "hooks": {
+    "PreCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo '{\"hookSpecificOutput\":{\"hookEventName\":\"PreCompact\",\"additionalContext\":\"IMPORTANT: Before this compaction, update CLAUDE.md at e:\\\\Dev XRoad\\\\roadstory\\\\CLAUDE.md with any new screens, migrations, hooks, server routes, or architectural decisions made this session. Use the Edit or Write tool to update it now, then compaction can proceed.\"},\"systemMessage\":\"⚠️ Context full — Claude is updating CLAUDE.md before compaction.\"}'",
+            "shell": "powershell"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo '{\"systemMessage\":\"📝 Done. Update CLAUDE.md if significant changes were made this session.\"}'",
+            "shell": "powershell"
+          }
+        ]
+      }
+    ]
+  }
+}
