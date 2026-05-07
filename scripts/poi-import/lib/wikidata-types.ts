@@ -23,6 +23,15 @@ export const WIKIDATA_CLASSES: WikidataClass[] = [
   { qid: 'Q179049',   label: 'state park',            slug: 'nature',       tripMode: 'all',    tags: ['state_park'],              bonus: 15 },
   { qid: 'Q46831',    label: 'nature reserve',        slug: 'nature',       tripMode: 'all',    tags: ['nature_reserve'],          bonus: 12 },
 
+  // ── Theme parks & destinations ────────────────────────────────────────────
+  // Live-probed P31 values for Universal Studios Hollywood (Q2416723), Knott's
+  // Berry Farm + Legoland (Q194195), SeaWorld San Diego (Q3363974, Q15060435).
+  { qid: 'Q2416723',  label: 'theme park',            slug: 'local_culture',tripMode: 'all',    tags: ['theme_park', 'attraction'],bonus: 28 },
+  { qid: 'Q194195',   label: 'amusement park',        slug: 'local_culture',tripMode: 'all',    tags: ['amusement_park', 'attraction'], bonus: 28 },
+  { qid: 'Q3363974',  label: 'animal theme park',     slug: 'local_culture',tripMode: 'all',    tags: ['theme_park', 'zoo'],       bonus: 28 },
+  { qid: 'Q15060435', label: 'marine mammal park',    slug: 'local_culture',tripMode: 'all',    tags: ['theme_park', 'aquarium'],  bonus: 25 },
+  { qid: 'Q167346',   label: 'botanical garden',      slug: 'nature',       tripMode: 'all',    tags: ['garden'],                  bonus: 12 },
+
   // ── History ───────────────────────────────────────────────────────────────
   { qid: 'Q4989906',  label: 'historic site',         slug: 'history',      tripMode: 'all',    tags: ['historic'],                bonus: 15 },
   { qid: 'Q839954',   label: 'designated heritage',   slug: 'history',      tripMode: 'all',    tags: ['heritage'],                bonus: 15 },

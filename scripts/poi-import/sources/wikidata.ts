@@ -119,6 +119,8 @@ interface PageResult {
   timedOut:  boolean;
 }
 
+const SPARQL_RETRY_DELAYS = [30_000, 60_000, 120_000] as const;
+
 async function fetchPage(
   query:     string,
   cacheFile: string,
@@ -131,34 +133,60 @@ async function fetchPage(
     } catch { /* not cached */ }
   }
 
-  await sparqlLimit();
+  for (let attempt = 0; attempt <= SPARQL_RETRY_DELAYS.length; attempt++) {
+    await sparqlLimit();
 
-  const res = await fetch(SPARQL_ENDPOINT, {
-    method: 'POST',
-    body:   new URLSearchParams({ query }),
-    headers: {
-      'Content-Type': 'application/x-www-form-urlencoded',
-      'Accept':       'application/sparql-results+json',
-      'User-Agent':   USER_AGENT,
-    },
-  });
+    const res = await fetch(SPARQL_ENDPOINT, {
+      method: 'POST',
+      body:   new URLSearchParams({ query }),
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'Accept':       'application/sparql-results+json',
+        'User-Agent':   USER_AGENT,
+      },
+    });
 
-  if (!res.ok) {
+    if (res.ok) {
+      const data = await res.json() as SparqlResponse;
+      await fs.writeFile(cacheFile, JSON.stringify(data), 'utf8');
+      return { bindings: data.results.bindings, timedOut: false };
+    }
+
     const body = await res.text();
-    // 502/503/504 = nginx killed the backend (query too expensive); treat as timeout so
-    // the per-class fallback kicks in rather than aborting the whole run.
+    // 429 = rate-limited by the public endpoint. Retry with backoff (Retry-After
+    // when honored) before giving up. Each retry still passes through sparqlLimit().
+    if (res.status === 429 && attempt < SPARQL_RETRY_DELAYS.length) {
+      const retryAfter = res.headers.get('Retry-After');
+      const delay      = retryAfter
+        ? Number(retryAfter) * 1000
+        : SPARQL_RETRY_DELAYS[attempt]!;
+      console.warn(chalk.yellow(
+        `[wikidata] SPARQL 429 — retry ${attempt + 1}/${SPARQL_RETRY_DELAYS.length} in ${delay / 1000}s`,
+      ));
+      await sleep(delay);
+      continue;
+    }
+
+    // 502/503/504 = nginx killed the backend (query too expensive); for the COMBINED
+    // initial attempt this is the trigger to fall back to per-class fetches. Per-class
+    // queries never share a cache file with the combined attempt, so this branch is
+    // safe even though it returns "no rows".
     if (res.status === 502 || res.status === 503 || res.status === 504) {
       return { bindings: [], timedOut: true };
     }
     if (res.status === 500 && /timeout|TimeoutException/i.test(body)) {
       return { bindings: [], timedOut: true };
     }
+    // Exhausted 429 retries → treat as soft timeout so the run continues.
+    if (res.status === 429) {
+      console.warn(chalk.yellow(
+        `[wikidata] SPARQL 429 after ${SPARQL_RETRY_DELAYS.length} retries — giving up on this page`,
+      ));
+      return { bindings: [], timedOut: true };
+    }
     throw new Error(`SPARQL ${res.status}: ${body.slice(0, 300)}`);
   }
-
-  const data = await res.json() as SparqlResponse;
-  await fs.writeFile(cacheFile, JSON.stringify(data), 'utf8');
-  return { bindings: data.results.bindings, timedOut: false };
+  return { bindings: [], timedOut: true };
 }
 
 // ---- Paginated fetch -------------------------------------------------------
@@ -441,6 +469,9 @@ export async function runImport(opts: ImportOptions): Promise<ImportResult> {
   const bbox = opts.bbox ?? CA_BBOX;
   if (!opts.bbox) {
     if (opts.county) {
+      // TODO: importer ignores --county; should accept it and bbox-filter
+      // the SPARQL ?location to the county polygon for incremental imports
+      // beyond CA. Currently always fetches all-CA bbox.
       console.log(chalk.yellow(`[wikidata] county filtering is not supported — using California bbox`));
     } else {
       console.log(chalk.cyan('[wikidata] defaulting to California bbox'));

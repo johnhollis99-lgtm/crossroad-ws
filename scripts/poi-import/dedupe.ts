@@ -61,15 +61,25 @@ const CULTURAL_TOKENS = new Set([
   'hispanic', 'african', 'native', 'indigenous',
 ]);
 
+// Letter-coded building patterns where the alpha suffix is the only
+// discriminator (e.g. military barracks "Quarters SF" vs "Quarters SN"
+// at MCRD San Diego — 54 distinct OSM ways, mostly within 50 m of each
+// other). The Levenshtein/substring matchers happily collapse these
+// because only 1–2 letters differ, but they are distinct buildings.
+const LETTER_CODE_PREFIX_PATTERNS: RegExp[] = [
+  /^Quarters\s+([A-Z]+)(?=$|[\s-])/i,
+];
+
 interface RejectedPair {
   a: ActivePoi;
   b: ActivePoi;
-  guard: 'digit' | 'sensitive';
+  guard: 'digit' | 'sensitive' | 'letter-code';
   differing: string[];
 }
 interface GuardCounters {
   digitMismatch:  number;
   sensitiveToken: number;
+  letterCode:     number;
   rejected:       RejectedPair[];
 }
 
@@ -106,10 +116,28 @@ interface ActivePoi {
   lat:                number;
   lng:                number;
   significance_score: number;
+  confidence_score:   number;
   description:        string | null;
   verified:           boolean;
   additional_sources: string[];
   category_slug:      string | null;
+  is_venue:           boolean;
+  // For editorial venues, the Wikidata Q-number stored in
+  // venue_metadata.wikidata. Used by Phase C (wikidata-twin pass) to
+  // dedupe an editorial venue against any wikidata POI that has the
+  // same Q-number as source_id.
+  wikidata_q:         string | null;
+}
+
+// Rows below this threshold (e.g. NRHP listings that geocoded only to a city
+// or county centroid) must never become a merge primary — otherwise their
+// placeholder coords + low confidence would propagate into the canonical row
+// and the result would be filtered out by get_nearby_pois (which requires
+// confidence >= 0.5). They can still be merged INTO higher-confidence rows so
+// their source_id flows into additional_sources.
+const HIGH_CONFIDENCE_THRESHOLD = 0.5;
+function confidenceTier(p: ActivePoi): number {
+  return p.confidence_score >= HIGH_CONFIDENCE_THRESHOLD ? 1 : 0;
 }
 
 interface MergeGroup {
@@ -117,7 +145,7 @@ interface MergeGroup {
   secondaries: ActivePoi[];
 }
 
-type Phase = 'spatial' | 'name-collapse';
+type Phase = 'spatial' | 'name-collapse' | 'wikidata-twin';
 
 interface ConfirmedPair {
   primary:   ActivePoi;
@@ -153,8 +181,9 @@ async function fetchAllActivePois(
 
   for (;;) {
     const sql = `
-      SELECT p.id, p.name, p.source_type, p.source_id, p.significance_score, p.description,
-             p.verified, p.additional_sources,
+      SELECT p.id, p.name, p.source_type, p.source_id, p.significance_score, p.confidence_score, p.description,
+             p.verified, p.additional_sources, p.is_venue,
+             p.venue_metadata->>'wikidata' AS wikidata_q,
              ST_X(p.location::geometry) AS lng,
              ST_Y(p.location::geometry) AS lat,
              c.slug AS category_slug
@@ -171,9 +200,12 @@ async function fetchAllActivePois(
       source_type: string;
       source_id: string;
       significance_score: string;
+      confidence_score: string | null;
       description: string | null;
       verified: boolean;
       additional_sources: string[] | null;
+      is_venue: boolean | null;
+      wikidata_q: string | null;
       lng: number;
       lat: number;
       category_slug: string | null;
@@ -190,10 +222,13 @@ async function fetchAllActivePois(
         lat:                Number(row.lat),
         lng:                Number(row.lng),
         significance_score: Number(row.significance_score),
+        confidence_score:   row.confidence_score == null ? 1.0 : Number(row.confidence_score),
         description:        row.description,
         verified:           row.verified,
         additional_sources: row.additional_sources ?? [],
         category_slug:      row.category_slug,
+        is_venue:           row.is_venue ?? false,
+        wikidata_q:         row.wikidata_q,
       });
     }
 
@@ -300,6 +335,19 @@ function passesGuards(
     return false;
   }
 
+  // Guard 3: letter-coded buildings (e.g. "Quarters SF" vs "Quarters SN")
+  // where the alpha suffix is the only discriminator → reject. Same name +
+  // same suffix is fine (still merges); only mismatched suffixes are blocked.
+  for (const pat of LETTER_CODE_PREFIX_PATTERNS) {
+    const ma = a.name.match(pat);
+    const mb = b.name.match(pat);
+    if (ma && mb && ma[1] && mb[1] && ma[1].toUpperCase() !== mb[1].toUpperCase()) {
+      counters.letterCode++;
+      counters.rejected.push({ a, b, guard: 'letter-code', differing: [ma[1], mb[1]] });
+      return false;
+    }
+  }
+
   return true;
 }
 
@@ -321,6 +369,11 @@ function pickPrimary(
   a: ActivePoi,
   b: ActivePoi,
 ): { primary: ActivePoi; secondary: ActivePoi } {
+  // Confidence tier dominates: a defanged row (confidence < 0.5) can never
+  // outrank a high-confidence row, regardless of source priority.
+  const ca = confidenceTier(a);
+  const cb = confidenceTier(b);
+  if (ca !== cb) return ca > cb ? { primary: a, secondary: b } : { primary: b, secondary: a };
   const pa = priority(a.source_type);
   const pb = priority(b.source_type);
   if (pa !== pb) return pa > pb ? { primary: a, secondary: b } : { primary: b, secondary: a };
@@ -344,7 +397,7 @@ function findConfirmedPairs(
 
   console.log(chalk.cyan('[dedupe] scanning for candidate pairs…'));
   const confirmed: ConfirmedPair[] = [];
-  const counters: GuardCounters = { digitMismatch: 0, sensitiveToken: 0, rejected: [] };
+  const counters: GuardCounters = { digitMismatch: 0, sensitiveToken: 0, letterCode: 0, rejected: [] };
   // Track IDs designated as secondary in this run to prevent chains
   const alreadySecondary = new Set<string>();
 
@@ -402,7 +455,7 @@ function findNameCollapsePairs(
 ): NameCollapseResult {
   console.log(chalk.cyan('[dedupe] phase 2: name-collapse pass…'));
 
-  const counters:        GuardCounters = { digitMismatch: 0, sensitiveToken: 0, rejected: [] };
+  const counters:        GuardCounters = { digitMismatch: 0, sensitiveToken: 0, letterCode: 0, rejected: [] };
   const cappedClusters:  Array<{ name: string; size: number }> = [];
   const rejectedGeneric: Map<string, number> = new Map();
   const confirmed:       ConfirmedPair[] = [];
@@ -426,9 +479,10 @@ function findNameCollapsePairs(
     groups.get(norm)!.push(poi);
   }
 
-  // Sort each group: highest priority first (so we pick stable medoids)
-  function poiSortKey(p: ActivePoi): [number, number, string] {
-    return [-priority(p.source_type), -p.significance_score, p.id];
+  // Sort each group: highest confidence tier first, then highest source
+  // priority, so we pick stable medoids that are never defanged rows.
+  function poiSortKey(p: ActivePoi): [number, number, number, string] {
+    return [-confidenceTier(p), -priority(p.source_type), -p.significance_score, p.id];
   }
 
   // Per-name local secondary tracker (Phase 2 only)
@@ -438,13 +492,14 @@ function findNameCollapsePairs(
   for (const [norm, list] of groups) {
     if (list.length < 2) continue;
 
-    // Sort by priority/significance for stable medoid selection
+    // Sort by confidence tier, priority, significance for stable medoid
     list.sort((a, b) => {
       const ka = poiSortKey(a);
       const kb = poiSortKey(b);
       if (ka[0] !== kb[0]) return ka[0] - kb[0];
       if (ka[1] !== kb[1]) return ka[1] - kb[1];
-      return ka[2] < kb[2] ? -1 : 1;
+      if (ka[2] !== kb[2]) return ka[2] - kb[2];
+      return ka[3] < kb[3] ? -1 : 1;
     });
 
     let groupMergeCount = 0;
@@ -492,6 +547,10 @@ function findNameCollapsePairs(
         const reason = `name-collapse@${distM.toFixed(0)}m`;
         confirmed.push({ primary, secondary: sec, distanceM: distM, reason, phase: 'name-collapse' });
         localSecondary.add(sec.id);
+        // Propagate to the shared set so Phase C (wikidata-twin) skips pairs
+        // that Phase B already merged (e.g. editorial venue + wikidata twin
+        // with matching normalized names within 2 km).
+        alreadySecondary.add(sec.id);
         groupMergeCount++;
 
         if (dryRun) {
@@ -514,6 +573,47 @@ function findNameCollapsePairs(
 }
 
 // ---- Group merges by primary -------------------------------------------------
+
+// ---- Phase C: wikidata-twin pass --------------------------------------------
+// Editorial venues store their canonical Wikidata Q-number in
+// venue_metadata.wikidata. Phase B's exact-name match misses pairs like
+// "Disneyland Park" [editorial] vs "Disneyland" [wikidata] because the
+// names normalize differently. The Q-number is the trust anchor — if an
+// editorial venue's QID matches a wikidata POI's source_id, they are
+// canonical twins by definition. Editorial wins primary regardless of
+// source priority because editorial venues ARE the curated canonical row.
+function findWikidataTwins(
+  pois: ActivePoi[],
+  alreadySecondary: Set<string>,
+): ConfirmedPair[] {
+  const wikidataByQ = new Map<string, ActivePoi>();
+  for (const p of pois) {
+    if (p.source_type === 'wikidata' && !alreadySecondary.has(p.id)) {
+      wikidataByQ.set(p.source_id, p);
+    }
+  }
+
+  const pairs: ConfirmedPair[] = [];
+  for (const venue of pois) {
+    if (venue.source_type !== 'editorial') continue;
+    if (!venue.wikidata_q) continue;
+    if (alreadySecondary.has(venue.id)) continue;
+    const twin = wikidataByQ.get(venue.wikidata_q);
+    if (!twin || twin.id === venue.id) continue;
+    if (alreadySecondary.has(twin.id)) continue;
+
+    const distM = haversineMeters(venue.lat, venue.lng, twin.lat, twin.lng);
+    pairs.push({
+      primary:   venue,
+      secondary: twin,
+      distanceM: distM,
+      reason:    `wikidata-twin:${venue.wikidata_q}`,
+      phase:     'wikidata-twin',
+    });
+    alreadySecondary.add(twin.id);
+  }
+  return pairs;
+}
 
 function groupByPrimary(pairs: ConfirmedPair[]): MergeGroup[] {
   const map = new Map<string, MergeGroup>();
@@ -759,6 +859,7 @@ function printReport(opts: {
 
   const phaseACount = confirmed.filter((p) => p.phase === 'spatial').length;
   const phaseBCount = confirmed.filter((p) => p.phase === 'name-collapse').length;
+  const phaseCCount = confirmed.filter((p) => p.phase === 'wikidata-twin').length;
 
   console.log('');
   console.log(chalk.bold('── Dedupe report ───────────────────────────────────'));
@@ -766,6 +867,7 @@ function printReport(opts: {
   console.log(`  Confirmed merges:    ${confirmed.length.toLocaleString()}` + (dryRun ? chalk.yellow(' (dry run)') : ''));
   console.log(`    Phase A (50 m fuzzy):       ${phaseACount.toLocaleString()}`);
   console.log(`    Phase B (name-collapse 2km): ${phaseBCount.toLocaleString()}`);
+  console.log(`    Phase C (wikidata Q twin):  ${phaseCCount.toLocaleString()}`);
   if (!dryRun) {
     console.log(`  Merges applied:      ${applied.toLocaleString()}`);
     console.log(`  Errors:              ${errors > 0 ? chalk.red(String(errors)) : '0'}`);
@@ -781,11 +883,12 @@ function printReport(opts: {
     }
   }
 
-  const totalRejected = counters.digitMismatch + counters.sensitiveToken;
+  const totalRejected = counters.digitMismatch + counters.sensitiveToken + counters.letterCode;
   console.log('');
   console.log('  Guard rejections:');
   console.log(`    Digit mismatch:           ${counters.digitMismatch.toLocaleString()}`);
   console.log(`    Sensitive token mismatch: ${counters.sensitiveToken.toLocaleString()}`);
+  console.log(`    Letter-code mismatch:     ${counters.letterCode.toLocaleString()}`);
   console.log(`    Total rejected:           ${totalRejected.toLocaleString()}`);
   if (counters.rejected.length > 0) {
     console.log('');
@@ -816,7 +919,11 @@ function printReport(opts: {
     console.log('');
     console.log(`  Random sample (${sample.length} of ${confirmed.length}):`);
     for (const { primary, secondary, distanceM, reason, phase } of sample) {
-      const tag = phase === 'name-collapse' ? chalk.magenta('[B]') : chalk.cyan('[A]');
+      const tag = phase === 'wikidata-twin'
+        ? chalk.green('[C]')
+        : phase === 'name-collapse'
+          ? chalk.magenta('[B]')
+          : chalk.cyan('[A]');
       console.log(chalk.gray(
         `    ${tag} ${distanceM.toFixed(0).padStart(4)}m` +
         `  "${primary.name}" [${primary.source_type}]` +
@@ -893,6 +1000,7 @@ async function main(): Promise<void> {
     .description('Spatial deduplication pass — merge near-duplicate POIs across sources')
     .option('--dry-run',          'Log proposed merges without applying to DB',     false)
     .option('--county <name>',    'Restrict to one California county (Nominatim geocoded)')
+    .option('--bbox <minLat,minLon,maxLat,maxLon>', 'Restrict to an explicit bbox (overrides --county if both given)')
     .option('--limit <n>',        'Cap the number of merges applied', (v) => parseInt(v, 10))
     .option('--cache-dir <path>', 'Cache directory for Nominatim results',
       path.join(__dirname, 'cache'));
@@ -902,6 +1010,7 @@ async function main(): Promise<void> {
   const opts = program.opts<{
     dryRun:   boolean;
     county?:  string;
+    bbox?:    string;
     limit?:   number;
     cacheDir: string;
   }>();
@@ -911,9 +1020,23 @@ async function main(): Promise<void> {
 
   const start = Date.now();
 
-  // Resolve county → bbox if requested
+  // Resolve --bbox or --county → bbox (--bbox wins if both supplied)
   let bbox: BBox | undefined;
-  if (opts.county) {
+  if (opts.bbox) {
+    const parts = opts.bbox.split(',').map((p) => Number(p.trim()));
+    if (parts.length !== 4 || parts.some((n) => Number.isNaN(n))) {
+      throw new Error(`Invalid --bbox "${opts.bbox}". Expected "minLat,minLon,maxLat,maxLon".`);
+    }
+    const [minLat, minLon, maxLat, maxLon] = parts as [number, number, number, number];
+    if (minLat >= maxLat || minLon >= maxLon) {
+      throw new Error(`Invalid --bbox: min must be < max.`);
+    }
+    bbox = { minLat, minLon, maxLat, maxLon };
+    console.log(chalk.gray(
+      `[dedupe] explicit bbox: ${bbox.minLat.toFixed(2)},${bbox.minLon.toFixed(2)}` +
+      ` → ${bbox.maxLat.toFixed(2)},${bbox.maxLon.toFixed(2)}`,
+    ));
+  } else if (opts.county) {
     console.log(chalk.cyan(`[dedupe] geocoding county: ${opts.county}…`));
     bbox = await getCountyBbox(opts.county, opts.cacheDir);
     console.log(chalk.gray(
@@ -932,23 +1055,40 @@ async function main(): Promise<void> {
   const { pairs: phaseA, counters: countersA, alreadySecondary } = findConfirmedPairs(allPois, opts.dryRun);
   console.log(chalk.cyan(
     `[dedupe] phase A: ${phaseA.length.toLocaleString()} merge${phaseA.length === 1 ? '' : 's'}` +
-    ` (${countersA.digitMismatch + countersA.sensitiveToken} rejected by guards)`,
+    ` (${countersA.digitMismatch + countersA.sensitiveToken + countersA.letterCode} rejected by guards)`,
   ));
 
   // Phase B: name-collapse pass (excludes anything already merged in Phase A)
   const collapseInfo = findNameCollapsePairs(allPois, alreadySecondary, opts.dryRun);
   console.log(chalk.cyan(
     `[dedupe] phase B: ${collapseInfo.pairs.length.toLocaleString()} name-collapse merge${collapseInfo.pairs.length === 1 ? '' : 's'}` +
-    ` (${collapseInfo.counters.digitMismatch + collapseInfo.counters.sensitiveToken} rejected by guards,` +
+    ` (${collapseInfo.counters.digitMismatch + collapseInfo.counters.sensitiveToken + collapseInfo.counters.letterCode} rejected by guards,` +
     ` ${collapseInfo.cappedClusters.length} clusters capped,` +
     ` ${collapseInfo.rejectedGeneric.size} generic name${collapseInfo.rejectedGeneric.size === 1 ? '' : 's'} skipped)`,
   ));
 
+  // Phase C: wikidata-twin pass (Q-number match between editorial venues
+  // and wikidata POIs). Editorial wins primary regardless of source
+  // priority — editorial venues are by definition the curated canonical.
+  const phaseC = findWikidataTwins(allPois, alreadySecondary);
+  console.log(chalk.cyan(
+    `[dedupe] phase C: ${phaseC.length.toLocaleString()} wikidata-twin merge${phaseC.length === 1 ? '' : 's'}`,
+  ));
+  if (opts.dryRun) {
+    for (const p of phaseC) {
+      console.log(chalk.gray(
+        `  TWIN  Q=${p.secondary.source_id.padEnd(10)}  ` +
+        `"${p.primary.name}" [editorial]  ← "${p.secondary.name}" [wikidata]`,
+      ));
+    }
+  }
+
   // Combined pairs and guard counters for the unified report
-  const confirmed: ConfirmedPair[] = [...phaseA, ...collapseInfo.pairs];
+  const confirmed: ConfirmedPair[] = [...phaseA, ...collapseInfo.pairs, ...phaseC];
   const counters: GuardCounters = {
     digitMismatch:  countersA.digitMismatch  + collapseInfo.counters.digitMismatch,
     sensitiveToken: countersA.sensitiveToken + collapseInfo.counters.sensitiveToken,
+    letterCode:     countersA.letterCode     + collapseInfo.counters.letterCode,
     rejected:       [...countersA.rejected,  ...collapseInfo.counters.rejected],
   };
 
