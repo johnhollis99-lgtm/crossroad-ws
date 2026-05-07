@@ -163,7 +163,7 @@ export function detectVenueFromTags(input: {
   // ---- Wikidata P31 rules --------------------------------------------------
   if (source_type === 'wikidata' && wikidata_p31?.length) {
     const has = (qid: string) => wikidata_p31!.includes(qid);
-    if (has('Q1116364')) return v(true, 'theme_park', 0.95, 'wikidata Q1116364 (theme park)');
+    if (has('Q2416723')) return v(true, 'theme_park', 0.95, 'wikidata Q2416723 (theme park)');
     if (has('Q46169')) return v(true, 'national_park', 0.95, 'wikidata Q46169 (national park)');
     if (has('Q3918')) return v(true, 'campus', 0.9, 'wikidata Q3918 (university)');
     if (has('Q3914')) return v(true, 'campus', 0.85, 'wikidata Q3914 (high school)');
