@@ -13,9 +13,10 @@
  * highway_routes table must be populated for route adjacency to score > 0.
  */
 
-import 'dotenv/config';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import dotenv from 'dotenv';
+dotenv.config({ path: path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../.env') });
 import { promises as fs } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { Command } from 'commander';
@@ -183,21 +184,30 @@ function extractWikipediaTitle(citation: string | null): string | null {
 
 // ── Route adjacency ──────────────────────────────────────────────────────────
 
+// Sub-batch size for adjacency RPC — smaller batches avoid statement timeout
+// on complex highway geometries (100 POIs × 221 routes is well within limits).
+const ADJACENCY_SUB_BATCH = 100;
+
 async function fetchAdjacencyScores(
   supabase: ReturnType<typeof getAdminClient>,
   poiIds: string[],
 ): Promise<Map<string, number>> {
   const map = new Map<string, number>();
-  const { data, error } = await supabase.rpc('batch_route_adjacency_scores', {
-    poi_ids: poiIds,
-  });
-  if (error) {
-    console.warn(chalk.yellow(`[adjacency] RPC failed: ${error.message} — using 0 for this batch`));
-    return map;
+
+  for (let i = 0; i < poiIds.length; i += ADJACENCY_SUB_BATCH) {
+    const chunk = poiIds.slice(i, i + ADJACENCY_SUB_BATCH);
+    const { data, error } = await supabase.rpc('batch_route_adjacency_scores', {
+      poi_ids: chunk,
+    });
+    if (error) {
+      console.warn(chalk.yellow(`[adjacency] RPC failed: ${error.message} — using 0 for this sub-batch`));
+      continue;
+    }
+    for (const row of (data ?? []) as { poi_id: string; adjacency_points: number }[]) {
+      map.set(row.poi_id, row.adjacency_points);
+    }
   }
-  for (const row of (data ?? []) as { poi_id: string; adjacency_points: number }[]) {
-    map.set(row.poi_id, row.adjacency_points);
-  }
+
   return map;
 }
 

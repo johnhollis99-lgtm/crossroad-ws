@@ -357,7 +357,7 @@ CREATE OR REPLACE FUNCTION batch_update_significance(p_ids uuid[], p_scores nume
 RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
 BEGIN
   UPDATE pois SET significance_score=vals.score, significance_breakdown=vals.breakdown
-  FROM unnest(p_ids,p_scores,p_breakdowns) AS vals(id uuid, score numeric, breakdown jsonb)
+  FROM (SELECT unnest(p_ids) AS id, unnest(p_scores) AS score, unnest(p_breakdowns) AS breakdown) AS vals
   WHERE pois.id=vals.id;
 END; $$;
 

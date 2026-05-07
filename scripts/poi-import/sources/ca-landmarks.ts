@@ -89,7 +89,7 @@ function stripTags(html: string): string {
 
 // Wikipedia renders {{Coord|...}} as <span class="geo">lat;lon</span>
 function extractGeo(cellHtml: string): { lat: number; lng: number } | null {
-  const m = /class="geo"[^>]*>([\d.+-]+);([\d.+-]+)/.exec(cellHtml);
+  const m = /class="geo"[^>]*>([\d.+-]+);\s*([\d.+-]+)/.exec(cellHtml);
   if (!m) return null;
   const lat = parseFloat(m[1]!);
   const lng = parseFloat(m[2]!);
@@ -137,95 +137,141 @@ function findNextWikitable(html: string, from: number): number {
   return -1;
 }
 
-function parseWikiHtml(html: string): ChlEntry[] {
-  const entries: ChlEntry[] = [];
-  let currentCounty = 'Unknown';
-  let i = 0;
+// ---- Helpers for per-county fetch strategy ----------------------------------
 
-  while (i < html.length) {
-    const h2Start    = html.indexOf('<h2', i);
-    const tableStart = findNextWikitable(html, i);
+const sleep = (ms: number): Promise<void> =>
+  new Promise(resolve => setTimeout(resolve, ms));
 
-    if (h2Start === -1 && tableStart === -1) break;
+async function isCached(cacheFile: string): Promise<boolean> {
+  try {
+    const meta = JSON.parse(
+      await fs.readFile(`${cacheFile}.meta.json`, 'utf8'),
+    ) as CacheMeta;
+    return Date.now() - meta.fetchedAt < CACHE_MAX_AGE_MS;
+  } catch { return false; }
+}
 
-    const takeH2 = h2Start !== -1 && (tableStart === -1 || h2Start < tableStart);
-
-    if (takeH2) {
-      const h2End = html.indexOf('</h2>', h2Start);
-      if (h2End === -1) { i = html.length; continue; }
-      const h2Text = stripTags(html.slice(h2Start, h2End + 5));
-      if (h2Text && h2Text !== 'Contents' && h2Text !== 'References') {
-        currentCounty = h2Text;
-      }
-      i = h2End + 5;
-    } else {
-      const tableEnd = findTableEnd(html, tableStart);
-      if (tableEnd === -1) { i = html.length; continue; }
-      const tableHtml = html.slice(tableStart, tableEnd);
-
-      const trRe = /<tr(?:\s[^>]*)?>(?:\s*)([\s\S]*?)(?:\s*)<\/tr>/gi;
-      let trMatch: RegExpExecArray | null;
-      while ((trMatch = trRe.exec(tableHtml)) !== null) {
-        const rowHtml = trMatch[1]!;
-        // Skip header rows (contain <th> cells)
-        if (/<th[\s>]/i.test(rowHtml)) continue;
-
-        const cells = parseTdCells(rowHtml);
-        if (cells.length < 2) continue;
-
-        // Cell 0: CHL number (1–1500)
-        const numText = stripTags(cells[0]!).replace(/,/g, '').trim();
-        const num = parseInt(numText, 10);
-        if (isNaN(num) || num < 1 || num > 1500) continue;
-
-        // Cell 1: landmark name
-        const nameCell = cells[1]!;
-        const name = stripTags(nameCell).replace(/\[[\d\s]*\]/g, '').trim();
-        if (!name || name.length > 250) continue;
-
-        const wikiPath = extractWikiPath(nameCell);
-
-        // Scan remaining cells for embedded geo coordinates
-        let geo: { lat: number; lng: number } | null = null;
-        let locationText = '';
-        let descText: string | null = null;
-
-        for (let ci = 2; ci < cells.length; ci++) {
-          const g = extractGeo(cells[ci]!);
-          if (g) {
-            geo          = g;
-            locationText = stripTags(cells[ci]!);
-            // Collect all subsequent cells as description text
-            const parts: string[] = [];
-            for (let di = ci + 1; di < cells.length; di++) {
-              const t = stripTags(cells[di]!).replace(/\[[\d\s]*\]/g, '').trim();
-              if (t) parts.push(t);
-            }
-            descText = parts.join(' ') || null;
-            break;
-          }
-        }
-
-        // No embedded geo: assume last cell = description, second-to-last = location
-        if (geo === null && cells.length >= 3) {
-          locationText = stripTags(cells[cells.length - 2]!);
-          descText     = stripTags(cells[cells.length - 1]!).replace(/\[[\d\s]*\]/g, '').trim() || null;
-        }
-
-        entries.push({
-          number: num,
-          name,
-          county:      currentCounty,
-          lat:         geo?.lat ?? null,
-          lng:         geo?.lng ?? null,
-          description: descText,
-          locationText,
-          wikiPath,
-        });
-      }
-
-      i = tableEnd;
+function extractCountyUrls(html: string): string[] {
+  const re = /href="(\/wiki\/California_Historical_Landmarks_in_[^"#]+)"/g;
+  const seen = new Set<string>();
+  const urls: string[] = [];
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(html)) !== null) {
+    const p = m[1]!;
+    if (!seen.has(p)) {
+      seen.add(p);
+      urls.push(`https://en.wikipedia.org${p}`);
     }
+  }
+  return urls;
+}
+
+function countySlugFromUrl(url: string): string {
+  const m = /California_Historical_Landmarks_in_(.+)$/.exec(url);
+  if (!m) return 'unknown';
+  return m[1]!.replace(/_County$/i, '').replace(/_/g, '-').toLowerCase();
+}
+
+function countyNameFromUrl(url: string): string {
+  const m = /California_Historical_Landmarks_in_(.+)$/.exec(url);
+  if (!m) return 'Unknown';
+  return m[1]!.replace(/_County$/i, '').replace(/_/g, ' ');
+}
+
+// ---- Per-county table parser ------------------------------------------------
+// County sub-article columns: Image | Name | CHL# | Location+geo | City | Summary
+// The CHL# is not always cells[0], so we scan the first 4 cells for a valid number.
+function parseCountyHtml(html: string, countyName: string): ChlEntry[] {
+  const entries: ChlEntry[] = [];
+
+  let tableStart = findNextWikitable(html, 0);
+  while (tableStart !== -1) {
+    const tableEnd = findTableEnd(html, tableStart);
+    if (tableEnd === -1) break;
+    const tableHtml = html.slice(tableStart, tableEnd);
+
+    const trRe = /<tr(?:\s[^>]*)?>(?:\s*)([\s\S]*?)(?:\s*)<\/tr>/gi;
+    let trMatch: RegExpExecArray | null;
+    while ((trMatch = trRe.exec(tableHtml)) !== null) {
+      const rowHtml = trMatch[1]!;
+      const hasTd = /<td[\s>]/i.test(rowHtml);
+      if (!hasTd) continue;
+
+      const cells = parseTdCells(rowHtml);
+      if (cells.length < 3) continue;
+
+      // CHL number is in a <th> cell (yellow badge), not a <td>
+      const chlMatch = /<th[^>]*>\s*<small>(\d+)<\/small>\s*<\/th>/i.exec(rowHtml);
+      if (!chlMatch) continue;
+      const num = parseInt(chlMatch[1]!, 10);
+      if (isNaN(num) || num < 1 || num > 1500) continue;
+
+      // Name cell: first cell containing a /wiki/ link
+      let nameCell = '';
+      let nameCellIdx = -1;
+      for (let ci = 0; ci < cells.length; ci++) {
+        if (/href="\/wiki\/[^"#]+"/.test(cells[ci]!)) {
+          nameCell = cells[ci]!;
+          nameCellIdx = ci;
+          break;
+        }
+      }
+      if (!nameCell) continue;
+
+      const name = stripTags(nameCell).replace(/\[[\d\s]*\]/g, '').trim();
+      if (!name || name.length > 250) continue;
+
+      const wikiPath = extractWikiPath(nameCell);
+
+      // Scan remaining cells for embedded geo coordinates
+      let geo: { lat: number; lng: number } | null = null;
+      let locationText = '';
+      let descText: string | null = null;
+
+      for (let ci = 0; ci < cells.length; ci++) {
+        if (ci === nameCellIdx) continue;
+        const g = extractGeo(cells[ci]!);
+        if (g) {
+          geo = g;
+          locationText = stripTags(cells[ci]!);
+          const parts: string[] = [];
+          for (let di = ci + 1; di < cells.length; di++) {
+            if (di === nameCellIdx) continue;
+            const t = stripTags(cells[di]!).replace(/\[[\d\s]*\]/g, '').trim();
+            if (t) parts.push(t);
+          }
+          descText = parts.join(' ') || null;
+          break;
+        }
+      }
+
+      // No embedded geo: last remaining cell = description, second-to-last = location
+      if (geo === null) {
+        const rest = cells
+          .map((c, i) => ({ c, i }))
+          .filter(({ i }) => i !== nameCellIdx);
+        if (rest.length >= 2) {
+          locationText = stripTags(rest[rest.length - 2]!.c);
+          descText = stripTags(rest[rest.length - 1]!.c)
+            .replace(/\[[\d\s]*\]/g, '').trim() || null;
+        } else if (rest.length === 1) {
+          descText = stripTags(rest[0]!.c).replace(/\[[\d\s]*\]/g, '').trim() || null;
+        }
+      }
+
+      entries.push({
+        number: num,
+        name,
+        county: countyName,
+        lat: geo?.lat ?? null,
+        lng: geo?.lng ?? null,
+        description: descText,
+        locationText,
+        wikiPath,
+      });
+    }
+
+    tableStart = findNextWikitable(html, tableEnd);
   }
 
   return entries;
@@ -303,46 +349,75 @@ export async function runImport(opts: ImportOptions): Promise<ImportResult> {
   const chlCacheDir = path.join(opts.cacheDir, 'ca-landmarks');
   await fs.mkdir(chlCacheDir, { recursive: true });
 
-  // 1. Fetch Wikipedia article ------------------------------------------------
+  // 1. Fetch hub page to discover per-county article links --------------------
 
-  const cacheFile = path.join(chlCacheDir, 'chl-list.html');
-  let html: string;
+  const hubCacheFile = path.join(chlCacheDir, 'chl-list.html');
+  let hubHtml: string;
   try {
-    html = await fetchWithCache(WIKI_LIST_URL, cacheFile, opts.force);
+    hubHtml = await fetchWithCache(WIKI_LIST_URL, hubCacheFile, opts.force);
   } catch (err) {
-    console.error(chalk.red(`[ca-landmarks] fetch failed: ${err}`));
+    console.error(chalk.red(`[ca-landmarks] hub fetch failed: ${err}`));
     result.errors++;
     result.durationMs = Date.now() - start;
     return result;
   }
 
-  // 2. Parse tables from Wikipedia HTML --------------------------------------
-
-  let entries: ChlEntry[];
-  try {
-    entries = parseWikiHtml(html);
-  } catch (err) {
-    console.error(chalk.red(`[ca-landmarks] parse failed: ${err}`));
+  const countyUrls = extractCountyUrls(hubHtml);
+  if (countyUrls.length === 0) {
+    console.error(chalk.red(`[ca-landmarks] no county article links found in hub page`));
     result.errors++;
     result.durationMs = Date.now() - start;
     return result;
   }
+  console.log(chalk.cyan(`[ca-landmarks] found ${countyUrls.length} county article links`));
 
-  // Dedup by CHL number (should be unique, but guard in case of parse artifacts)
+  // 2. Fetch + parse each county article (1 req/sec, 30-day cache) -----------
+
+  const allEntries: ChlEntry[] = [];
+  let countiesProcessed = 0;
+  let didFetch = false;
+
+  for (let ci = 0; ci < countyUrls.length; ci++) {
+    const countyUrl  = countyUrls[ci]!;
+    const slug       = countySlugFromUrl(countyUrl);
+    const countyName = countyNameFromUrl(countyUrl);
+
+    if (opts.county && !countyName.toLowerCase().includes(opts.county.toLowerCase())) continue;
+
+    const countyCacheFile = path.join(chlCacheDir, `county-${slug}.html`);
+    const needsFetch = opts.force || !(await isCached(countyCacheFile));
+    if (needsFetch && didFetch) await sleep(1000);
+
+    let countyHtml: string;
+    try {
+      countyHtml = await fetchWithCache(countyUrl, countyCacheFile, opts.force);
+      if (needsFetch) didFetch = true;
+    } catch (err) {
+      console.warn(chalk.yellow(`[ca-landmarks] fetch failed for ${countyName}: ${err}`));
+      result.errors++;
+      continue;
+    }
+
+    const countyEntries = parseCountyHtml(countyHtml, countyName);
+    console.log(chalk.gray(`[ca-landmarks] ${countyName}: ${countyEntries.length} landmarks`));
+    allEntries.push(...countyEntries);
+    countiesProcessed++;
+  }
+
+  console.log(chalk.cyan(
+    `[ca-landmarks] ${countiesProcessed} counties processed, ` +
+    `${allEntries.length} total landmarks parsed`,
+  ));
+
+  // Dedup by CHL number (same landmark may appear on multiple county pages)
   const seen = new Map<number, ChlEntry>();
-  for (const e of entries) {
+  for (const e of allEntries) {
     if (!seen.has(e.number)) seen.set(e.number, e);
   }
-  entries = [...seen.values()].sort((a, b) => a.number - b.number);
-
-  if (opts.county) {
-    const target = opts.county.toLowerCase();
-    entries = entries.filter((e) => e.county.toLowerCase().includes(target));
-    console.log(chalk.cyan(`[ca-landmarks] county filter "${opts.county}": ${entries.length} entries`));
-  }
+  const entries = [...seen.values()].sort((a, b) => a.number - b.number);
 
   result.fetched = entries.length;
-  console.log(chalk.cyan(`[ca-landmarks] parsed ${result.fetched} CHL entries`));
+  console.log(chalk.cyan(`[ca-landmarks] ${result.fetched} unique CHL entries after dedup`));
 
   // 3. Geocode missing coords + normalize ------------------------------------
 
@@ -409,7 +484,7 @@ export async function runImport(opts: ImportOptions): Promise<ImportResult> {
       lat,
       lng,
       tags:               [sourceId.toLowerCase(), ...tags],
-      significance_score: BASE_SIGNIFICANCE,
+      significance_score: BASE_SIGNIFICANCE + (entry.wikiPath ? 0.05 : 0),
       trip_mode:          'all',
       source_type:        'state_landmark',
       source_id:          sourceId,
@@ -441,9 +516,11 @@ export async function runImport(opts: ImportOptions): Promise<ImportResult> {
   const ts          = new Date().toISOString().replace(/[:.]/g, '-');
   const summaryPath = path.join(opts.cacheDir, `ca-landmarks-${ts}.json`);
   await fs.writeFile(summaryPath, JSON.stringify({
-    timestamp:  new Date().toISOString(),
-    sourceUrl:  WIKI_LIST_URL,
-    fetched:    result.fetched,
+    timestamp:         new Date().toISOString(),
+    sourceUrl:         WIKI_LIST_URL,
+    countyArticles:    countyUrls.length,
+    countiesProcessed,
+    fetched:           result.fetched,
     coords: {
       embedded:  geoEmbedded,
       geocoded:  geoFetched,

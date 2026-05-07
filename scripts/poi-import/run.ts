@@ -1,7 +1,13 @@
 #!/usr/bin/env node
-import 'dotenv/config';
+import { config as dotenvConfig } from 'dotenv';
+import { fileURLToPath } from 'url';
+import { dirname, resolve } from 'path';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+dotenvConfig({ path: resolve(__dirname, '../../.env') });
+
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { Command } from 'commander';
 import chalk from 'chalk';
 
@@ -23,8 +29,6 @@ const SOURCES = {
 
 type SourceKey = keyof typeof SOURCES;
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
 const DEFAULT_CACHE_DIR = path.join(__dirname, 'cache');
 
 function parseBBox(s: string): BoundingBox {

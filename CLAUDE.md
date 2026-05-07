@@ -182,31 +182,58 @@ Web fallback uses `window.confirm()` before calling `doEndTrip()`.
 
 Multi-source POI pipeline plan, executed in phases:
 
-1. **Schema migration** — written but NOT YET APPLIED (audited 2026-05-05). Migration file 20260504000005_poi_source_provenance.sql exists; DB still missing all provenance columns. Apply `supabase/apply_pending_migrations.sql` first. After apply: existing rows will be backfilled with source_type='editorial', source_id=id::text, verified=true.
-2. **ETL scaffolding** — done (`scripts/poi-import/`). Isolated package.json (commander, chalk, tsx, dotenv, **xlsx 0.18.5**). Implements: `lib/types.ts` (NormalizedPOI, ImportOptions, ImportResult), `lib/supabase.ts` (admin client via SUPABASE_SERVICE_ROLE_KEY), `lib/dedupe.ts` (token-set ratio + Levenshtein + haversine), `lib/geocode.ts` (Nominatim, 1 req/sec, disk cache), `lib/significance.ts` (weighted signal scoring), `lib/category-map.ts` (OSM/Wikidata tags → CategorySlug), `lib/upsert.ts` (500-row batches, ON CONFLICT source_type+source_id), `lib/wikidata-types.ts` (26 Wikidata P31 class definitions with bonus weights). CLI: `run.ts` with `--source=osm|wikidata|nrhp|ca-landmarks|gnis|all --bbox --county --state --limit --dry-run --force`.
+1. **Schema migration** — ALL APPLIED (verified 2026-05-05, watermark 20260504000014). All provenance columns live in DB.
+2. **ETL scaffolding** — done (`scripts/poi-import/`). Isolated package.json (commander, chalk, tsx, dotenv, **pg ^8.13.3**, **xlsx 0.18.5**). Implements: `lib/types.ts` (NormalizedPOI, ImportOptions, ImportResult), `lib/supabase.ts` (Supabase admin client via SUPABASE_SERVICE_ROLE_KEY + `getPgPool()` via DATABASE_URL for geometry writes), `lib/dedupe.ts` (token-set ratio + Levenshtein + haversine), `lib/geocode.ts` (Nominatim, 1 req/sec, disk cache), `lib/significance.ts` (weighted signal scoring), `lib/category-map.ts` (OSM/Wikidata tags → CategorySlug), `lib/upsert.ts` (100-row batches, direct pg SQL with `ST_GeogFromText()`, `ON CONFLICT (source_type, source_id) WHERE merged_into IS NULL`; deduplicates within each batch by `source_type:source_id` before Postgres INSERT to prevent `ON CONFLICT DO UPDATE command cannot affect row a second time` from duplicate ref numbers in source data), `lib/wikidata-types.ts` (26 Wikidata P31 class definitions with bonus weights). CLI: `run.ts` with `--source=osm|wikidata|nrhp|ca-landmarks|gnis|all --bbox --county --state --limit --dry-run --force`.
+
+   **Why direct pg instead of Supabase JS client for upserts:** PostgREST's schema cache structurally excludes `geography` typed columns — the JS client cannot write to `pois.location`. All geometry writes go through `pg` with `ST_GeogFromText(wkt)`. The geometry column is named `location` (not `geom`). `DATABASE_URL` must be the direct connection string (`db.[project-ref].supabase.co:5432`), not the pooler. URL-encode special chars in password (e.g. `?` → `%3F`).
+
+   **run.ts dotenv:** loads `../../.env` (repo root) via explicit path — safe regardless of invocation directory.
+
+   **recompute-significance.ts dotenv:** also uses explicit `../../.env` path (not `dotenv/config` which reads from CWD). Fixed 2026-05-06.
+
+   **recompute-significance.ts invocation:** must be run from `scripts/poi-import/` — always `cd` there first. PowerShell requires quoted paths when the directory contains spaces: `Set-Location "E:\Dev XRoad\roadstory\scripts\poi-import"` then `npx tsx recompute-significance.ts`. Last live run: 16,957 POIs recomputed successfully (2026-05-06).
+
+   **batch_update_significance SQL fix (2026-05-06):** PostgreSQL does not allow a column definition list with multi-arg `UNNEST(a, b, c) AS u(col1, col2, col3)`. Fixed in `supabase/migrations/20260504000006_poi_significance_breakdown.sql` and `supabase/apply_pending_migrations.sql` to use a subquery: `FROM (SELECT unnest(p_ids) AS id, unnest(p_scores) AS score, unnest(p_breakdowns) AS breakdown) AS vals`. Live DB patched via direct `pg` connection.
+
+   **osm.ts Overpass headers:** fetch includes `Accept: '*/*'` and `User-Agent: 'RoadStory-POI-Import/1.0 ...'` — required to avoid HTTP 406 from overpass-api.de.
+
+   **CLI invocation:** `run.ts` uses a `import` subcommand — `npx tsx run.ts import -s wikidata --dry-run`. The `-s` flag (not `--source`) is under the `import` subcommand, not the top-level program.
 3. **Source importers** — all 5 done.
-   - **`sources/osm.ts`** ✅ — Overpass API, 18-filter union query (historic/tourism/natural/leisure/amenity/man_made), 1°×1° tiling for large bboxes, 2s rate limit + exponential backoff on 429/504, per-cell JSON cache, significance additive formula (+20 wikipedia, +10 wikidata, +15 heritage, +10 tourism=attraction, +5 image).
-   - **`sources/wikidata.ts`** ✅ — SPARQL endpoint, 26 P31 classes via `lib/wikidata-types.ts`, `geof:latitude/longitude` bbox filter, LIMIT 1000/OFFSET pagination, per-class fallback on 60s timeout, Wikipedia REST summary fetch for items with enwiki sitelinks (cached in `cache/wikipedia/`), significance: +0.25 wikipedia +0.05 image +classBonus/100.
-   - **`sources/nrhp.ts`** ✅ — Scrapes NPS downloads page for current XLSX URL, downloads with 30-day file cache (`cache/nrhp/*.meta.json` sidecar), parses with SheetJS, filters State='CA', geocodes all entries via Nominatim (NPS spreadsheet has no coordinates) with 3-tier fallback (full address → city+county → county centroid), NHL flag detected from "NHL Designation Date" column, significance 0.30 base +0.10 NHL bonus.
-   - **`sources/ca-landmarks.ts`** ✅ — Fetches Wikipedia "List of California Historical Landmarks" HTML (30-day cache). Sequential scanner tracks `<h2>` county headings then parses `wikitable` rows: CHL number, name, wikilink, `<span class="geo">lat;lon</span>` coordinates, plaque/notes text. Falls back to Nominatim geocoding for rows missing embedded coords. Keyword classifier covers missions, gold rush, indigenous, military, churches, courthouses, geology, nature — defaults to `history`. source_type='state_landmark', source_id='CHL-{number}', significance=0.25, confidence=1.0.
+   - **`sources/osm.ts`** ✅ **LIVE** — Overpass API, 18-filter union query (historic/tourism/natural/leisure/amenity/man_made), 1°×1° tiling for large bboxes, 2s rate limit + exponential backoff on 429/504, per-cell JSON cache, significance additive formula (+20 wikipedia, +10 wikidata, +15 heritage, +10 tourism=attraction, +5 image). First live run: 293 POIs inserted for San Luis Obispo county. Second live run (2026-05-07): 3,863 POIs inserted for Los Angeles County (5,840 raw → 3,863 normalized → 3,863 inserted, 0 errors, 70.9s).
+   - **`sources/wikidata.ts`** ✅ — SPARQL endpoint, 26 P31 classes via `lib/wikidata-types.ts`, `wikibase:box` bbox filter (NOT `geof:latitude/longitude` — those are GeoSPARQL functions unsupported on Wikidata's Blazegraph and cause a 500), LIMIT 1000/OFFSET pagination. Combined 26-class query attempted first; 502/503/504 treated as timedOut → falls back to per-class queries. **Wikipedia sitelink lookup uses MediaWiki `wbgetentities` API** (`wikidata.org/w/api.php`) — NOT SPARQL (SPARQL 429s at 120s Retry-After under load). Batch size 50 QIDs (hard API limit), 200ms inter-batch pause, 5 retries with exponential backoff [2s/4s/8s/16s/32s], cache prefix `api-wt-{bbHash}-{bHash}.json`. `wikibase:box` blocks Wikidata's sitelinks graph so the OPTIONAL inside the main query returns nothing — the MediaWiki API batch is a separate post-processing step. Significance: +0.25 wikipedia +0.05 image +classBonus/100.
+   - **`sources/nrhp.ts`** ✅ **LIVE** — Scrapes NPS downloads page for current XLSX URL, downloads with 30-day file cache (`cache/nrhp/*.meta.json` sidecar), parses with SheetJS, geocodes all entries via Nominatim (NPS spreadsheet has no coordinates) with 3-tier fallback (full address → city+county → county centroid), NHL flag detected from "NHL Designated Date" column, significance 0.30 base +0.10 NHL bonus. First live run: 3,088 California listings, geocode hit=3,088 miss=0. **Column quirks (fixes applied 2026-05-06):** refNum column is `"Ref#"` (not "Reference Number"); state values are full uppercase names `"CALIFORNIA"` (not `"CA"`); resource type column is `"Category of Property"` (not "Type" — "Request Type" is a different column that substring-matched first).
+   - **`sources/ca-landmarks.ts`** ✅ **FIXED (2026-05-06)** — Hub-page rewrite complete + three parser bugs fixed. Hub page (`List_of_California_Historical_Landmarks`) now links to 58 per-county sub-articles; importer fetches each (30-day cache `county-{slug}.html`). **County sub-article table structure** (verified against San Luis Obispo): `class="wikitable sortable"`, columns: Image | CHL# | Landmark name | Location | City | Summary. CHL number is in a **`<th>` cell** (yellow, `<small>NUM</small>`), NOT a `<td>`. Geo is in a hidden `<span class="geo">lat; lng</span>` (semicolon + space before longitude). **Three bugs fixed:** (1) header-row skip `/<th[\s>]/` fired on every data row (each has a `<th>` for CHL#) — replaced with `!/<td[\s>]/` check; (2) `parseTdCells()` ignored `<th>` so CHL number was never found — replaced with dedicated regex `/<th[^>]*>\s*<small>(\d+)<\/small>\s*<\/th>/i` on raw row HTML; (3) geo regex `/;([\d.+-]+)/` didn't match the space after the semicolon — fixed to `/;\s*([\d.+-]+)/`.
    - **`sources/gnis.ts`** ✅ — Queries USGS S3 listing API (`prd-tnm.s3.amazonaws.com`) to discover latest `CA_Features_YYYYMMDD.zip`. Downloads + caches 30 days. Minimal built-in ZIP extractor using `zlib.inflateRaw` (no extra deps). Allowlisted classes: Summit, Falls, Cape, Arch, Bay, Pillar, Crater, Geyser, Hot Spring, Lava, Lake, Island, Range. Flexible pipe-delimited column detection; skips zero-zero stale coords. significance=0.05 (intentionally low — dedup boosts if cross-referenced), confidence=0.8.
    - Note: `import` is reserved — all importers export `runImport(opts): Promise<ImportResult>`.
-4. **Dedup** — done (`scripts/poi-import/dedupe.ts`, standalone script). Loads all active POIs (`merged_into IS NULL`) with `geom::text` cast, builds 0.001° spatial grid, finds pairs within 50m, confirms by name similarity (tokenSetRatio > 0.9 OR levenshteinRatio > 0.85 OR substring). Picks primary by source priority (editorial > state_landmark > nrhp > wikidata > osm > gnis > narrative_extracted > user_contributed) then significance then UUID. Merges: primary gains `additional_sources[]` entry + longest description + +0.10 sig per source (max +0.30 cap, incremental delta). Secondary gets `merged_into = primary.id`. Chain-merge guard: outer POI breaks inner loop if it becomes secondary mid-scan. Run: `npx tsx dedupe.ts [--dry-run] [--county <name>] [--limit <n>]`. Prints source-pair merge table + partial index DDL suggestion.
-5. **Significance recompute** — done (`scripts/poi-import/recompute-significance.ts`). Runs after import + dedup. Four components capped at 100: (a) `source_base` — existing score normalised to 0-100 pts (idempotent: reads from `breakdown.source_base` on re-runs); (b) `cross_source` — +10 per `additional_sources` entry, max 30; (c) `pageviews` — Wikipedia 30-day views via Wikimedia REST monthly API on log scale 0-20 pts (100→5, 1k→10, 10k→15, 100k+→20), 7-day file cache in `cache/pageviews/`; (d) `route_adjacency` — +10 within 1km of major CA highways (I-5, US-101, CA-1, I-80, I-15), +5 within 5km of any Interstate/US highway, via `batch_route_adjacency_scores` RPC against `highway_routes` table (0 if table empty). Writes `significance_score` (0-100) + `significance_breakdown` jsonb. Run: `npm run recompute [-- --dry-run] [-- --skip-pageviews] [-- --force-pageviews] [-- --batch-size 1000]`. **highway_routes table must be populated separately before adjacency scoring works.**
+4. **Dedup** — done (`scripts/poi-import/dedupe.ts`, standalone script). Two-phase pass: A=spatial fuzzy, B=name-collapse. **Uses `pg` directly** (PostgREST cannot read `geography` columns). Loads all active POIs (`merged_into IS NULL`) via raw SQL with `ST_X(location::geometry) AS lng, ST_Y(location::geometry) AS lat` (column is `location`, not `geom`). Reads `category_slug` via JOIN poi_categories (Phase B needs it). Optional bbox filter applied server-side in SQL. Picks primary by source priority (editorial > state_landmark > nrhp > wikidata > osm > gnis > narrative_extracted > user_contributed) then significance then UUID. Merges: primary gains `additional_sources[]` entry + longest description + +0.10 sig per source (max +0.30 cap, incremental delta). Secondary gets `merged_into = primary.id`. Merge writes wrapped in `BEGIN`/`COMMIT`/`ROLLBACK` per group (50 concurrent). **dotenv:** loads `../../.env` repo root explicitly (not CWD). Run: `npx tsx dedupe.ts [--dry-run] [--county <name>] [--limit <n>]`. Prints Phase A/B breakdown, top names by merge count, 21-California-Missions consolidation table, source-pair merge table, guard rejection table, partial index DDL suggestion.
+
+   **Phase A — spatial fuzzy (50 m gate).** Builds 0.001° spatial grid in memory, finds candidate pairs within 50m (haversine), confirms by name similarity (tokenSetRatio > 0.9 OR levenshteinRatio > 0.85 OR substring). Chain-merge guard: outer POI breaks inner loop if it becomes secondary mid-scan. Verified against live data (17,390 POIs): 433 merges, 38 digit-blocked, 4 sensitive-token-blocked — all 42 rejections confirmed correct.
+
+   **Phase B — name-collapse (2 km gate, exact normalized name).** Added 2026-05-07 to fix linear/extended features (Hollywood Walk of Fame ≈ 2.3 km long) and compound-property anchor drift that exceeds 50 m (mission complexes, courthouses, multi-block historic districts). Groups active POIs by `normalizeName(name)` (cross-category — only POI-level category filter applies). For each group ≥2: sorts by source priority, picks medoid (highest priority), includes all members within `NAME_COLLAPSE_RADIUS_M = 2000` of medoid. Excludes categories `{nature, geology, natural_feature}` (peaks/lakes/waterfalls legitimately repeat names). Generic-name reject list (`COLLAPSE_GENERIC_NAMES`): mural/statue/memorial/plaza/park/sculpture/fountain/bench/marker/tree/rock/garden/viewpoint/overlook/trail/sign/art/public art/mural art/painting/installation/monument. Cluster cap `MAX_CLUSTER_SIZE = 50` per primary (defensive — has not fired in production). Uses same digit + sensitive-token guards as Phase A via shared `passesGuards()`. Phase B only considers POIs not already merged in Phase A. First live run (2026-05-07): 238 merges, 0 errors. Walk of Fame collapsed 37→1, Jurassic World—The Ride 4→1, +200 misc compound properties; only "sculpture" triggered generic reject (4 POIs); cluster cap unfired; max cluster=36.
+
+   **Shared false-positive guards** (similarity check runs first; guards only fire on pairs that would otherwise merge — counters are accurate): (a) **Digit mismatch** — if both names contain digit sequences and the sets differ, reject (e.g. "Case Study House No. 16" vs "No. 9", "6 Mile Corral" vs "8 Mile Corral"); if only one name has digits, allow. (b) **Sensitive token** — if differing tokens include a cardinal direction {north, south, east, west, central, nw, ne, sw, se} or cultural marker {chinese, japanese, mexican, italian, korean, filipino, hispanic, african, native, indigenous}, reject. NRHP "Boundary Increase" amendments always bypass both guards. Refactored to standalone `passesGuards()` in dedupe.ts so Phase A `matchReason()` and Phase B `findNameCollapsePairs()` share identical guard logic.
+
+   **`normalizeName` accent handling** (`lib/dedupe.ts`): NFD decomposition + `/[̀-ͯ]/` strip combining marks, plus an explicit `ACCENT_MAP` fallback covering á/à/â/ä/ã/å/é/è/ê/ë/í/ì/î/ï/ó/ò/ô/ö/õ/ú/ù/û/ü/ñ/ç. The accent map is defensive — NFD already covers all Latin-1 supplement diacritics; the map exists for any future pre-composed glyphs that don't decompose. Also exported: `exactNormalizedNameMatch(a, b)` helper.
+
+   **Data-quality backlog** — issues auto-dedup intentionally leaves alone (different things sharing partial names, bad upstream coordinates, language variants, venue sub-features) are tracked in [docs/data-quality-issues.md](docs/data-quality-issues.md) for the eventual `poi_review_queue` admin app (Phase 6). Currently 6 entries: 3 manual-review cases (Soledad Museum, Mission San José NRHP at wrong coords, Avila Adobe misnamed as Mission San Fernando Rey) + 3 Phase B follow-ups (Walk of Fame canonical merge, Misión↔Mission language equivalence, Disney/Universal rides outranking real landmarks).
+5. **Significance recompute** — done (`scripts/poi-import/recompute-significance.ts`). Runs after import + dedup. Four components capped at 100: (a) `source_base` — existing score normalised to 0-100 pts (idempotent: reads from `breakdown.source_base` on re-runs); (b) `cross_source` — +10 per `additional_sources` entry, max 30; (c) `pageviews` — Wikipedia 30-day views via Wikimedia REST monthly API on log scale 0-20 pts (100→5, 1k→10, 10k→15, 100k+→20), 7-day file cache in `cache/pageviews/`; (d) `route_adjacency` — +10 within 1km of major CA highways (I-5, US-101, CA-1, I-80, I-15), +5 within 5km of any Interstate/US highway, via `batch_route_adjacency_scores` RPC against `highway_routes` table. Writes `significance_score` (0-100) + `significance_breakdown` jsonb. Run: `npm run recompute [-- --dry-run] [-- --skip-pageviews] [-- --force-pageviews] [-- --batch-size 1000]`. **Adjacency sub-batching:** recompute calls the RPC in chunks of 100 POIs (not the full 1000) to avoid Supabase statement timeout — see `ADJACENCY_SUB_BATCH` constant in the script. **highway_routes is now seeded** (2026-05-06): 221 CA highway refs (5 major_ca, 54 interstate, 30 us_highway, 132 state_highway) fetched from Overpass API via `seed-highway-routes.ts`. Geometries simplified to 0.001° tolerance; geography GiST index added. Last recompute (2026-05-07, post-Phase-B): 20,148 POIs, zero errors. Score distribution: 18% in 0–9, 41.5% in 10–19, 21.1% in 30–39, 12.8% in 40–49; 5 perfect-100s (Hollywood Sign editorial, Mt Whitney editorial, Mammoth Mountain editorial, Walk of Fame OSM-medoid, Grizzly River Run OSM).
 6. **Narrative extraction** — not started. Pull/structure source text; rows get source_type='narrative_extracted' with `source_citation` (URL + verbatim passage).
 
 ### Importer cache layout (`scripts/poi-import/cache/`)
 ```
 cache/
   osm-cells/          cell-{lat}_{lon}.json        (Overpass raw JSON per tile)
-  wikidata-sparql/    {prefix}-p{page}.json        (SPARQL result pages)
+  wikidata-sparql/    {prefix}-p{page}.json        (SPARQL result pages per class)
+  wikidata-sparql/    api-wt-{bbHash}-{bHash}.json  (MediaWiki API title lookups, 50 QIDs each)
   wikipedia/          {sha1}.json                  (Wikipedia REST summary)
   pageviews/          {sha1}.json                  (Wikimedia pageviews, 7-day TTL)
   geocode/            geocode-{hash}.json          (Nominatim results)
   geocode/            county-bbox-{slug}.json      (county bbox from Nominatim)
   nrhp/               national-register-listed_*.xlsx + *.meta.json
-  ca-landmarks/       chl-list.html + .meta.json   (Wikipedia CHL list page, 30-day)
+  ca-landmarks/       chl-list.html + .meta.json              (hub page, 30-day)
+  ca-landmarks/       county-{slug}.html + .meta.json        (per-county sub-articles, 58 total, 30-day)
   gnis/               CA_Features_*.zip + *.meta.json (USGS S3 download, 30-day)
+  highway-routes/     ca-highways-{hash}.json (Overpass motorway+trunk for CA, no TTL — delete to re-fetch)
   osm-{ts}.json       run summary
   wikidata-{ts}.json  run summary
   nrhp-{ts}.json      run summary
@@ -396,6 +423,7 @@ GOOGLE_APPLICATION_CREDENTIALS=C:\path\to\service-account.json
 SUPABASE_URL=https://<project-ref>.supabase.co          # scripts use this name (not EXPO_PUBLIC_SUPABASE_URL)
 SUPABASE_SERVICE_ROLE_KEY=<service-role-key>             # scripts use this name (not SUPABASE_SERVICE_KEY)
 ANTHROPIC_API_KEY=<key>                                  # used by precache script + server narration route
+DATABASE_URL=postgresql://postgres:<password>@db.<project-ref>.supabase.co:5432/postgres  # direct connection — NOT the pooler. URL-encode special chars in password (?→%3F)
 ```
 
 Also add `ANTHROPIC_API_KEY` and `GOOGLE_APPLICATION_CREDENTIALS` to `server/.env` — the narration generation route needs both.
@@ -474,19 +502,15 @@ pnpm html            # rebuild index.html only
 | local | `en-US-Chirp3-HD-Sulafat` | Warm, casual inflection |
 | local | `en-US-Chirp3-HD-Schedar` | Natural; slightly more informal than Aoede |
 
-### Migration backlog status (audited 2026-05-05)
+### Migration backlog status (updated 2026-05-06)
 
-**DB watermark: `20260504000001`** — the actual DB is missing migrations 000002–000013.
-Migration 000004 (`trips_anon_select`) was applied out-of-band and must NOT be re-run.
+**DB watermark: `20260504000015`** — all migrations 000002–000015 applied.
+Verification script: `scripts/verify-migrations.mjs` (66/66 checks passed on 000014; listed in `.gitignore`).
 
-**Combined apply script:** `supabase/apply_pending_migrations.sql` — single file covering 000002→000014, safe to re-run (all DDL guarded with IF NOT EXISTS). Run via:
-- Supabase Dashboard → SQL Editor → paste → Run
-- OR: `npx supabase db query -f supabase/apply_pending_migrations.sql --db-url "postgresql://postgres:[DB_PASSWORD]@db.eusozlexmllovlmngmug.supabase.co:5432/postgres"`
-
-**Pending (as of 2026-05-05 — NOT YET APPLIED):**
+**Applied (confirmed live):**
 - 20260504000002 `contributions` — user_contributions, user_badges, contribution_rewards tables + RPCs
 - 20260504000003 `narration_cache` — narration_audio table + user_narrators.slug + RPCs
-- 20260504000004 `trips_anon_select` — **SKIP SQL; watermark-only** (already live out-of-band)
+- 20260504000004 `trips_anon_select` — RLS policy (applied out-of-band)
 - 20260504000005 `poi_source_provenance` — pois provenance columns (source_type, source_id, etc.)
 - 20260504000006 `poi_significance_breakdown` — pois.significance_breakdown + highway_routes + RPCs
 - 20260504000007 `narrative_documents` — narrative_documents table + FTS index + RPC
@@ -496,9 +520,13 @@ Migration 000004 (`trips_anon_select`) was applied out-of-band and must NOT be r
 - 20260504000011 `narration_audio_provider` — narration_audio.provider/character_count/duration_ms/cost_usd/prompt_version
 - 20260504000012 `voice_configs` — voice_configs table + partial unique index + RLS
 - 20260504000013 `narration_audio_status` — narration_audio.status/mode + audio_url nullable
-- **20260504000014 `narration_cache_rpc`** (NEW — written this session) — pois.narration_cache jsonb + update_poi_narration_cache RPC + anon SELECT policy on voice_configs
+- 20260504000014 `narration_cache_rpc` — pois.narration_cache jsonb + update_poi_narration_cache RPC + anon SELECT policy on voice_configs
+- 20260504000015 `significance_score_precision` — widens pois.significance_score from numeric(4,2) to numeric(6,2) to allow score=100 without overflow (applied live via pg + migration file created)
 
-**After migrations land:**
+**Out-of-band live patches (no migration file — applied directly via pg):**
+- `get_corridor_pois` + `get_nearby_pois` RPCs patched (2026-05-06): live DB had diverged to reference a nonexistent `categories` table instead of `poi_categories`. Re-applied both `CREATE OR REPLACE FUNCTION` bodies from `20250503000001_trip_mode.sql` directly. Root cause unknown (likely a hand-edit in the Supabase SQL editor at some point). If you ever reset or re-apply migrations from scratch, these functions will be correct — the migration files were already right.
+
+**Remaining pre-flight before narration works end-to-end:**
 - `GOOGLE_APPLICATION_CREDENTIALS` is set and working in root `.env` ✓
 - `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` aliases set in root `.env` ✓
 - Add `ANTHROPIC_API_KEY` to root `.env` and `server/.env`
@@ -507,6 +535,20 @@ Migration 000004 (`trips_anon_select`) was applied out-of-band and must NOT be r
 - After 4 commits: voice_configs has one active row per mode → Phase 7 (lazy cache population) is unblocked
 - After picks confirmed: wire voice_configs lookup into `generateNarration()` in `scripts/lib/tts/index.ts`
 - Run precache: `cd scripts && npx tsx precache-popular-routes.ts --named-route pch-sf-la --dry-run`
+
+## Git + repo hygiene
+
+- **No git repo yet** — project directory has no `.git`. Initialize via GitHub Desktop or `git init`.
+- Git binary (not on PATH): `C:\Users\johnh\AppData\Local\GitHubDesktop\app-3.5.8\resources\app\git\cmd\git.exe`
+- **`.gitignore`** — comprehensive file in place covering: `node_modules/` (all sub-packages), `.env` + `server/.env` (secrets), `.expo/`, `dist/`, `admin/.next/`, `scripts/*/cache/`, `scripts/audition-output/`, `*.opus`, `*.tsbuildinfo`, OS files.
+
+## scripts/seed-db.mjs
+
+One-time DB seeder (categories, POIs, corridors, badges). Uses Supabase Management API — requires `SUPABASE_ACCESS_TOKEN` (personal access token from dashboard, NOT the service key).
+
+- Reads `SUPABASE_URL` and `SUPABASE_SERVICE_KEY` from `.env` via `dotenv/config` (fails loud if missing)
+- `PROJECT_REF` derived from `SUPABASE_URL` hostname — no hardcoded project ref
+- `SERVICE_KEY` is validated on startup but currently unused in the script body (Management API uses `ACCESS_TOKEN`)
 
 ## Narration precache script (`scripts/precache-popular-routes.ts`)
 

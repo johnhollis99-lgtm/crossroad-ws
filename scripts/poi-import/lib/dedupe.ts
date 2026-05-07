@@ -4,14 +4,28 @@ const STOPWORDS = new Set([
   'state', 'old', 'new',
 ]);
 
+const ACCENT_MAP: Record<string, string> = {
+  'á': 'a', 'à': 'a', 'â': 'a', 'ä': 'a', 'ã': 'a', 'å': 'a',
+  'é': 'e', 'è': 'e', 'ê': 'e', 'ë': 'e',
+  'í': 'i', 'ì': 'i', 'î': 'i', 'ï': 'i',
+  'ó': 'o', 'ò': 'o', 'ô': 'o', 'ö': 'o', 'õ': 'o',
+  'ú': 'u', 'ù': 'u', 'û': 'u', 'ü': 'u',
+  'ñ': 'n', 'ç': 'c',
+};
+
 export function normalizeName(name: string): string {
   return name
     .toLowerCase()
     .normalize('NFD')
     .replace(/[̀-ͯ]/g, '')
+    .replace(/[áàâäãåéèêëíìîïóòôöõúùûüñç]/g, (ch) => ACCENT_MAP[ch] ?? ch)
     .replace(/[^a-z0-9\s]/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
+}
+
+export function exactNormalizedNameMatch(a: string, b: string): boolean {
+  return normalizeName(a) === normalizeName(b);
 }
 
 export function tokenize(name: string, dropStopwords = true): string[] {

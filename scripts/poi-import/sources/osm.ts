@@ -71,7 +71,11 @@ async function fetchOverpass(query: string): Promise<OverpassResponse> {
       res = await fetch(OVERPASS_ENDPOINT, {
         method: 'POST',
         body: new URLSearchParams({ data: query }),
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded',
+          'Accept': '*/*',
+          'User-Agent': 'RoadStory-POI-Import/1.0 (https://github.com/johnhollis99-lgtm/crossroad-ws)',
+        },
       });
     } catch (err) {
       console.warn(chalk.yellow(`[osm] network error (attempt ${attempt + 1}): ${err}`));

@@ -180,7 +180,7 @@ function parseNrhpXlsx(buf: Buffer): NrhpRow[] {
   const keys = Object.keys(firstRow);
 
   const C = {
-    refNum:     detectCol(keys, ['Reference Number', 'REFNUM', 'Ref Num', 'ref_num']),
+    refNum:     detectCol(keys, ['Ref#', 'Reference Number', 'REFNUM', 'Ref Num', 'ref_num']),
     name:       detectCol(keys, ['Resource Name', 'Property Name', 'Name']),
     state:      detectCol(keys, ['State']),
     county:     detectCol(keys, ['County']),
@@ -188,7 +188,7 @@ function parseNrhpXlsx(buf: Buffer): NrhpRow[] {
     address:    detectCol(keys, ['Address', 'Street Address', 'Street']),
     dateListed: detectCol(keys, ['Date Listed', 'DateListed', 'Listed Date']),
     nhl:        detectCol(keys, ['NHL Designation Date', 'NHL', 'National Historic Landmark']),
-    resType:    detectCol(keys, ['Resource Type', 'Type', 'Category']),
+    resType:    detectCol(keys, ['Resource Type', 'Category of Property', 'Category', 'Type']),
     period:     detectCol(keys, ['Period of Significance', 'Period']),
     areas:      detectCol(keys, ['Areas of Significance', 'Area of Significance', 'Significance']),
   };
@@ -203,7 +203,8 @@ function parseNrhpXlsx(buf: Buffer): NrhpRow[] {
 
   const rows: NrhpRow[] = [];
   for (const row of raw) {
-    if (get(row, C.state) !== 'CA') continue;
+    const stateVal = get(row, C.state).toUpperCase();
+    if (stateVal !== 'CA' && stateVal !== 'CALIFORNIA') continue;
 
     const refNum = get(row, C.refNum);
     const name   = get(row, C.name);

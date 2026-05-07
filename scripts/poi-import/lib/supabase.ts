@@ -1,6 +1,11 @@
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
+import pkg from 'pg';
+
+const { Pool } = pkg;
+type PgPool = InstanceType<typeof Pool>;
 
 let cached: SupabaseClient | null = null;
+let pgPool: PgPool | null = null;
 
 export function getAdminClient(): SupabaseClient {
   if (cached) return cached;
@@ -16,6 +21,14 @@ export function getAdminClient(): SupabaseClient {
     db: { schema: 'public' },
   });
   return cached;
+}
+
+export function getPgPool(): PgPool {
+  if (pgPool) return pgPool;
+  const connectionString = process.env['DATABASE_URL'];
+  if (!connectionString) throw new Error('DATABASE_URL not set in environment');
+  pgPool = new Pool({ connectionString, max: 5 });
+  return pgPool;
 }
 
 export async function getCategoryIdMap(): Promise<Record<string, string>> {

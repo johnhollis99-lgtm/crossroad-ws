@@ -78,21 +78,24 @@ async function wikiLimit(): Promise<void> {
 
 function buildQuery(qids: string[], bbox: BoundingBox, offset: number): string {
   const values = qids.map((q) => `wd:${q}`).join(' ');
+  // wikibase:box uses the native geospatial index; cornerWest=SW, cornerEast=NE, WKT lon-lat order.
+  // geof:latitude/longitude (GeoSPARQL functions) are not supported on Wikidata's Blazegraph.
   return [
     'PREFIX wd:        <http://www.wikidata.org/entity/>',
     'PREFIX wdt:       <http://www.wikidata.org/prop/direct/>',
     'PREFIX wikibase:  <http://wikiba.se/ontology#>',
     'PREFIX bd:        <http://www.bigdata.com/rdf#>',
     'PREFIX schema:    <https://schema.org/>',
-    'PREFIX geof:      <http://www.opengis.net/def/function/geosparql/>',
+    'PREFIX geo:       <http://www.opengis.net/ont/geosparql#>',
     '',
     'SELECT ?item ?itemLabel ?coord ?class ?enWikiTitle ?schemaDesc ?image WHERE {',
     `  VALUES ?class { ${values} }`,
-    '  ?item wdt:P31 ?class;',
-    '        wdt:P625 ?coord.',
-    '  BIND(geof:latitude(?coord)  AS ?lat)',
-    '  BIND(geof:longitude(?coord) AS ?lng)',
-    `  FILTER(?lat >= ${bbox.minLat} && ?lat <= ${bbox.maxLat} && ?lng >= ${bbox.minLon} && ?lng <= ${bbox.maxLon})`,
+    '  ?item wdt:P31 ?class.',
+    '  SERVICE wikibase:box {',
+    '    ?item wdt:P625 ?coord.',
+    `    bd:serviceParam wikibase:cornerWest "Point(${bbox.minLon} ${bbox.minLat})"^^geo:wktLiteral .`,
+    `    bd:serviceParam wikibase:cornerEast "Point(${bbox.maxLon} ${bbox.maxLat})"^^geo:wktLiteral .`,
+    '  }',
     '  OPTIONAL { ?item wdt:P18 ?image. }',
     '  OPTIONAL {',
     '    ?enWikiArticle schema:about ?item;',
@@ -139,13 +142,16 @@ async function fetchPage(
     },
   });
 
-  if (res.status === 500) {
-    const body = await res.text();
-    if (/timeout|TimeoutException/i.test(body)) return { bindings: [], timedOut: true };
-    throw new Error(`SPARQL 500: ${body.slice(0, 300)}`);
-  }
   if (!res.ok) {
     const body = await res.text();
+    // 502/503/504 = nginx killed the backend (query too expensive); treat as timeout so
+    // the per-class fallback kicks in rather than aborting the whole run.
+    if (res.status === 502 || res.status === 503 || res.status === 504) {
+      return { bindings: [], timedOut: true };
+    }
+    if (res.status === 500 && /timeout|TimeoutException/i.test(body)) {
+      return { bindings: [], timedOut: true };
+    }
     throw new Error(`SPARQL ${res.status}: ${body.slice(0, 300)}`);
   }
 
@@ -202,6 +208,92 @@ function parseCoord(wkt: string): { lat: number; lng: number } | null {
 
 function extractQid(uri: string): string {
   return uri.split('/').pop() ?? uri;
+}
+
+// ---- Batch Wikipedia-title lookup via MediaWiki API (wbgetentities) ---------
+// Uses api.php instead of SPARQL — far more permissive rate limits; 50 QIDs per call (hard limit).
+
+const WIKI_TITLE_BATCH       = 50;   // hard wbgetentities limit
+const MWAPI_ENDPOINT         = 'https://www.wikidata.org/w/api.php';
+const WIKI_TITLE_DELAYS      = [2_000, 4_000, 8_000, 16_000, 32_000] as const;
+const WIKI_TITLE_INTER_BATCH = 200;  // ms between batches
+
+interface MwApiResponse {
+  entities: Record<string, {
+    sitelinks?: { enwiki?: { title: string } };
+  }>;
+}
+
+function parseMwEntities(data: MwApiResponse): Map<string, string> {
+  const out = new Map<string, string>();
+  for (const [qid, entity] of Object.entries(data.entities)) {
+    const title = entity.sitelinks?.enwiki?.title;
+    if (title) out.set(qid, title);
+  }
+  return out;
+}
+
+async function fetchWikiTitleBatch(qids: string[], cacheFile: string): Promise<Map<string, string>> {
+  const url = new URL(MWAPI_ENDPOINT);
+  url.searchParams.set('action', 'wbgetentities');
+  url.searchParams.set('ids', qids.join('|'));
+  url.searchParams.set('props', 'sitelinks/urls');
+  url.searchParams.set('sitefilter', 'enwiki');
+  url.searchParams.set('format', 'json');
+
+  for (let attempt = 0; attempt <= WIKI_TITLE_DELAYS.length; attempt++) {
+    const res = await fetch(url.toString(), {
+      headers: { 'User-Agent': USER_AGENT },
+    });
+    if (res.ok) {
+      const data = await res.json() as MwApiResponse;
+      await fs.writeFile(cacheFile, JSON.stringify(data), 'utf8');
+      return parseMwEntities(data);
+    }
+    if (attempt < WIKI_TITLE_DELAYS.length) {
+      const retryAfterHeader = res.headers.get('Retry-After');
+      const delay = retryAfterHeader
+        ? Number(retryAfterHeader) * 1000
+        : WIKI_TITLE_DELAYS[attempt]!;
+      console.warn(chalk.yellow(
+        `[wikidata] mw-api title batch ${res.status} — retry ${attempt + 1}/${WIKI_TITLE_DELAYS.length} in ${delay / 1000}s`,
+      ));
+      await sleep(delay);
+    } else {
+      console.warn(chalk.yellow(
+        `[wikidata] mw-api title batch failed after all retries (${res.status}) — continuing with partial results`,
+      ));
+    }
+  }
+  return new Map();
+}
+
+async function fetchWikiTitles(
+  qids:           string[],
+  sparqlCacheDir: string,
+  bbHash:         string,
+  force:          boolean,
+): Promise<Map<string, string>> {
+  const out = new Map<string, string>();
+  for (let i = 0; i < qids.length; i += WIKI_TITLE_BATCH) {
+    const batch     = qids.slice(i, i + WIKI_TITLE_BATCH);
+    const bHash     = createHash('sha1').update(batch.join(',')).digest('hex').slice(0, 8);
+    const cacheFile = path.join(sparqlCacheDir, `api-wt-${bbHash}-${bHash}.json`);
+    let batchMap: Map<string, string>;
+    if (!force) {
+      try {
+        const cached = JSON.parse(await fs.readFile(cacheFile, 'utf8')) as MwApiResponse;
+        batchMap = parseMwEntities(cached);
+      } catch {
+        batchMap = await fetchWikiTitleBatch(batch, cacheFile);
+      }
+    } else {
+      batchMap = await fetchWikiTitleBatch(batch, cacheFile);
+    }
+    for (const [qid, title] of batchMap) out.set(qid, title);
+    if (i + WIKI_TITLE_BATCH < qids.length) await sleep(WIKI_TITLE_INTER_BATCH);
+  }
+  return out;
 }
 
 // ---- Accumulate rows by Q-id -----------------------------------------------
@@ -394,6 +486,15 @@ export async function runImport(opts: ImportOptions): Promise<ImportResult> {
 
   const items = accumulateRows(allRows);
   console.log(chalk.cyan(`[wikidata] ${items.size} unique items`));
+
+  // wikibase:box blocks the sitelinks graph — fetch Wikipedia titles in a separate query
+  const allQids    = [...items.keys()];
+  const wikiTitles = await fetchWikiTitles(allQids, sparqlCacheDir, bbHash, opts.force);
+  console.log(chalk.cyan(`[wikidata] ${wikiTitles.size} items have English Wikipedia articles`));
+  for (const [qid, title] of wikiTitles) {
+    const item = items.get(qid);
+    if (item && !item.enWikiTitle) item.enWikiTitle = title;
+  }
 
   // 3. Fetch Wikipedia lead extracts ------------------------------------------
 
