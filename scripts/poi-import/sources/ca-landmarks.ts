@@ -3,6 +3,7 @@ import path from 'node:path';
 import chalk from 'chalk';
 import { geocodeOne } from '../lib/geocode.js';
 import { upsertPOIs } from '../lib/upsert.js';
+import { classifyPOI } from '../lib/classify-poi.js';
 import {
   emptyResult,
   type CategorySlug,
@@ -478,7 +479,7 @@ export async function runImport(opts: ImportOptions): Promise<ImportResult> {
       ? `https://en.wikipedia.org${entry.wikiPath}`
       : `${WIKI_LIST_URL}#${encodeURIComponent(entry.county.replace(/\s+/g, '_'))}`;
 
-    pois.push({
+    const poi: NormalizedPOI = {
       name:               entry.name,
       category_slug:      slug,
       lat,
@@ -492,7 +493,11 @@ export async function runImport(opts: ImportOptions): Promise<ImportResult> {
       confidence_score:   1.0,
       verified:           true,
       description:        entry.description,
-    });
+    };
+    // No venue-detecting signals at CHL row level — call exists as a hook;
+    // venue/parent assignment is handled by classify-children.ts.
+    classifyPOI(poi);
+    pois.push(poi);
   }
 
   result.normalized = pois.length;

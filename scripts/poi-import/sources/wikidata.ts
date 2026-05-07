@@ -3,6 +3,7 @@ import path from 'node:path';
 import { createHash } from 'node:crypto';
 import chalk from 'chalk';
 import { upsertPOIs } from '../lib/upsert.js';
+import { classifyPOI } from '../lib/classify-poi.js';
 import {
   emptyResult,
   type BoundingBox,
@@ -407,7 +408,7 @@ function normalizeItem(item: ItemData, description: string | null): NormalizedPO
     ? `https://en.wikipedia.org/wiki/${encodeURIComponent(wikiTitle.replace(/ /g, '_'))}`
     : `https://www.wikidata.org/wiki/${item.qid}`;
 
-  return {
+  const poi: NormalizedPOI = {
     name:              item.label,
     category_slug:     cls.slug,
     lat:               item.lat,
@@ -422,6 +423,13 @@ function normalizeItem(item: ItemData, description: string | null): NormalizedPO
     verified:          true,
     description:       description ?? item.schemaDesc ?? null,
   };
+
+  const venueDetect = classifyPOI(poi, { wikidata_p31: item.classQids });
+  if (venueDetect.is_venue) {
+    poi.tags = [...poi.tags, 'venue-candidate', `venue-type:${venueDetect.venue_type}`];
+  }
+
+  return poi;
 }
 
 // ---- Main ------------------------------------------------------------------

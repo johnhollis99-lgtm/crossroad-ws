@@ -243,6 +243,58 @@ cache/
 
 Old `source` text column (default 'curated') is now redundant with `source_type` — leave it for now; deprecate in a later migration once importers are live.
 
+## Venue Tour (V1 — applied 2026-05-07)
+
+Parent-child hierarchy for "container" POIs (theme parks, missions, parks, campuses, zoos, etc.). Spec: [docs/venue-tour-design.md](docs/venue-tour-design.md). Migration: `20260504000016_venue_tour_schema.sql`.
+
+**Live state (2026-05-07):** 73 venue rows seeded; 10 routed to `venue_classification_review` for manual polygon-draw (6 missions, 3 historic districts, Huntington Library); 1,293 POIs classified as children; top-25 by significance contains no theme-park rides.
+
+**Schema additions on `pois`:**
+- `parent_poi_id uuid REFERENCES pois(id) ON DELETE SET NULL` — child→parent FK
+- `is_venue boolean NOT NULL DEFAULT false` — true on container rows
+- `venue_polygon geography(Polygon, 4326)` — required for `is_venue=true`
+- `venue_type text` — 14-value CHECK: theme_park, campus, national_park, state_park, historic_district, museum_complex, mission, cemetery, zoo_aquarium, estate, shopping_district, fairground, religious_complex, industrial_complex
+- `venue_metadata jsonb`
+- Cross-column constraints: `venue_polygon_requires_is_venue`, `venue_type_requires_is_venue`, `child_cannot_be_venue`
+- `venue_classification_review` table — admin queue for venues without polygons
+
+**RPCs:**
+- `get_venue_tour_pois(p_parent_poi_id uuid, p_user_lat?, p_user_lon?)` — children of a venue, distance-sorted when coords given else by significance
+- `detect_venue_at_location(p_lat, p_lon)` — innermost venue at a coordinate (smallest polygon area wins)
+- `get_nearby_pois(...)` — patched with new last param `p_include_children boolean DEFAULT false`. Existing 5-arg callers keep working; children naturally excluded for drive-by.
+
+**Key files:**
+| File | Purpose |
+|------|---------|
+| `scripts/poi-import/lib/classify-poi.ts` | `detectVenueFromTags()` (Section 4.2), `classifyChild()` (Section 4.1), point-in-polygon, polygon-area, 4 standalone-exception rules (Rule 4 OFF per spec) |
+| `scripts/poi-import/seed-venues.ts` | 83-venue CA catalog + Nominatim polygon fetcher; `--dry-run` writes JSON catalog to `cache/venues-catalog-latest.json`, live mode upserts as `is_venue=true` |
+| `scripts/poi-import/classify-children.ts` | Backfill — reads venues from DB or `--venues-from-file <json>`, scans non-venue POIs, sets `parent_poi_id`. `--allow-retroactive` skips Rule 5 for the initial pass against pre-existing POIs |
+| `scripts/admin/apply-migration.ts` | One-off migration applier via `pg` |
+| `scripts/admin/verify-venue-schema.ts` | Schema verification post-migration |
+| `scripts/admin/verify-acceptance.ts` | Section 13 acceptance checks (top-25, mission children, exception firings) |
+| `scripts/admin/check-venue-dupes.ts` | Pre-dedup sanity: POIs within 200m of each venue |
+
+**Hard rules — never break:**
+- **Polygon required for `is_venue=true`.** No polygon → log to `venue_classification_review`, leave row as ordinary POI.
+- **Source-priority dedup applies to venues.** `editorial` (venue rows) > state_landmark > nrhp > wikidata > osm. Venue rows always win primary; CHL/NRHP duplicates of the same place become secondary.
+- **Drive-by uses `get_nearby_pois` (children excluded by default).** Venue Tour mode uses `get_venue_tour_pois`. Never query children for trigger eligibility outside venue tour mode.
+
+**Standalone-exception rules** (Section 4.3 — POI inside venue polygon stays standalone if any fire):
+1. `nrhp`/`state_landmark` inside `theme_park`/`campus`/`state_park` — historic landmarks predate modern venues
+2. `additional_sources >= 2` — multi-source verified independent significance — **EXCEPT** when venue_type is `theme_park` or `zoo_aquarium` (carve-out: rides and exhibits get OSM+Wikidata records but aren't independently famous; without the carve-out Grizzly River Run, Jurassic World—The Ride etc. outranked their parent venues)
+3. `confidence_score < 0.7` — uncertain geocoding
+4. (OFF per spec) ownership-name match like "Disneyland Hotel" — these ARE legitimate children
+5. `pois.imported_at < venue.imported_at` — POI predates venue → safer not to retro-claim. Disabled with `--allow-retroactive` for initial backfill where all POIs predate freshly-seeded venues
+
+**Initial CA venue catalog (Section 8):** 9 theme parks, 9 national parks, 7 major state parks, 21 missions, 10 university campuses, 7 historic districts, 7 museum complexes, 8 zoos/aquariums, 5 cemeteries = 83 catalog entries; 73 with polygons, 10 in review queue.
+
+**Data quality follow-ups** (tracked in [docs/data-quality-issues.md](docs/data-quality-issues.md)):
+- 6 missions need manual polygons (Mission San Diego de Alcalá, San Gabriel Arcángel, San Miguel Arcángel, San Fernando Rey de España, Santa Inés, San Rafael Arcángel)
+- 7 missions have NRHP/state_landmark duplicates more than 2km from the venue (auto-dedup correctly skipped them; admin polygon-draw or coordinate fix needed)
+- Mission San José NRHP is at wrong coordinates (already in data-quality-issues.md)
+
+**Acceptance criteria status (Section 13):** 8/10 ✅, 2 caveats — venue seed at 88% (target 94%, gap = manual mission polygons); only Mission SJC has ≥2 children (other missions lack OSM sub-feature tagging).
+
 ## Vehicle routing roadmap (future — not started)
 
 Do not implement any of these yet; confirm with user first. When touching the route data model, leave room for a `vehicleProfile` field.

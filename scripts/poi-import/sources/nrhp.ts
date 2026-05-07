@@ -4,6 +4,7 @@ import chalk from 'chalk';
 import * as XLSX from 'xlsx';
 import { geocodeOne } from '../lib/geocode.js';
 import { upsertPOIs } from '../lib/upsert.js';
+import { classifyPOI } from '../lib/classify-poi.js';
 import {
   emptyResult,
   type CategorySlug,
@@ -365,7 +366,7 @@ export async function runImport(opts: ImportOptions): Promise<ImportResult> {
     const resType = row.resourceType;
     const tag     = resType ? resType.toLowerCase().replace(/\s+/g, '_') : 'historic';
 
-    pois.push({
+    const poi: NormalizedPOI = {
       name:               row.name,
       category_slug:      slugFromType(resType),
       lat:                coords.lat,
@@ -381,7 +382,11 @@ export async function runImport(opts: ImportOptions): Promise<ImportResult> {
       description:        buildDesc(
         resType, row.period, row.areas, row.city, row.county, row.dateListed,
       ),
-    });
+    };
+    // No venue-detecting signals at the NRHP row level (no OSM tags / P31).
+    // classify-children.ts handles the parent-child step at backfill time.
+    classifyPOI(poi);
+    pois.push(poi);
   }
 
   result.normalized = pois.length;

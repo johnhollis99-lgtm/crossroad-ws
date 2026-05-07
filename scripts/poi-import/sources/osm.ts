@@ -3,6 +3,7 @@ import path from 'node:path';
 import chalk from 'chalk';
 import { classifyOSM } from '../lib/category-map.js';
 import { upsertPOIs } from '../lib/upsert.js';
+import { classifyPOI } from '../lib/classify-poi.js';
 import {
   emptyResult,
   type BoundingBox,
@@ -41,6 +42,7 @@ interface SkipCounts {
   noName: number;
   noCategory: number;
   excluded: number;
+  venueCandidate: number;
 }
 
 interface CellResult {
@@ -214,7 +216,7 @@ function normalizeElement(el: OverpassElement, skips: SkipCounts): NormalizedPOI
   const cls = classifyOSM(tags);
   if (!cls) { skips.noCategory++; return null; }
 
-  return {
+  const poi: NormalizedPOI = {
     name,
     category_slug: cls.slug,
     lat,
@@ -229,6 +231,14 @@ function normalizeElement(el: OverpassElement, skips: SkipCounts): NormalizedPOI
     verified: true,
     description: tags['description'] ?? null,
   };
+
+  const venueDetect = classifyPOI(poi, { osm_tags: tags });
+  if (venueDetect.is_venue) {
+    poi.tags = [...poi.tags, 'venue-candidate', `venue-type:${venueDetect.venue_type}`];
+    skips.venueCandidate++;
+  }
+
+  return poi;
 }
 
 // ---- Cell loader -----------------------------------------------------------
@@ -276,7 +286,7 @@ export async function runImport(opts: ImportOptions): Promise<ImportResult> {
   await fs.mkdir(cellCacheDir, { recursive: true });
 
   const allPois: NormalizedPOI[] = [];
-  const skips: SkipCounts = { noName: 0, noCategory: 0, excluded: 0 };
+  const skips: SkipCounts = { noName: 0, noCategory: 0, excluded: 0, venueCandidate: 0 };
   let cellsFetched = 0;
   let cellsCached = 0;
   let cellIndex = 0;
@@ -328,7 +338,8 @@ export async function runImport(opts: ImportOptions): Promise<ImportResult> {
   console.log(chalk.cyan(
     `[osm] ${cells.length} tiles (${cellsFetched} fetched, ${cellsCached} cached)` +
     ` | ${result.fetched} raw → ${result.normalized} normalized` +
-    ` | skipped: no-name=${skips.noName} no-cat=${skips.noCategory} excluded=${skips.excluded}`,
+    ` | skipped: no-name=${skips.noName} no-cat=${skips.noCategory} excluded=${skips.excluded}` +
+    ` | venue-candidates=${skips.venueCandidate}`,
   ));
 
   const outcome = await upsertPOIs(toUpsert, { dryRun: opts.dryRun });
