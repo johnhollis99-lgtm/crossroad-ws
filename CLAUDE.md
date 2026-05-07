@@ -90,7 +90,7 @@ User mental model / naming convention used in conversation:
 
 ## Supabase schema (key tables)
 
-- `pois` — geography(Point,4326), category_id FK, tags[], significance_score numeric(4,2) **0-100 integer-point scale** (importers write 0-1 fractions; recompute-significance.ts normalises to 0-100), trip_mode('driving'|'hiking'|'city'|'all'). Provenance columns (added 20260504000005): source_type CHECK ∈ {osm,wikidata,nrhp,state_landmark,gnis,narrative_extracted,editorial,user_contributed}, source_id, source_citation, confidence_score(0–1, default 1.0), verified bool, additional_sources text[], merged_into uuid (self-FK, set when row is a merged duplicate), imported_at. Partial UNIQUE(source_type, source_id) WHERE merged_into IS NULL. `significance_breakdown jsonb` (added 20260504000006): `{ source_base, cross_source, pageviews, route_adjacency, total }` in integer points — populated by recompute-significance.ts. `narration_cache jsonb` (**PENDING MIGRATION** — populated by server after generation): `{ "{mode}-{depth}-{voice_id}": "{audio_url}" }` — O(1) lookup on the same row as the POI, checked before the narration_audio table.
+- `pois` — geography(Point,4326), category_id FK, tags[], significance_score numeric(4,2) **0-100 integer-point scale** (importers write 0-1 fractions; recompute-significance.ts normalises to 0-100), trip_mode('driving'|'hiking'|'city'|'all'). Provenance columns (added 20260504000005): source_type CHECK ∈ {osm,wikidata,nrhp,state_landmark,gnis,narrative_extracted,editorial,user_contributed}, source_id, source_citation, confidence_score(0–1, default 1.0), verified bool, additional_sources text[], merged_into uuid (self-FK, set when row is a merged duplicate), imported_at. Partial UNIQUE(source_type, source_id) WHERE merged_into IS NULL. `significance_breakdown jsonb` (added 20260504000006): `{ source_base, cross_source, pageviews, route_adjacency, total }` in integer points — populated by recompute-significance.ts. `narration_cache jsonb` (added 20260504000014; populated by server after generation): `{ "{mode}-{depth}-{voice_id}": "{audio_url}" }` — O(1) lookup on the same row as the POI, checked before the narration_audio table. Venue columns (added 20260504000016): `parent_poi_id uuid` (self-FK to parent venue), `is_venue bool`, `venue_polygon geography(Polygon, 4326)`, `venue_type text` (14-value CHECK enum), `venue_metadata jsonb`. Cross-column constraints prevent venue/child overlap.
 - `poi_categories` — id, slug, display_name, sort_order, relevant_driving bool
 - `narrators` — preset narrator rows; 4 seeded with fixed UUIDs `00000000-0000-0000-0000-00000000000{1-4}`
 - `user_narrators` — user-created narrators; slug GENERATED as `'user-' || id`
@@ -98,8 +98,9 @@ User mental model / naming convention used in conversation:
 - `narration_audio` — poi_id, narrator_slug (= voice_id), depth, audio_url (nullable — NULL while pending), mode, status CHECK('pending','ready','failed') DEFAULT 'ready'. UNIQUE(poi_id, narrator_slug, depth). 30-day TTL. Added columns (migration 20260504000011): provider, character_count, duration_ms, cost_usd, prompt_version. Added (migration 20260504000013): status, mode, audio_url made nullable.
 - `user_contributions`, `user_badges`, `contribution_rewards` — contribution/points system
 - `user_recent_locations` — **PENDING MIGRATION** (SQL is in lib/supabase.ts as a comment)
+- `venue_classification_review` (added 20260504000016) — admin queue for venue candidates without polygons
 
-Key RPCs: `get_corridor_pois`, `get_nearby_pois`, `get_available_narrators`, `submit_contribution`, `get_cached_narration`, `cache_narration`, `batch_route_adjacency_scores(poi_ids uuid[])` (returns per-POI adjacency points from `highway_routes`), `batch_update_significance(p_ids, p_scores, p_breakdowns)` (batch UPDATE used by recompute script), `update_poi_narration_cache(p_poi_id, p_cache_key, p_audio_url)` (**PENDING MIGRATION** — atomic jsonb merge used by narration generation route; hook falls back to read-modify-write if missing)
+Key RPCs: `get_corridor_pois`, `get_nearby_pois(... , p_include_children boolean DEFAULT false)` (patched 20260504000016 — children excluded by default for drive-by), `get_available_narrators`, `submit_contribution`, `get_cached_narration`, `cache_narration`, `batch_route_adjacency_scores(poi_ids uuid[])` (returns per-POI adjacency points from `highway_routes`), `batch_update_significance(p_ids, p_scores, p_breakdowns)` (batch UPDATE used by recompute script), `update_poi_narration_cache(p_poi_id, p_cache_key, p_audio_url)` (added 20260504000014 — atomic jsonb merge used by narration generation route), `get_venue_tour_pois(p_parent_poi_id, p_user_lat?, p_user_lon?)` (added 20260504000016), `detect_venue_at_location(p_lat, p_lon)` (added 20260504000016 — innermost venue at coordinate)
 
 ## Narration cache key
 
@@ -182,7 +183,7 @@ Web fallback uses `window.confirm()` before calling `doEndTrip()`.
 
 Multi-source POI pipeline plan, executed in phases:
 
-1. **Schema migration** — ALL APPLIED (verified 2026-05-05, watermark 20260504000014). All provenance columns live in DB.
+1. **Schema migration** — ALL APPLIED (verified 2026-05-07, watermark 20260504000016). All provenance + venue columns live in DB.
 2. **ETL scaffolding** — done (`scripts/poi-import/`). Isolated package.json (commander, chalk, tsx, dotenv, **pg ^8.13.3**, **xlsx 0.18.5**). Implements: `lib/types.ts` (NormalizedPOI, ImportOptions, ImportResult), `lib/supabase.ts` (Supabase admin client via SUPABASE_SERVICE_ROLE_KEY + `getPgPool()` via DATABASE_URL for geometry writes), `lib/dedupe.ts` (token-set ratio + Levenshtein + haversine), `lib/geocode.ts` (Nominatim, 1 req/sec, disk cache), `lib/significance.ts` (weighted signal scoring), `lib/category-map.ts` (OSM/Wikidata tags → CategorySlug), `lib/upsert.ts` (100-row batches, direct pg SQL with `ST_GeogFromText()`, `ON CONFLICT (source_type, source_id) WHERE merged_into IS NULL`; deduplicates within each batch by `source_type:source_id` before Postgres INSERT to prevent `ON CONFLICT DO UPDATE command cannot affect row a second time` from duplicate ref numbers in source data), `lib/wikidata-types.ts` (26 Wikidata P31 class definitions with bonus weights). CLI: `run.ts` with `--source=osm|wikidata|nrhp|ca-landmarks|gnis|all --bbox --county --state --limit --dry-run --force`.
 
    **Why direct pg instead of Supabase JS client for upserts:** PostgREST's schema cache structurally excludes `geography` typed columns — the JS client cannot write to `pois.location`. All geometry writes go through `pg` with `ST_GeogFromText(wkt)`. The geometry column is named `location` (not `geom`). `DATABASE_URL` must be the direct connection string (`db.[project-ref].supabase.co:5432`), not the pooler. URL-encode special chars in password (e.g. `?` → `%3F`).
@@ -191,7 +192,7 @@ Multi-source POI pipeline plan, executed in phases:
 
    **recompute-significance.ts dotenv:** also uses explicit `../../.env` path (not `dotenv/config` which reads from CWD). Fixed 2026-05-06.
 
-   **recompute-significance.ts invocation:** must be run from `scripts/poi-import/` — always `cd` there first. PowerShell requires quoted paths when the directory contains spaces: `Set-Location "E:\Dev XRoad\roadstory\scripts\poi-import"` then `npx tsx recompute-significance.ts`. Last live run: 16,957 POIs recomputed successfully (2026-05-06).
+   **recompute-significance.ts invocation:** must be run from `scripts/poi-import/` — always `cd` there first. PowerShell requires quoted paths when the directory contains spaces: `Set-Location "E:\Dev XRoad\roadstory\scripts\poi-import"` then `npx tsx recompute-significance.ts`. Last live run: 20,200 POIs recomputed successfully (2026-05-07, post-V1-venue-tour-backfill).
 
    **batch_update_significance SQL fix (2026-05-06):** PostgreSQL does not allow a column definition list with multi-arg `UNNEST(a, b, c) AS u(col1, col2, col3)`. Fixed in `supabase/migrations/20260504000006_poi_significance_breakdown.sql` and `supabase/apply_pending_migrations.sql` to use a subquery: `FROM (SELECT unnest(p_ids) AS id, unnest(p_scores) AS score, unnest(p_breakdowns) AS breakdown) AS vals`. Live DB patched via direct `pg` connection.
 
@@ -554,10 +555,10 @@ pnpm html            # rebuild index.html only
 | local | `en-US-Chirp3-HD-Sulafat` | Warm, casual inflection |
 | local | `en-US-Chirp3-HD-Schedar` | Natural; slightly more informal than Aoede |
 
-### Migration backlog status (updated 2026-05-06)
+### Migration backlog status (updated 2026-05-07)
 
-**DB watermark: `20260504000015`** — all migrations 000002–000015 applied.
-Verification script: `scripts/verify-migrations.mjs` (66/66 checks passed on 000014; listed in `.gitignore`).
+**DB watermark: `20260504000016`** — all migrations 000002–000016 applied.
+Verification script: `scripts/verify-migrations.mjs` (66/66 checks passed on 000014; listed in `.gitignore`). Post-0016 schema verification lives in `scripts/admin/verify-venue-schema.ts`.
 
 **Applied (confirmed live):**
 - 20260504000002 `contributions` — user_contributions, user_badges, contribution_rewards tables + RPCs
@@ -574,6 +575,7 @@ Verification script: `scripts/verify-migrations.mjs` (66/66 checks passed on 000
 - 20260504000013 `narration_audio_status` — narration_audio.status/mode + audio_url nullable
 - 20260504000014 `narration_cache_rpc` — pois.narration_cache jsonb + update_poi_narration_cache RPC + anon SELECT policy on voice_configs
 - 20260504000015 `significance_score_precision` — widens pois.significance_score from numeric(4,2) to numeric(6,2) to allow score=100 without overflow (applied live via pg + migration file created)
+- 20260504000016 `venue_tour_schema` — V1 venue tour: pois.parent_poi_id (FK self), is_venue, venue_polygon (geography Polygon), venue_type (14-value CHECK), venue_metadata (jsonb) + cross-column constraints + venue_classification_review table + 3 RPCs (get_venue_tour_pois, detect_venue_at_location, patched get_nearby_pois with p_include_children flag). Backfill: 73 venues seeded, 1,293 POIs classified as children. Spec: docs/venue-tour-design.md.
 
 **Out-of-band live patches (no migration file — applied directly via pg):**
 - `get_corridor_pois` + `get_nearby_pois` RPCs patched (2026-05-06): live DB had diverged to reference a nonexistent `categories` table instead of `poi_categories`. Re-applied both `CREATE OR REPLACE FUNCTION` bodies from `20250503000001_trip_mode.sql` directly. Root cause unknown (likely a hand-edit in the Supabase SQL editor at some point). If you ever reset or re-apply migrations from scratch, these functions will be correct — the migration files were already right.
@@ -590,9 +592,16 @@ Verification script: `scripts/verify-migrations.mjs` (66/66 checks passed on 000
 
 ## Git + repo hygiene
 
-- **No git repo yet** — project directory has no `.git`. Initialize via GitHub Desktop or `git init`.
+- **Repo:** `https://github.com/johnhollis99-lgtm/crossroad-ws.git` — main branch on origin/main.
 - Git binary (not on PATH): `C:\Users\johnh\AppData\Local\GitHubDesktop\app-3.5.8\resources\app\git\cmd\git.exe`
-- **`.gitignore`** — comprehensive file in place covering: `node_modules/` (all sub-packages), `.env` + `server/.env` (secrets), `.expo/`, `dist/`, `admin/.next/`, `scripts/*/cache/`, `scripts/audition-output/`, `*.opus`, `*.tsbuildinfo`, OS files.
+- **`.gitignore`** — covers: `node_modules/` (all sub-packages), `.env` + `server/.env` (secrets), `.expo/`, `dist/`, `admin/.next/`, `scripts/*/cache/`, `scripts/audition-output/`, `*.opus`, `*.tsbuildinfo`, OS files, `.claude/scheduled_tasks.lock`, `.claude/settings.local.json`, `supabase/.temp/`.
+- **Recent commit history (2026-05-07 V1 venue tour ship):**
+  - `4e166c0` chore: gitignore local config and Supabase CLI temp files
+  - `56cd80f` chore: remove one-off diagnostic scripts
+  - `2007210` docs: add data-quality-issues.md tracking manual-review cases
+  - `8ed7318` feat(venues): V1 venue tour parent-child hierarchy
+  - `b4047b5` chore: bundle uncommitted importer + dedup + lib work documented in CLAUDE.md
+  - `d1b5c30` Initial commit - xroad project state at migration 000014
 
 ## scripts/seed-db.mjs
 
