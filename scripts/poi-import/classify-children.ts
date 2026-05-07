@@ -162,6 +162,7 @@ async function detectColumn(pool: ReturnType<typeof getPgPool>, column: string):
 async function* streamPOIs(opts: {
   county?: string;
   since?: string;
+  bbox?: { minLat: number; minLon: number; maxLat: number; maxLon: number };
   limit?: number;
   hasParentColumn: boolean;
   hasIsVenueColumn: boolean;
@@ -171,6 +172,11 @@ async function* streamPOIs(opts: {
   if (opts.hasParentColumn)  filters.push('p.parent_poi_id IS NULL');
   if (opts.hasIsVenueColumn) filters.push('p.is_venue = false');
   if (opts.since) filters.push(`p.imported_at >= '${opts.since.replace(/'/g, "''")}'`);
+  if (opts.bbox) {
+    const { minLat, minLon, maxLat, maxLon } = opts.bbox;
+    filters.push(`ST_Y(p.location::geometry) BETWEEN ${minLat} AND ${maxLat}`);
+    filters.push(`ST_X(p.location::geometry) BETWEEN ${minLon} AND ${maxLon}`);
+  }
 
   const limit = opts.limit ?? 1_000_000;
   const sql = `
@@ -243,16 +249,38 @@ program
   .option('--dry-run', 'Compute classifications, do not write to DB', false)
   .option('--venues-from-file <path>', 'Load venue catalog from JSON (instead of DB)')
   .option('--county <name>', 'Restrict to county bbox (NOT YET IMPLEMENTED — uses imported_at filter only)')
+  .option('--bbox <minLat,minLon,maxLat,maxLon>', 'Restrict to an explicit bbox')
   .option('--since <iso8601>', 'Only POIs imported after this date')
   .option('--limit <n>', 'Cap POIs scanned', (v) => Number(v))
   .option('--sample-size <n>', 'Number of random child classifications to print', (v) => Number(v), 30)
-  .option('--allow-retroactive', 'Skip Rule 5 (imported_before_venue) — required for the initial backfill against freshly-seeded venues', false)
+  .option('--allow-retroactive', 'Skip Rule 5 (imported_before_venue). REQUIRES --venue-ids — see below', false)
+  .option('--venue-ids <comma-separated-uuids>', 'Restrict classifier to a named set of venue POI UUIDs. Required when --allow-retroactive is set so retroactive child claims can only happen against an explicit, named scope.')
   .action(async (opts: {
-    dryRun: boolean; venuesFromFile?: string; county?: string;
+    dryRun: boolean; venuesFromFile?: string; county?: string; bbox?: string;
     since?: string; limit?: number; sampleSize: number;
     allowRetroactive: boolean;
+    venueIds?: string;
   }) => {
     const start = Date.now();
+
+    // Guardrail: --allow-retroactive bypasses the "imported_before_venue"
+    // rule that prevents retroactive parentage claims. Without an explicit
+    // scope, a habitual run could silently re-parent thousands of POIs.
+    // We require --venue-ids so the retroactive scope is always named in
+    // the invocation itself.
+    const requestedVenueIds = (opts.venueIds ?? '')
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean);
+    if (opts.allowRetroactive && requestedVenueIds.length === 0) {
+      console.error(chalk.red(
+        '--allow-retroactive requires --venue-ids=<comma-separated-uuids>.\n' +
+        '  Pass the explicit set of venue POI UUIDs the retroactive backfill\n' +
+        '  should be allowed to claim children from, e.g.:\n' +
+        '    --allow-retroactive --venue-ids=11111111-...,22222222-...',
+      ));
+      process.exit(1);
+    }
 
     // 1. Load venues
     let venues: VenueCatalogEntry[];
@@ -268,6 +296,26 @@ program
     if (venues.length === 0) {
       console.log(chalk.red('No venues to classify against. Aborting.'));
       process.exit(1);
+    }
+
+    if (requestedVenueIds.length > 0) {
+      const requested = new Set(requestedVenueIds);
+      const filtered = venues.filter((v) => requested.has(v.id));
+      const unmatched = [...requested].filter((id) => !venues.some((v) => v.id === id));
+      console.log(chalk.cyan(
+        `  --venue-ids scope: ${filtered.length} of ${requestedVenueIds.length} requested venue(s) matched`,
+      ));
+      if (unmatched.length > 0) {
+        console.error(chalk.red(
+          `  ${unmatched.length} requested venue id(s) did not match any loaded venue:\n` +
+          unmatched.map((id) => `    ${id}`).join('\n'),
+        ));
+      }
+      if (filtered.length === 0) {
+        console.log(chalk.red('No venues matched the requested --venue-ids. Aborting.'));
+        process.exit(1);
+      }
+      venues = filtered;
     }
 
     const idx = buildBboxIndex(venues);
@@ -295,9 +343,24 @@ program
     const exceptionAssignments: ClassifyAssignment[] = [];
     const venueChildCounts = new Map<string, number>();
 
+    let bbox: { minLat: number; minLon: number; maxLat: number; maxLon: number } | undefined;
+    if (opts.bbox) {
+      const parts = opts.bbox.split(',').map((p) => Number(p.trim()));
+      if (parts.length !== 4 || parts.some((n) => Number.isNaN(n))) {
+        throw new Error(`Invalid --bbox "${opts.bbox}". Expected "minLat,minLon,maxLat,maxLon".`);
+      }
+      const [minLat, minLon, maxLat, maxLon] = parts as [number, number, number, number];
+      if (minLat >= maxLat || minLon >= maxLon) {
+        throw new Error(`Invalid --bbox: min must be < max.`);
+      }
+      bbox = { minLat, minLon, maxLat, maxLon };
+      console.log(chalk.gray(`  bbox filter: ${minLat.toFixed(2)},${minLon.toFixed(2)} → ${maxLat.toFixed(2)},${maxLon.toFixed(2)}`));
+    }
+
     for await (const poi of streamPOIs({
       county: opts.county,
       since: opts.since,
+      bbox,
       limit: opts.limit,
       hasParentColumn,
       hasIsVenueColumn,

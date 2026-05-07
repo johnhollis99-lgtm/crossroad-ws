@@ -652,11 +652,12 @@ async function applyMergeGroups(
         .filter((d): d is string => d != null && d.length > 0)
         .sort((a, b) => b.length - a.length)[0] ?? null;
 
-      // Significance: incremental bonus delta (max +0.30 across all merged sources, capped at 1.0)
-      const prevBonus = Math.min(0.30, primary.additional_sources.length * 0.10);
-      const newBonus  = Math.min(0.30, newAdditional.length * 0.10);
-      const newSig    = Math.min(1.0, primary.significance_score + (newBonus - prevBonus));
-
+      // Significance scoring is now the responsibility of recompute-significance,
+      // which is always run after dedup in the standard pipeline. The previous
+      // in-dedup score update assumed a 0-1 scale and clamped 0-100-scale
+      // editorial scores to 1.0, which then caused recompute to lock
+      // breakdown.source_base = 100. Dedup now writes structural fields only;
+      // recompute owns the score total.
       const newVerified = primary.verified || secondaries.some((s) => s.verified);
 
       const client = await pool.connect();
@@ -668,10 +669,9 @@ async function applyMergeGroups(
           `UPDATE pois
            SET additional_sources = $1,
                description        = $2,
-               significance_score = $3,
-               verified           = $4
-           WHERE id = $5`,
-          [newAdditional, bestDesc, newSig, newVerified, primary.id],
+               verified           = $3
+           WHERE id = $4`,
+          [newAdditional, bestDesc, newVerified, primary.id],
         );
 
         // 2. Soft-delete each secondary
