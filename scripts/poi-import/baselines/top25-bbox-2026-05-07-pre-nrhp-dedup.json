@@ -1,0 +1,463 @@
+{
+  "captured_at": "2026-05-07T23:22:56.729Z",
+  "bbox": {
+    "minLat": 32.5295236,
+    "minLon": -120.734382,
+    "maxLat": 35.114665,
+    "maxLon": -116.0810941
+  },
+  "filter": "merged_into IS NULL; ST_Within bbox; ORDER BY significance_score DESC, name LIMIT 25",
+  "count": 25,
+  "entries": [
+    {
+      "rank": 1,
+      "score": 100,
+      "source_type": "osm",
+      "role": "c",
+      "venue_type": null,
+      "qid": null,
+      "name": "Grizzly River Run",
+      "id": "7d6987cd-002b-4000-aa4a-fc56b3f04f6a",
+      "parent_poi_id": "a7c1ec07-7a02-479a-aa0f-4b98d6e34388",
+      "breakdown": {
+        "source_base": 70,
+        "cross_source": 30,
+        "pageviews": 0,
+        "route_adjacency": 10,
+        "total": 100
+      }
+    },
+    {
+      "rank": 2,
+      "score": 100,
+      "source_type": "wikidata",
+      "role": "-",
+      "venue_type": null,
+      "qid": null,
+      "name": "Santa Monica Pier",
+      "id": "0ef620f4-9880-485e-a8b1-d2473ecbe8d7",
+      "parent_poi_id": null,
+      "breakdown": {
+        "source_base": 68,
+        "cross_source": 10,
+        "pageviews": 14,
+        "route_adjacency": 10,
+        "total": 100
+      }
+    },
+    {
+      "rank": 3,
+      "score": 100,
+      "source_type": "osm",
+      "role": "-",
+      "venue_type": null,
+      "qid": null,
+      "name": "Walk of Fame",
+      "id": "44d6873c-d06f-4a0a-833a-47f93b7f6407",
+      "parent_poi_id": null,
+      "breakdown": {
+        "source_base": 70,
+        "cross_source": 30,
+        "pageviews": 0,
+        "route_adjacency": 5,
+        "total": 100
+      }
+    },
+    {
+      "rank": 4,
+      "score": 99,
+      "source_type": "wikidata",
+      "role": "-",
+      "venue_type": null,
+      "qid": null,
+      "name": "Hollywood Walk of Fame",
+      "id": "add6f7fd-ec7c-4ada-8da2-ed95382d61f6",
+      "parent_poi_id": null,
+      "breakdown": {
+        "source_base": 45,
+        "cross_source": 30,
+        "pageviews": 19,
+        "route_adjacency": 5,
+        "total": 99
+      }
+    },
+    {
+      "rank": 5,
+      "score": 95,
+      "source_type": "editorial",
+      "role": "-",
+      "venue_type": null,
+      "qid": null,
+      "name": "Hollywood Sign",
+      "id": "2e7059ed-37f2-4c34-9599-82a7157a230d",
+      "parent_poi_id": null,
+      "breakdown": {
+        "source_base": 60,
+        "cross_source": 30,
+        "pageviews": 0,
+        "route_adjacency": 5,
+        "total": 95
+      }
+    },
+    {
+      "rank": 6,
+      "score": 92,
+      "source_type": "editorial",
+      "role": "V",
+      "venue_type": "mission",
+      "qid": "Q12061890",
+      "name": "Mission San Buenaventura",
+      "id": "415237b7-56e8-4724-9f84-63a6f292461b",
+      "parent_poi_id": null,
+      "breakdown": {
+        "source_base": 40,
+        "cross_source": 30,
+        "pageviews": 12,
+        "route_adjacency": 10,
+        "total": 92
+      }
+    },
+    {
+      "rank": 7,
+      "score": 88,
+      "source_type": "wikidata",
+      "role": "-",
+      "venue_type": null,
+      "qid": null,
+      "name": "Adventure City",
+      "id": "7453f2d8-dce7-45cd-8c2a-fd98bea08a02",
+      "parent_poi_id": null,
+      "breakdown": {
+        "source_base": 68,
+        "cross_source": 10,
+        "pageviews": 10,
+        "route_adjacency": 0,
+        "total": 88
+      }
+    },
+    {
+      "rank": 8,
+      "score": 87,
+      "source_type": "wikidata",
+      "role": "-",
+      "venue_type": null,
+      "qid": null,
+      "name": "Museum of Contemporary Art San Diego",
+      "id": "0f1e44ea-6d28-48b4-972a-dbe5163182ac",
+      "parent_poi_id": null,
+      "breakdown": {
+        "source_base": 52,
+        "cross_source": 20,
+        "pageviews": 10,
+        "route_adjacency": 5,
+        "total": 87
+      }
+    },
+    {
+      "rank": 9,
+      "score": 84,
+      "source_type": "editorial",
+      "role": "V",
+      "venue_type": "mission",
+      "qid": "Q617891",
+      "name": "Mission San Diego de Alcalá",
+      "id": "d2814ccd-60fc-40da-9dd6-446bf1d9d74e",
+      "parent_poi_id": null,
+      "breakdown": {
+        "source_base": 40,
+        "cross_source": 20,
+        "pageviews": 14,
+        "route_adjacency": 10,
+        "total": 84
+      }
+    },
+    {
+      "rank": 10,
+      "score": 84,
+      "source_type": "editorial",
+      "role": "V",
+      "venue_type": "mission",
+      "qid": "Q1939057",
+      "name": "Mission San Juan Capistrano",
+      "id": "739aca24-d217-47a8-b13d-a0e2d0d30214",
+      "parent_poi_id": null,
+      "breakdown": {
+        "source_base": 40,
+        "cross_source": 20,
+        "pageviews": 14,
+        "route_adjacency": 10,
+        "total": 84
+      }
+    },
+    {
+      "rank": 11,
+      "score": 84,
+      "source_type": "wikidata",
+      "role": "c",
+      "venue_type": null,
+      "qid": null,
+      "name": "Sleeping Beauty Castle",
+      "id": "e1bb3c66-76c9-4acf-a7fa-0d191d20b803",
+      "parent_poi_id": "eeb1b2b2-5b0d-4ddc-9287-af437cfbc916",
+      "breakdown": {
+        "source_base": 40,
+        "cross_source": 20,
+        "pageviews": 14,
+        "route_adjacency": 10,
+        "total": 84
+      }
+    },
+    {
+      "rank": 12,
+      "score": 83,
+      "source_type": "editorial",
+      "role": "V",
+      "venue_type": "mission",
+      "qid": "Q6878751",
+      "name": "Mission San Luis Rey de Francia",
+      "id": "97cd82ab-6d11-4279-965e-be22435a9914",
+      "parent_poi_id": null,
+      "breakdown": {
+        "source_base": 40,
+        "cross_source": 30,
+        "pageviews": 13,
+        "route_adjacency": 0,
+        "total": 83
+      }
+    },
+    {
+      "rank": 13,
+      "score": 83,
+      "source_type": "editorial",
+      "role": "V",
+      "venue_type": "mission",
+      "qid": "Q1413807",
+      "name": "Mission Santa Bárbara",
+      "id": "47646679-aba7-49d2-971a-981bd96f1194",
+      "parent_poi_id": null,
+      "breakdown": {
+        "source_base": 40,
+        "cross_source": 30,
+        "pageviews": 13,
+        "route_adjacency": 0,
+        "total": 83
+      }
+    },
+    {
+      "rank": 14,
+      "score": 82,
+      "source_type": "wikidata",
+      "role": "-",
+      "venue_type": null,
+      "qid": null,
+      "name": "Avengers Campus",
+      "id": "186a3dc0-d51d-4090-8138-ee45cd369f45",
+      "parent_poi_id": null,
+      "breakdown": {
+        "source_base": 58,
+        "cross_source": 0,
+        "pageviews": 14,
+        "route_adjacency": 10,
+        "total": 82
+      }
+    },
+    {
+      "rank": 15,
+      "score": 82,
+      "source_type": "state_landmark",
+      "role": "-",
+      "venue_type": null,
+      "qid": null,
+      "name": "Drum Barracks",
+      "id": "fce3679a-955c-4a64-9089-db767144e1ad",
+      "parent_poi_id": null,
+      "breakdown": {
+        "source_base": 40,
+        "cross_source": 30,
+        "pageviews": 2,
+        "route_adjacency": 10,
+        "total": 82
+      }
+    },
+    {
+      "rank": 16,
+      "score": 82,
+      "source_type": "editorial",
+      "role": "V",
+      "venue_type": "mission",
+      "qid": "Q6464680",
+      "name": "Mission La Purísima Concepción",
+      "id": "b185a594-9d62-484f-b604-d17408e97b3f",
+      "parent_poi_id": null,
+      "breakdown": {
+        "source_base": 40,
+        "cross_source": 30,
+        "pageviews": 12,
+        "route_adjacency": 0,
+        "total": 82
+      }
+    },
+    {
+      "rank": 17,
+      "score": 81,
+      "source_type": "wikidata",
+      "role": "-",
+      "venue_type": null,
+      "qid": null,
+      "name": "Cars Land",
+      "id": "96f91a79-c0b3-4e2a-930f-1d84622b5501",
+      "parent_poi_id": null,
+      "breakdown": {
+        "source_base": 58,
+        "cross_source": 0,
+        "pageviews": 13,
+        "route_adjacency": 10,
+        "total": 81
+      }
+    },
+    {
+      "rank": 18,
+      "score": 81,
+      "source_type": "wikidata",
+      "role": "-",
+      "venue_type": null,
+      "qid": null,
+      "name": "Oceanside City Hall and Fire Station",
+      "id": "10ea7950-3de5-462e-8a67-1b64f47155bc",
+      "parent_poi_id": null,
+      "breakdown": {
+        "source_base": 55,
+        "cross_source": 10,
+        "pageviews": 6,
+        "route_adjacency": 10,
+        "total": 81
+      }
+    },
+    {
+      "rank": 19,
+      "score": 80,
+      "source_type": "wikidata",
+      "role": "-",
+      "venue_type": null,
+      "qid": null,
+      "name": "Fire Station No. 23",
+      "id": "5be2bde2-7b30-409e-ae4f-b174f84a8bfe",
+      "parent_poi_id": null,
+      "breakdown": {
+        "source_base": 55,
+        "cross_source": 10,
+        "pageviews": 10,
+        "route_adjacency": 5,
+        "total": 80
+      }
+    },
+    {
+      "rank": 20,
+      "score": 80,
+      "source_type": "editorial",
+      "role": "V",
+      "venue_type": "museum_complex",
+      "qid": "Q29247",
+      "name": "Getty Center",
+      "id": "92df5dbd-5cdc-452a-8a75-fcdeaa309052",
+      "parent_poi_id": null,
+      "breakdown": {
+        "source_base": 40,
+        "cross_source": 20,
+        "pageviews": 15,
+        "route_adjacency": 5,
+        "total": 80
+      }
+    },
+    {
+      "rank": 21,
+      "score": 80,
+      "source_type": "osm",
+      "role": "c",
+      "venue_type": null,
+      "qid": null,
+      "name": "Jurassic World-The Ride",
+      "id": "051372b6-a252-4d68-9a30-d4386f76921d",
+      "parent_poi_id": "a8bc56e0-9d31-43c9-9655-180c464f2a43",
+      "breakdown": {
+        "source_base": 40,
+        "cross_source": 30,
+        "pageviews": 0,
+        "route_adjacency": 10,
+        "total": 80
+      }
+    },
+    {
+      "rank": 22,
+      "score": 80,
+      "source_type": "editorial",
+      "role": "V",
+      "venue_type": "historic_district",
+      "qid": "Q3364381",
+      "name": "Old Town San Diego State Historic Park",
+      "id": "244a8a6c-156a-4aee-b1ca-911754e7bb20",
+      "parent_poi_id": null,
+      "breakdown": {
+        "source_base": 40,
+        "cross_source": 20,
+        "pageviews": 10,
+        "route_adjacency": 10,
+        "total": 80
+      }
+    },
+    {
+      "rank": 23,
+      "score": 80,
+      "source_type": "wikidata",
+      "role": "-",
+      "venue_type": null,
+      "qid": null,
+      "name": "Pacific Park",
+      "id": "91209444-6418-4e81-b17d-f537b255ef8d",
+      "parent_poi_id": null,
+      "breakdown": {
+        "source_base": 58,
+        "cross_source": 0,
+        "pageviews": 12,
+        "route_adjacency": 10,
+        "total": 80
+      }
+    },
+    {
+      "rank": 24,
+      "score": 80,
+      "source_type": "wikidata",
+      "role": "-",
+      "venue_type": null,
+      "qid": null,
+      "name": "Santa Ana Fire Station Headquarters No. 1",
+      "id": "597ad679-49ff-44a0-b90a-0496632ae6b9",
+      "parent_poi_id": null,
+      "breakdown": {
+        "source_base": 55,
+        "cross_source": 10,
+        "pageviews": 5,
+        "route_adjacency": 10,
+        "total": 80
+      }
+    },
+    {
+      "rank": 25,
+      "score": 79,
+      "source_type": "wikidata",
+      "role": "-",
+      "venue_type": null,
+      "qid": null,
+      "name": "Balboa Park Gardens",
+      "id": "dce330bc-65eb-40e0-bef7-a6546b362b7d",
+      "parent_poi_id": null,
+      "breakdown": {
+        "source_base": 52,
+        "cross_source": 10,
+        "pageviews": 7,
+        "route_adjacency": 10,
+        "total": 79
+      }
+    }
+  ]
+}
