@@ -55,3 +55,33 @@ When Phase 6 (`poi_review_queue` admin app) is built, seed it with these three r
 - #1 Grizzly River Run (sig=100), #10 Jurassic World—The Ride (80), #14 Big Thunder Mountain (70), #16 Davy Crockett Explorer Canoes (70), #23 Shooting Exposition (70)
 - These outrank Hollywood Sign and Mission San Miguel Arcángel
 - Resolution: Venue Tour parent-child hierarchy (future). Children inside venue polygons should be suppressed from drive-by triggers.
+
+---
+
+## Phase 4 carry-forward (2026-05-07 — post-NRHP-fixup pipeline)
+
+Captured after the dedup → classify-children → recompute-significance chain that followed the NRHP coordinate fixup. 238 merges committed, 51 new children attached (all 75 venues retroactively scoped), 21,906 active POIs after.
+
+### Immediate next session
+
+1. **Audit `cache/nrhp-fixup/spot-check-50-100km.json`** — 28 rows applied in the 50–100 km move bucket. Verify none are ArcGIS errors before letting them ride.
+2. **Phase 5 — NRHP importer rewire:** ArcGIS-up-front (replace the Nominatim-first / county-centroid-fallback flow), plus a generic geocoder precision validator usable for CHL and narrative-extracted candidates.
+
+### New issues from this session
+
+3. **Star of India needs an editorial venue.** Active `state_landmark` row (id `39c4eba7-eaac-4193-9625-51b7f4eb7465`) absorbed NRHP + OSM siblings (xs=20, post-recompute score=64). World's oldest active sailing ship — deserves a curated venue with a polygon and a hooked Wikidata QID for pageview attribution. Add to `seed-venues.ts`.
+4. **Cabrillo National Monument should be a venue (`venue_type='national_park'`).** Currently active `state_landmark` (id `f6bc6e3e-f5d8-4ec8-bda5-0f4e42dc2cbd`, score=40). It's a real NPS unit and would naturally parent Old Point Loma Lighthouse (already at score 72 with xs=30) plus several NRHP sub-features.
+5. **Mission San Fernando Rey de España still has no editorial venue.** Already in `venue_classification_review` queue awaiting manual polygon-draw. NRHP "...Convento Building" entry actually points at the Avila Adobe (see "Avila Adobe" issue above) — these are separate problems.
+6. **Mission San Buenaventura: 5 nearby variants didn't auto-collapse.** All have similar name forms ("...and Mission Compound Site", etc.) within 2 km. Belongs in the v2 mission-grounds + name-alias session below.
+
+### v2 scope (next phase, not next session)
+
+7. **Nested-venue design.** Cases the current 1-level parent/child model can't represent:
+   - Mission Dolores Cemetery inside Mission San Francisco de Asís grounds
+   - Multiple museums inside Balboa Park
+   - Watts Towers inside the Watts Towers Arts Center
+   - Neptune Pool inside Hearst Castle
+   - Plus the inverse problem from #6: known mission-name variants that should collapse via aliases (Misión↔Mission, Archángel↔Arcángel, "...Convento Building" / "...Compound Site" / "...Historic District" suffixes when geographically close).
+8. **Mission grounds polygons.** Replace `osm_buffered_25m` placeholder polygons on the two missions where it's currently used; broader audit needed on the other 15 (current polygons may under- or over-cover the actual grounds).
+9. **Walk of Fame canonical merge** (carry-over from Phase 2 findings above — still unresolved).
+10. **Missing missions.** Editorial venue rows still absent for: San Fernando Rey de España (#5 above), San Gabriel Arcángel, San Miguel Arcángel, San Rafael Arcángel. All four are in `venue_classification_review` awaiting manual polygons.
