@@ -203,7 +203,7 @@ async function insertNarrationAudioPending({ poiId, voiceId, depth, mode }) {
 }
 
 // ── Phase 2: promote pending row to ready after upload completes (Fix 2) ──────
-async function updateNarrationAudioReady({ id, audioUrl, charCount, costUsd, durationMs }) {
+async function updateNarrationAudioReady({ id, audioUrl, charCount, costUsd, durationMs, narrationText }) {
   const { error } = await supabase
     .from('narration_audio')
     .update({
@@ -212,6 +212,7 @@ async function updateNarrationAudioReady({ id, audioUrl, charCount, costUsd, dur
       character_count: charCount,
       cost_usd:        costUsd,
       duration_ms:     durationMs,
+      narration_text:  narrationText,
     })
     .eq('id', id);
 
@@ -316,6 +317,7 @@ router.post('/generate', async (req, res) => {
     // 5. Promote row to ready (Fix 2: atomic write order)
     await updateNarrationAudioReady({
       id: pendingId, audioUrl, charCount, costUsd: ttsCostUsd, durationMs,
+      narrationText: text,
     });
 
     // 6. Update pois.narration_cache (fire-and-forget)

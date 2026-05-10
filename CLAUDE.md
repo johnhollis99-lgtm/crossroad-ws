@@ -603,7 +603,7 @@ pnpm html            # rebuild index.html only
 
 ### Migration backlog status (updated 2026-05-07)
 
-**DB watermark: `20260504000018`** — all migrations 000002–000018 applied.
+**DB watermark: `20260504000020`** — all migrations 000002–000020 applied.
 Verification script: `scripts/verify-migrations.mjs` (66/66 checks passed on 000014; listed in `.gitignore`). Post-0016 schema verification lives in `scripts/admin/verify-venue-schema.ts`.
 
 **Applied (confirmed live):**
@@ -624,6 +624,8 @@ Verification script: `scripts/verify-migrations.mjs` (66/66 checks passed on 000
 - 20260504000016 `venue_tour_schema` — V1 venue tour: pois.parent_poi_id (FK self), is_venue, venue_polygon (geography Polygon), venue_type (14-value CHECK), venue_metadata (jsonb) + cross-column constraints + venue_classification_review table + 3 RPCs (get_venue_tour_pois, detect_venue_at_location, patched get_nearby_pois with p_include_children flag). Backfill: 73 venues seeded, 1,293 POIs classified as children. Spec: docs/venue-tour-design.md.
 - 20260504000017 `get_nearby_pois_confidence_filter` — adds `AND p.confidence_score >= 0.5` to get_nearby_pois so low-confidence imports (NRHP rows that geocoded only to county centroid, etc.) are excluded from drive-by surfaces. Unblocks 4-county NRHP import. `get_route_pois` does not exist; the corridor RPC is `get_corridor_pois` and was not modified. Applier: `scripts/poi-import/apply-confidence-filter.mjs` (also runs the verification queries).
 - 20260504000018 `get_corridor_pois_confidence_filter` — brings `get_corridor_pois` to parity with `get_nearby_pois`: adds `WHERE p.merged_into IS NULL AND p.confidence_score >= 0.5` to the corridor RPC. Without this, dedup secondaries (601 freshly-merged from the 4-county dedup) and defanged-NRHP rows (~2,099) leaked into route-corridor results. Deliberately did NOT add `parent_poi_id IS NULL` — corridor narration sometimes wants children once driving slowly past a venue (separate decision). Applier: `scripts/poi-import/apply-corridor-filter.mjs`. Verifications passed live (function body has both filters; secondary at known-merged location returns 0 in the corridor result while its primary at the same coords returns 1).
+- 20260504000019 `narration_audio_bucket` — creates the `narration-audio` Supabase Storage bucket (public, 10MB limit, audio/ogg + audio/opus mime types) so the first narration upload doesn't 404. Applier: `scripts/poi-import/apply-narration-bucket.mjs` (verifies via both `storage.buckets` SELECT and `listBuckets()`).
+- 20260504000020 `narration_audio_text` — adds `narration_audio.narration_text text` (nullable, no default, no index) so cached LLM output drives future audio regeneration without re-paying Claude. Populated at write time by `server/routes/narration.js` (in `updateNarrationAudioReady`) and `scripts/precache-popular-routes.ts` (in `upsertNarrationAudio`) with the exact string passed to `generateNarration()`. Applier: `scripts/poi-import/apply-narration-text.mjs`.
 
 **Out-of-band live patches (no migration file — applied directly via pg):**
 - `get_corridor_pois` + `get_nearby_pois` RPCs patched (2026-05-06): live DB had diverged to reference a nonexistent `categories` table instead of `poi_categories`. Re-applied both `CREATE OR REPLACE FUNCTION` bodies from `20250503000001_trip_mode.sql` directly. Root cause unknown (likely a hand-edit in the Supabase SQL editor at some point). If you ever reset or re-apply migrations from scratch, these functions will be correct — the migration files were already right.

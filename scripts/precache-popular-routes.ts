@@ -158,7 +158,7 @@ async function uploadAudio(
 // ── Upsert narration_audio row ────────────────────────────────────────────────
 async function upsertNarrationAudio(args: {
   poiId: string; voiceId: string; depth: NarrationDepth; mode: NarrationMode;
-  audioUrl: string; charCount: number; costUsd: number;
+  audioUrl: string; charCount: number; costUsd: number; narrationText: string;
 }): Promise<string | undefined> {
   const { data, error } = await getAdminClient()
     .from('narration_audio')
@@ -174,6 +174,7 @@ async function upsertNarrationAudio(args: {
         character_count: args.charCount,
         cost_usd:        args.costUsd,
         prompt_version:  PROMPT_VERSION,
+        narration_text:  args.narrationText,
       },
       { onConflict: 'poi_id,narrator_slug,depth', ignoreDuplicates: false },
     )
@@ -465,6 +466,7 @@ async function main() {
         const narrationId = await upsertNarrationAudio({
           poiId: poi.id, voiceId: ttsOutput.voiceId, depth, mode,
           audioUrl, charCount: ttsOutput.characterCount, costUsd: ttsCost,
+          narrationText: text,
         });
 
         // Update pois.narration_cache
