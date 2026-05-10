@@ -113,8 +113,12 @@ const PARAGRAPHS: readonly Paragraph[] = [
   { slug: 'lighthouse', file: 'family-lighthouse.txt', label: 'Old Point Loma Lighthouse' },
 ];
 
-// Lower rate (0.92) intentionally gentler than 1.0 for documentary cadence.
-const RATES: readonly number[] = [1.0, 0.92];
+// Three rates spanning the documentary-pacing range. Order is ascending so
+// the HTML row's audio cells read left-to-right slowest → fastest.
+//   0.92 — gentler / slower (added first round)
+//   1.0  — natural default
+//   1.1  — modestly faster for finalists comparing pace
+const RATES: readonly number[] = [0.92, 1.0, 1.1];
 
 const HD_PRICE_PER_CHAR = 16 / 1_000_000;
 
