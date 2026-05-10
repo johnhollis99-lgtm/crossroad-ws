@@ -28,6 +28,11 @@
  *   --depth <d>           Restrict to a single depth (glance|ride_along|deep_dive)
  *   --dry-run             Print what would be generated without actually generating
  *   --limit <n>           Cap on POIs processed (corridor mode); ignored in top-N (use --top-n directly)
+ *   --exclude-ids <list>  Comma-separated POI UUIDs to drop from the result. Applied
+ *                         right after selection, before the dry-run preview and
+ *                         the per-POI generation loop. Use to remove known bad
+ *                         selections (duplicates, venue children that surface in
+ *                         corridor mode but aren't drive-by appropriate).
  */
 
 import { readFileSync } from 'node:fs';
@@ -335,34 +340,72 @@ async function fetchTopPOIs(
 
 // ── Query POIs along route ─────────────────────────────────────────────────────
 async function fetchPOIs(routeWkt: string, corridorMi: number): Promise<POIRow[]> {
-  const { data, error } = await getAdminClient().rpc('get_corridor_pois', {
-    route_geom:           routeWkt,
-    corridor_width_miles: corridorMi,
-    category_filter:      null,
-    mode_filter:          null,
-  });
+  const sb = getAdminClient();
 
-  if (error) throw new Error(`get_corridor_pois failed: ${error.message}`);
+  // Step 1: corridor membership + arc-length ordering. PostgREST caps each
+  // response at 1000 rows; the RPC body itself has no LIMIT (verified against
+  // 20260504000018 source). Paginate via .range() until we get a short page.
+  const RPC_PAGE = 1000;
+  const corridor: { id: string }[] = [];
+  for (let from = 0; ; from += RPC_PAGE) {
+    const { data, error } = await sb
+      .rpc('get_corridor_pois', {
+        route_geom:           routeWkt,
+        corridor_width_miles: corridorMi,
+        category_filter:      null,
+        mode_filter:          null,
+      })
+      .range(from, from + RPC_PAGE - 1);
+    if (error) throw new Error(`get_corridor_pois failed: ${error.message}`);
+    const page = (data as { id: string }[] | null) ?? [];
+    if (page.length === 0) break;
+    corridor.push(...page);
+    if (page.length < RPC_PAGE) break;
+  }
+  if (corridor.length === 0) return [];
+  const ids = corridor.map(r => r.id);
 
-  // Re-fetch full POI rows to get narration_cache and source_type
-  const ids = (data as { id: string }[]).map(r => r.id);
-  if (ids.length === 0) return [];
+  // Step 2: re-fetch full POI rows. Past ~200 UUIDs the `id=in.(...)` query
+  // string overflows PostgREST's URL length budget, so chunk and parallelise.
+  // Build a Map to preserve the RPC's arc-length ordering after the merge.
+  const DETAIL_CHUNK = 200;
+  const chunks: string[][] = [];
+  for (let i = 0; i < ids.length; i += DETAIL_CHUNK) {
+    chunks.push(ids.slice(i, i + DETAIL_CHUNK));
+  }
+  const responses = await Promise.all(
+    chunks.map(slice =>
+      sb.from('pois')
+        .select('id, name, tags, source_type, narration_cache, significance_score, poi_categories!inner(display_name)')
+        .in('id', slice),
+    ),
+  );
 
-  const { data: pois, error: poiErr } = await getAdminClient()
-    .from('pois')
-    .select('id, name, tags, source_type, narration_cache, significance_score, poi_categories!inner(display_name)')
-    .in('id', ids);
+  const rowsById = new Map<string, any>();
+  for (const { data, error } of responses) {
+    if (error) throw new Error(`POI detail fetch failed: ${error.message}`);
+    for (const row of (data as any[] | null) ?? []) {
+      rowsById.set(row.id, row);
+    }
+  }
 
-  if (poiErr) throw new Error(`POI detail fetch failed: ${poiErr.message}`);
-  return (pois ?? []).map((p: any) => ({
-    id:                 p.id,
-    name:               p.name,
-    category:           p.poi_categories?.display_name ?? 'Unknown',
-    tags:               p.tags ?? [],
-    source_type:        p.source_type,
-    narration_cache:    p.narration_cache,
-    significance_score: typeof p.significance_score === 'number' ? p.significance_score : null,
-  }));
+  // Reorder by RPC sequence; drop any IDs that didn't round-trip (shouldn't
+  // happen but defensive — RLS or in-flight deletes could surface a gap).
+  const out: POIRow[] = [];
+  for (const id of ids) {
+    const p = rowsById.get(id);
+    if (!p) continue;
+    out.push({
+      id:                 p.id,
+      name:               p.name,
+      category:           p.poi_categories?.display_name ?? 'Unknown',
+      tags:               p.tags ?? [],
+      source_type:        p.source_type,
+      narration_cache:    p.narration_cache,
+      significance_score: typeof p.significance_score === 'number' ? p.significance_score : null,
+    });
+  }
+  return out;
 }
 
 // ── Query top (mode, depth) combos from trips ──────────────────────────────────
@@ -461,6 +504,12 @@ async function main() {
   const topNRaw    = get('--top-n');
   const minScoreRaw = get('--min-score');
   const maxScoreRaw = get('--max-score');
+  const excludeIdsRaw = get('--exclude-ids');
+  const excludeIds = new Set(
+    excludeIdsRaw
+      ? excludeIdsRaw.split(',').map(s => s.trim()).filter(Boolean)
+      : [],
+  );
 
   // ── Selection-mode validation ──────────────────────────────────────────────
   // top-N and corridor are mutually exclusive: top-N selects globally by
@@ -529,6 +578,20 @@ async function main() {
     pois = pois.filter(p => p.source_type !== 'narrative_extracted');
     if (limitArg > 0) pois = pois.slice(0, limitArg);
     console.log(`[precache] ${pois.length} POIs eligible (narrative_extracted excluded)`);
+  }
+
+  // 1a. Apply --exclude-ids (manual exclusion of known bad selections).
+  // Runs after selection (corridor or top-N) and after narrative_extracted
+  // filtering, before significance preview / generation. The reported "missing"
+  // count surfaces typos in the supplied IDs (UUID not in the selected set
+  // means the exclude is a no-op for this run).
+  if (excludeIds.size > 0) {
+    const before  = pois.length;
+    const present = new Set(pois.filter(p => excludeIds.has(p.id)).map(p => p.id));
+    pois = pois.filter(p => !excludeIds.has(p.id));
+    const dropped = before - pois.length;
+    const missing = [...excludeIds].filter(id => !present.has(id));
+    console.log(`[precache] --exclude-ids dropped ${dropped} POI(s)${missing.length ? `; ${missing.length} not in selected set: ${missing.join(', ')}` : ''}`);
   }
 
   // 2. Determine (mode, depth) combos
