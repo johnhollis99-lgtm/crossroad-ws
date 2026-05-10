@@ -1,24 +1,33 @@
 /**
  * scripts/precache-popular-routes.ts
  *
- * Pre-generates narration audio for all POIs along a route, covering the
- * most-used (mode, depth) combinations from the trips table.
+ * Pre-generates narration audio for POIs covering the most-used (mode, depth)
+ * combinations from the trips table. Two selection modes:
+ *   - corridor: POIs along a named or GeoJSON-supplied route
+ *   - top-n:    globally highest-significance POIs statewide
  *
  * Run:
  *   cd scripts
  *   npx tsx precache-popular-routes.ts --route-file ./routes/pch.geojson
  *   npx tsx precache-popular-routes.ts --named-route pch-sf-la
- *   npx tsx precache-popular-routes.ts --route-file ./routes/pch.geojson --dry-run
- *   npx tsx precache-popular-routes.ts --route-file ./routes/pch.geojson --mode driving --depth glance
+ *   npx tsx precache-popular-routes.ts --top-n 30 --min-score 70
+ *   npx tsx precache-popular-routes.ts --top-n 5 --min-score 80 --mode driving --depth deep_dive --dry-run
  *
- * Options:
+ * Selection (mutually exclusive — exactly one set must be specified):
  *   --route-file <path>   GeoJSON file containing a Feature/FeatureCollection/LineString
  *   --named-route <id>    One of the built-in popular routes (see NAMED_ROUTES below)
- *   --corridor-mi <n>     Corridor width in miles (default: 10)
+ *   --top-n <n>           Globally top-N significance-ranked POIs (statewide, no corridor)
+ *
+ * Top-N filters (only meaningful with --top-n):
+ *   --min-score <s>       Floor on significance_score (default: 0)
+ *   --max-score <s>       Ceiling on significance_score (default: 100; useful for re-runs of lower tiers)
+ *
+ * Common options:
+ *   --corridor-mi <n>     Corridor width in miles (corridor mode only; default: 10)
  *   --mode <m>            Restrict to a single trip mode (driving|hiking)
  *   --depth <d>           Restrict to a single depth (glance|ride_along|deep_dive)
  *   --dry-run             Print what would be generated without actually generating
- *   --limit <n>           Max POIs to process (default: unlimited)
+ *   --limit <n>           Cap on POIs processed (corridor mode); ignored in top-N (use --top-n directly)
  */
 
 import { readFileSync } from 'node:fs';
@@ -59,6 +68,8 @@ interface POIRow {
   tags: string[];
   source_type: string | null;
   narration_cache: Record<string, string> | null;
+  /** Populated by fetchTopPOIs and fetchPOIs; used for dry-run preview only. */
+  significance_score: number | null;
 }
 
 interface VoiceConfigRow {
@@ -98,6 +109,25 @@ const DEPTH_CFG: Record<NarrationDepth, { sentences: string; maxTokens: number }
   ride_along: { sentences: 'one paragraph',  maxTokens: 600  },
   deep_dive:  { sentences: '2-3 paragraphs', maxTokens: 1100 },
 };
+
+// Conservative dry-run cost estimates per (POI × combo). Real costs will be
+// lower because Claude rarely hits maxTokens; these are upper bounds for
+// budget sanity checks.
+//
+// Claude pricing (claude-sonnet-4-6): $3/M input, $15/M output.
+// Google TTS pricing (Chirp 3 HD / Neural2):       $16/M chars.
+const CLAUDE_INPUT_TOKENS_EST = 150;  // system + user prompt is short
+const ESTIMATE_PER_DEPTH: Record<NarrationDepth, { ttsChars: number; claudeOutputTokens: number }> = {
+  glance:     { ttsChars: 250,  claudeOutputTokens: 250 },
+  ride_along: { ttsChars: 600,  claudeOutputTokens: 500 },
+  deep_dive:  { ttsChars: 1500, claudeOutputTokens: 1100 },
+};
+function estimateCostForCombo(depth: NarrationDepth): number {
+  const e = ESTIMATE_PER_DEPTH[depth];
+  const claudeUsd = (CLAUDE_INPUT_TOKENS_EST * 3 + e.claudeOutputTokens * 15) / 1_000_000;
+  const ttsUsd    = (e.ttsChars * 16) / 1_000_000;
+  return claudeUsd + ttsUsd;
+}
 
 // ── Claude narration text generation ──────────────────────────────────────────
 async function generateText(poi: POIRow, depth: NarrationDepth): Promise<{ text: string; inputTokens: number; outputTokens: number }> {
@@ -239,6 +269,51 @@ function geojsonToWkt(filePath: string): string {
   return `SRID=4326;LINESTRING(${coords.map(([lng, lat]) => `${lng} ${lat}`).join(',')})`;
 }
 
+// ── Query top-N POIs by significance (statewide, no corridor) ─────────────────
+// Used by the --top-n selection mode to feed the same downstream pipeline as
+// the corridor path. Filters mirror the production drive-by surface:
+//   - merged_into IS NULL          (exclude dedup tombstones)
+//   - parent_poi_id IS NULL        (exclude venue children — drive-by treats
+//                                   venues as singletons; children belong to
+//                                   the venue-tour mode only)
+//   - confidence_score >= 0.5      (exclude defanged geocoding-bad rows; same
+//                                   threshold get_corridor_pois /
+//                                   get_nearby_pois apply)
+//   - source_type != narrative_extracted (parity with corridor post-filter —
+//                                          those need user validation first)
+//   - significance_score in [min, max]  (caller-supplied bounds; default 0–100)
+//
+// Order: significance_score DESC, id ASC for stable cross-run ordering.
+async function fetchTopPOIs(
+  topN: number, minScore: number, maxScore: number,
+): Promise<POIRow[]> {
+  const sb = getAdminClient();
+  const { data, error } = await sb
+    .from('pois')
+    .select('id, name, tags, source_type, narration_cache, significance_score, poi_categories!inner(display_name)')
+    .is('merged_into', null)
+    .is('parent_poi_id', null)
+    .gte('confidence_score', 0.5)
+    .gte('significance_score', minScore)
+    .lte('significance_score', maxScore)
+    .neq('source_type', 'narrative_extracted')
+    .order('significance_score', { ascending: false })
+    .order('id', { ascending: true })
+    .limit(topN);
+
+  if (error) throw new Error(`top-N POI fetch failed: ${error.message}`);
+
+  return (data ?? []).map((p: any) => ({
+    id:                 p.id,
+    name:               p.name,
+    category:           p.poi_categories?.display_name ?? 'Unknown',
+    tags:               p.tags ?? [],
+    source_type:        p.source_type,
+    narration_cache:    p.narration_cache,
+    significance_score: typeof p.significance_score === 'number' ? p.significance_score : null,
+  }));
+}
+
 // ── Query POIs along route ─────────────────────────────────────────────────────
 async function fetchPOIs(routeWkt: string, corridorMi: number): Promise<POIRow[]> {
   const { data, error } = await getAdminClient().rpc('get_corridor_pois', {
@@ -256,17 +331,18 @@ async function fetchPOIs(routeWkt: string, corridorMi: number): Promise<POIRow[]
 
   const { data: pois, error: poiErr } = await getAdminClient()
     .from('pois')
-    .select('id, name, tags, source_type, narration_cache, poi_categories!inner(display_name)')
+    .select('id, name, tags, source_type, narration_cache, significance_score, poi_categories!inner(display_name)')
     .in('id', ids);
 
   if (poiErr) throw new Error(`POI detail fetch failed: ${poiErr.message}`);
   return (pois ?? []).map((p: any) => ({
-    id:              p.id,
-    name:            p.name,
-    category:        p.poi_categories?.display_name ?? 'Unknown',
-    tags:            p.tags ?? [],
-    source_type:     p.source_type,
-    narration_cache: p.narration_cache,
+    id:                 p.id,
+    name:               p.name,
+    category:           p.poi_categories?.display_name ?? 'Unknown',
+    tags:               p.tags ?? [],
+    source_type:        p.source_type,
+    narration_cache:    p.narration_cache,
+    significance_score: typeof p.significance_score === 'number' ? p.significance_score : null,
   }));
 }
 
@@ -363,35 +439,78 @@ async function main() {
   const limitArg  = parseInt(get('--limit') ?? '0', 10);
   const modeFilter = get('--mode') as NarrationMode | undefined;
   const depthFilter = get('--depth') as NarrationDepth | undefined;
+  const topNRaw    = get('--top-n');
+  const minScoreRaw = get('--min-score');
+  const maxScoreRaw = get('--max-score');
 
-  if (!routeFile && !namedRoute) {
-    console.error('Usage: tsx precache-popular-routes.ts --route-file <path>|--named-route <id> [options]');
+  // ── Selection-mode validation ──────────────────────────────────────────────
+  // top-N and corridor are mutually exclusive: top-N selects globally by
+  // significance, corridor selects spatially. Combining them would silently
+  // drop one set of constraints.
+  const corridorMode = Boolean(routeFile || namedRoute);
+  const topNMode     = topNRaw !== undefined;
+
+  if (corridorMode && topNMode) {
+    console.error(
+      '[precache] --top-n is mutually exclusive with --route-file / --named-route. ' +
+      'Specify exactly one selection mode.',
+    );
+    process.exit(1);
+  }
+  if (!corridorMode && !topNMode) {
+    console.error(
+      'Usage: tsx precache-popular-routes.ts (--route-file <path>|--named-route <id>|--top-n <n>) [options]',
+    );
     console.error('Named routes:', Object.keys(NAMED_ROUTES).join(', '));
     process.exit(1);
   }
 
-  let routeWkt: string;
-  if (namedRoute) {
-    if (!(namedRoute in NAMED_ROUTES)) {
-      console.error(`Unknown named route '${namedRoute}'. Available: ${Object.keys(NAMED_ROUTES).join(', ')}`);
+  // ── Fetch POIs ─────────────────────────────────────────────────────────────
+  let pois: POIRow[];
+  let selectionLabel: string;
+
+  if (topNMode) {
+    const topN = parseInt(topNRaw!, 10);
+    if (!Number.isFinite(topN) || topN <= 0) {
+      console.error(`[precache] --top-n must be a positive integer (got: ${topNRaw})`);
       process.exit(1);
     }
-    routeWkt = NAMED_ROUTES[namedRoute];
+    const minScore = minScoreRaw !== undefined ? parseFloat(minScoreRaw) : 0;
+    const maxScore = maxScoreRaw !== undefined ? parseFloat(maxScoreRaw) : 100;
+    if (!Number.isFinite(minScore) || !Number.isFinite(maxScore) || minScore > maxScore) {
+      console.error(
+        `[precache] invalid --min-score/--max-score (min=${minScore} max=${maxScore})`,
+      );
+      process.exit(1);
+    }
+    selectionLabel =
+      `top-${topN} by significance (score in [${minScore}, ${maxScore}])`;
+    console.log(`\n[precache] Selection: ${selectionLabel}  dry-run: ${dryRun}`);
+    console.log('[precache] Fetching POIs...');
+    pois = await fetchTopPOIs(topN, minScore, maxScore);
+    console.log(`[precache] ${pois.length} POIs returned (filters: merged_into IS NULL, parent_poi_id IS NULL, confidence_score >= 0.5, source_type != narrative_extracted)`);
   } else {
-    routeWkt = geojsonToWkt(resolve(routeFile!));
+    let routeWkt: string;
+    if (namedRoute) {
+      if (!(namedRoute in NAMED_ROUTES)) {
+        console.error(`Unknown named route '${namedRoute}'. Available: ${Object.keys(NAMED_ROUTES).join(', ')}`);
+        process.exit(1);
+      }
+      routeWkt = NAMED_ROUTES[namedRoute] ?? '';
+    } else {
+      routeWkt = geojsonToWkt(resolve(routeFile!));
+    }
+    selectionLabel = `corridor along ${namedRoute ?? routeFile} (${corridorMi}mi)`;
+    console.log(`\n[precache] Selection: ${selectionLabel}  dry-run: ${dryRun}`);
+    console.log('[precache] Fetching POIs...');
+    pois = await fetchPOIs(routeWkt, corridorMi);
+    console.log(`[precache] ${pois.length} POIs found`);
+
+    // Skip narrative_extracted — those need user validation first
+    pois = pois.filter(p => p.source_type !== 'narrative_extracted');
+    if (limitArg > 0) pois = pois.slice(0, limitArg);
+    console.log(`[precache] ${pois.length} POIs eligible (narrative_extracted excluded)`);
   }
-
-  console.log(`\n[precache] Route: ${namedRoute ?? routeFile}  corridor: ${corridorMi}mi  dry-run: ${dryRun}`);
-
-  // 1. Fetch POIs along the route
-  console.log('[precache] Fetching POIs...');
-  let pois = await fetchPOIs(routeWkt, corridorMi);
-  console.log(`[precache] ${pois.length} POIs found`);
-
-  // Skip narrative_extracted — those need user validation first
-  pois = pois.filter(p => p.source_type !== 'narrative_extracted');
-  if (limitArg > 0) pois = pois.slice(0, limitArg);
-  console.log(`[precache] ${pois.length} POIs eligible (narrative_extracted excluded)`);
 
   // 2. Determine (mode, depth) combos
   let combos = await fetchTopCombos(5);
@@ -399,12 +518,32 @@ async function main() {
   if (depthFilter) combos = combos.filter(c => c.depth === depthFilter);
   console.log('[precache] Mode×depth combos:', combos.map(c => `${c.mode}/${c.depth}`).join(', '));
 
-  // 3. Active voice per mode — fail loud if any required mode is unseeded
+  // 3. Dry-run preview: top-5 by significance + estimated cost.
+  // Printed before voice resolution so the sanity check is visible even when
+  // voice_configs is unseeded (the resolution check still fires below and
+  // exits the script — expected per PR A's fail-loud behavior).
+  if (dryRun) {
+    const previewRows = [...pois]
+      .sort((a, b) => (b.significance_score ?? -1) - (a.significance_score ?? -1))
+      .slice(0, 5);
+    if (previewRows.length > 0) {
+      console.log('\n[precache] Top 5 by significance_score (sanity check):');
+      for (const p of previewRows) {
+        const score = p.significance_score === null ? '?' : p.significance_score.toFixed(0);
+        console.log(`    ${score.padStart(3)}  ${p.name}`);
+      }
+    }
+    const perPoiUsd = combos.reduce((s, c) => s + estimateCostForCombo(c.depth), 0);
+    const estUsd    = pois.length * perPoiUsd;
+    console.log(`\n[precache] Estimated upper-bound cost: $${estUsd.toFixed(4)} (${pois.length} POIs × ${combos.length} combos; assumes none are cache hits — actual will be lower)`);
+  }
+
+  // 4. Active voice per mode — fail loud if any required mode is unseeded
   const modes = [...new Set(combos.map(c => c.mode))];
   const voiceMap = await fetchActiveVoices(modes);
   assertVoicesForModes(voiceMap, modes);
 
-  // 4. Process each POI × combo
+  // 5. Process each POI × combo
   let generated = 0, skipped = 0, failed = 0;
 
   for (const poi of pois) {
