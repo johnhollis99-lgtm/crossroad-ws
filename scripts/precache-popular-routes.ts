@@ -18,9 +18,14 @@
  *   --named-route <id>    One of the built-in popular routes (see NAMED_ROUTES below)
  *   --top-n <n>           Globally top-N significance-ranked POIs (statewide, no corridor)
  *
- * Top-N filters (only meaningful with --top-n):
- *   --min-score <s>       Floor on significance_score (default: 0)
- *   --max-score <s>       Ceiling on significance_score (default: 100; useful for re-runs of lower tiers)
+ * Score bounds (apply to either selection mode):
+ *   --min-score <s>       Floor on significance_score. Top-N pushes this into
+ *                         the SQL query; corridor applies it post-fetch.
+ *                         Default: no floor (corridor) / 0 (top-N).
+ *   --max-score <s>       Ceiling on significance_score (useful for re-runs of
+ *                         lower tiers without re-spending on already-cached
+ *                         high-tier POIs). Default: no ceiling (corridor) /
+ *                         100 (top-N).
  *
  * Common options:
  *   --corridor-mi <n>     Corridor width in miles (corridor mode only; default: 10)
@@ -511,6 +516,20 @@ async function main() {
       : [],
   );
 
+  // Score bounds — accepted in both selection modes. Top-N pushes them into
+  // the SQL query (server-side filter); corridor applies them post-fetch
+  // because the RPC doesn't carry a significance threshold.
+  const minScore: number | null = minScoreRaw !== undefined ? parseFloat(minScoreRaw) : null;
+  const maxScore: number | null = maxScoreRaw !== undefined ? parseFloat(maxScoreRaw) : null;
+  if ((minScore !== null && !Number.isFinite(minScore)) ||
+      (maxScore !== null && !Number.isFinite(maxScore)) ||
+      (minScore !== null && maxScore !== null && minScore > maxScore)) {
+    console.error(
+      `[precache] invalid --min-score/--max-score (min=${minScore} max=${maxScore})`,
+    );
+    process.exit(1);
+  }
+
   // ── Selection-mode validation ──────────────────────────────────────────────
   // top-N and corridor are mutually exclusive: top-N selects globally by
   // significance, corridor selects spatially. Combining them would silently
@@ -543,19 +562,15 @@ async function main() {
       console.error(`[precache] --top-n must be a positive integer (got: ${topNRaw})`);
       process.exit(1);
     }
-    const minScore = minScoreRaw !== undefined ? parseFloat(minScoreRaw) : 0;
-    const maxScore = maxScoreRaw !== undefined ? parseFloat(maxScoreRaw) : 100;
-    if (!Number.isFinite(minScore) || !Number.isFinite(maxScore) || minScore > maxScore) {
-      console.error(
-        `[precache] invalid --min-score/--max-score (min=${minScore} max=${maxScore})`,
-      );
-      process.exit(1);
-    }
+    // Top-N pushes score bounds into the SQL query — defaults match
+    // significance_score's natural range.
+    const sqlMin = minScore ?? 0;
+    const sqlMax = maxScore ?? 100;
     selectionLabel =
-      `top-${topN} by significance (score in [${minScore}, ${maxScore}])`;
+      `top-${topN} by significance (score in [${sqlMin}, ${sqlMax}])`;
     console.log(`\n[precache] Selection: ${selectionLabel}  dry-run: ${dryRun}`);
     console.log('[precache] Fetching POIs...');
-    pois = await fetchTopPOIs(topN, minScore, maxScore);
+    pois = await fetchTopPOIs(topN, sqlMin, sqlMax);
     console.log(`[precache] ${pois.length} POIs returned (filters: merged_into IS NULL, parent_poi_id IS NULL, confidence_score >= 0.5, source_type != narrative_extracted)`);
   } else {
     let routeWkt: string;
@@ -572,12 +587,27 @@ async function main() {
     console.log(`\n[precache] Selection: ${selectionLabel}  dry-run: ${dryRun}`);
     console.log('[precache] Fetching POIs...');
     pois = await fetchPOIs(routeWkt, corridorMi);
-    console.log(`[precache] ${pois.length} POIs found`);
+    console.log(`[precache] ${pois.length} POIs found in corridor`);
 
     // Skip narrative_extracted — those need user validation first
     pois = pois.filter(p => p.source_type !== 'narrative_extracted');
     if (limitArg > 0) pois = pois.slice(0, limitArg);
     console.log(`[precache] ${pois.length} POIs eligible (narrative_extracted excluded)`);
+
+    // Apply --min-score / --max-score post-fetch (corridor RPC has no
+    // significance threshold). Drops rows missing a score — without one the
+    // request to be ≥ minScore is unverifiable, so safer to exclude.
+    if (minScore !== null || maxScore !== null) {
+      const before = pois.length;
+      const lo = minScore ?? 0;
+      const hi = maxScore ?? 100;
+      pois = pois.filter(p =>
+        p.significance_score !== null &&
+        p.significance_score >= lo &&
+        p.significance_score <= hi,
+      );
+      console.log(`[precache] ${pois.length} POIs after score filter [${lo}, ${hi}] (dropped ${before - pois.length})`);
+    }
   }
 
   // 1a. Apply --exclude-ids (manual exclusion of known bad selections).

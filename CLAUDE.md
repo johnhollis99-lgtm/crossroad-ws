@@ -677,7 +677,7 @@ npx tsx precache-popular-routes.ts --named-route pch-sf-la --dry-run
 npx tsx precache-popular-routes.ts --named-route pch-sf-la --mode driving --depth glance
 ```
 
-**Options:** `--route-file <geojson>`, `--named-route <id>`, `--corridor-mi <n>` (default 10), `--mode`, `--depth`, `--dry-run`, `--limit <n>`, `--exclude-ids <uuid,uuid>` (drop specific POIs from the result; applied right after selection, before generation)
+**Options:** `--route-file <geojson>`, `--named-route <id>`, `--corridor-mi <n>` (default 10), `--mode`, `--depth`, `--dry-run`, `--limit <n>`, `--min-score <s>` / `--max-score <s>` (apply in both corridor and top-N modes; corridor filters post-fetch, top-N pushes into SQL), `--exclude-ids <uuid,uuid>` (drop specific POIs from the result; runs after the score filter so typo'd UUIDs still warn as "not in selected set")
 
 **Named routes:** `pch-sf-la`, `i5-sf-la`, `us101-la-sf`, `us101-la-cambria` (hardcoded WKT waypoints)
 
@@ -695,11 +695,14 @@ npx tsx scripts/precache-popular-routes.ts \
   --named-route us101-la-cambria \
   --mode driving --depth deep_dive \
   --corridor-mi 10 \
+  --min-score 70 \
   --exclude-ids <hollywood-walk-of-fame-uuid>,<jurassic-world-uuid>
+# Pipeline (verified 2026-05-10 dry-run):
+#   2,947 in corridor → 39 after --min-score 70 → 37 after --exclude-ids
+#   estimated ~$1.52 upper-bound (driving/deep_dive, all cache misses);
+#   realistic ~$1.00–$1.10
 ```
 Verified 2026-05-10 dry-run: corridor returns 2,947 POIs (paginated past PostgREST 1000-row default); 13 at score>=80, 39 at >=70, 138 at >=60. Top 10 are corridor-correct (Santa Monica Pier, Walk of Fame, Hollywood Sign, Mission San Buenaventura, Mission Santa Bárbara, Mission SLO de Tolosa, Mission La Purísima Concepción, Jurassic World—The Ride, Fire Station No. 23). Known noise in the >=70 set: Walk of Fame / Hollywood Walk of Fame duplicate (data-quality-issues.md), and Jurassic World—The Ride is a Universal Studios venue child surfaced because `get_corridor_pois` deliberately omits the `parent_poi_id IS NULL` filter (migration 000018 design note — corridor narration may want children at slow drive-by). Both flagged for exclusion via `--exclude-ids` rather than touching the RPC.
-
-**⚠ Cost gotcha — corridor mode has no significance threshold.** `--top-n` accepts `--min-score` to filter at SQL level; the corridor branch does not. Running the smoke-batch invocation as written will iterate over **all 2,947 corridor POIs**, not just the 39 at score ≥ 70 — upper-bound cost ~$120, not ~$1. Either (a) cap the run by piping the corridor through a manual significance pass before live invocation, (b) use `--top-n 39 --min-score 70` (global rather than corridor-bound — different geographic scope), or (c) extend the script's corridor branch with a `--min-score` filter (one-line change, deferred to a follow-up PR). Preview cost in `--dry-run` output before the live run.
 
 **Logic:**
 1. Calls `get_corridor_pois` RPC → re-fetches full POI rows for `narration_cache`, `source_type`
