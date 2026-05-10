@@ -98,6 +98,25 @@ const NAMED_ROUTES: Record<string, string> = {
     '-118.2437 34.0522,-119.1771 34.2164,-120.6597 35.2828,' +
     '-121.8947 36.3733,-122.0232 37.5205,-122.4194 37.7749' +
     ')',
+  // 12-waypoint US-101 alignment from downtown LA up to Cambria. Scopes the
+  // smoke-batch corridor to the actual drive distance (us101-la-sf covers the
+  // whole coast). Final leg from SLO to Cambria leaves 101 for Highway 1 —
+  // intentional, the corridor RPC just buffers the line.
+  'us101-la-cambria':
+    'SRID=4326;LINESTRING(' +
+    '-118.244 34.052,'   /* Downtown LA           */ +
+    '-118.640 34.150,'   /* Calabasas / 101 split */ +
+    '-119.040 34.220,'   /* Camarillo             */ +
+    '-119.290 34.275,'   /* Ventura               */ +
+    '-119.700 34.420,'   /* Santa Barbara         */ +
+    '-119.840 34.435,'   /* Goleta                */ +
+    '-120.230 34.475,'   /* Gaviota               */ +
+    '-120.195 34.614,'   /* Buellton              */ +
+    '-120.435 34.953,'   /* Santa Maria           */ +
+    '-120.640 35.143,'   /* Pismo Beach           */ +
+    '-120.660 35.282,'   /* San Luis Obispo       */ +
+    '-121.080 35.564'    /* Cambria               */ +
+    ')',
 };
 
 const STORAGE_BUCKET  = 'narration-audio';

@@ -679,7 +679,18 @@ npx tsx precache-popular-routes.ts --named-route pch-sf-la --mode driving --dept
 
 **Options:** `--route-file <geojson>`, `--named-route <id>`, `--corridor-mi <n>` (default 10), `--mode`, `--depth`, `--dry-run`, `--limit <n>`
 
-**Named routes:** `pch-sf-la`, `i5-sf-la`, `us101-la-sf` (hardcoded WKT waypoints)
+**Named routes:** `pch-sf-la`, `i5-sf-la`, `us101-la-sf`, `us101-la-cambria` (hardcoded WKT waypoints)
+
+**Smoke batch (LA→Cambria corridor, Family Deep Dive):**
+```
+npx tsx scripts/precache-popular-routes.ts \
+  --named-route us101-la-cambria \
+  --mode driving --depth deep_dive \
+  --corridor-mi 10
+# ~39 POIs at score >= 70 (after Family voice committed via audition)
+# ~$1-1.60 total spend (Claude + TTS, single combo, all cache misses)
+```
+Verified 2026-05-10 dry-run: corridor returns 2,947 POIs (paginated past PostgREST 1000-row default); 13 at score>=80, 39 at >=70, 138 at >=60. Top 10 are corridor-correct (Santa Monica Pier, Walk of Fame, Hollywood Sign, Mission San Buenaventura, Mission Santa Bárbara, Mission SLO de Tolosa, Mission La Purísima Concepción, Jurassic World—The Ride, Fire Station No. 23). Known noise in the >=70 set: Walk of Fame / Hollywood Walk of Fame duplicate (data-quality-issues.md), and Jurassic World—The Ride is a Universal Studios venue child surfaced because `get_corridor_pois` deliberately omits the `parent_poi_id IS NULL` filter (migration 000018 design note — corridor narration may want children at slow drive-by).
 
 **Logic:**
 1. Calls `get_corridor_pois` RPC → re-fetches full POI rows for `narration_cache`, `source_type`
