@@ -542,7 +542,7 @@ Skips gracefully if `GOOGLE_APPLICATION_CREDENTIALS` is not set. When credential
 
 ### Voice audition tooling
 
-Two tools exist. **Use `audition-voices.ts` for picking voices** (it integrates with the TTS abstraction + voice_configs table). `run.ts` is the older HTML-based tool kept for reference.
+Three tools exist. **Use `audition-voices.ts` for picking voices** (it integrates with the TTS abstraction + voice_configs table). `audition-family-realistic.ts` is a production-shape alternative for Family mode that runs hand-picked Chirp 3 HD voices through real narration paragraphs at two speaking rates and builds a blinded HTML comparison page (`scripts/voice-audition/audition-family-realistic.ts` → `scripts/audition-output/family-realistic/index.html`; idempotent on re-run). `run.ts` is the older HTML-based tool kept for reference.
 
 #### Primary: `scripts/audition-voices.ts`
 Single-file CLI run from `scripts/voice-audition/`. Uses `generateNarration()` with `voiceConfigOverride` (no voice_configs table required), logs to `llm_calls`, writes Opus to `scripts/audition-output/{mode}/{voice_id}.opus`.
