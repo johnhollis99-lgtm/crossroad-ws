@@ -603,7 +603,7 @@ pnpm html            # rebuild index.html only
 
 ### Migration backlog status (updated 2026-05-07)
 
-**DB watermark: `20260504000020`** — all migrations 000002–000020 applied.
+**DB watermark: `20260504000021`** — all migrations 000002–000021 applied.
 Verification script: `scripts/verify-migrations.mjs` (66/66 checks passed on 000014; listed in `.gitignore`). Post-0016 schema verification lives in `scripts/admin/verify-venue-schema.ts`.
 
 **Applied (confirmed live):**
@@ -626,6 +626,7 @@ Verification script: `scripts/verify-migrations.mjs` (66/66 checks passed on 000
 - 20260504000018 `get_corridor_pois_confidence_filter` — brings `get_corridor_pois` to parity with `get_nearby_pois`: adds `WHERE p.merged_into IS NULL AND p.confidence_score >= 0.5` to the corridor RPC. Without this, dedup secondaries (601 freshly-merged from the 4-county dedup) and defanged-NRHP rows (~2,099) leaked into route-corridor results. Deliberately did NOT add `parent_poi_id IS NULL` — corridor narration sometimes wants children once driving slowly past a venue (separate decision). Applier: `scripts/poi-import/apply-corridor-filter.mjs`. Verifications passed live (function body has both filters; secondary at known-merged location returns 0 in the corridor result while its primary at the same coords returns 1).
 - 20260504000019 `narration_audio_bucket` — creates the `narration-audio` Supabase Storage bucket (public, 10MB limit, audio/ogg + audio/opus mime types) so the first narration upload doesn't 404. Applier: `scripts/poi-import/apply-narration-bucket.mjs` (verifies via both `storage.buckets` SELECT and `listBuckets()`).
 - 20260504000020 `narration_audio_text` — adds `narration_audio.narration_text text` (nullable, no default, no index) so cached LLM output drives future audio regeneration without re-paying Claude. Populated at write time by `server/routes/narration.js` (in `updateNarrationAudioReady`) and `scripts/precache-popular-routes.ts` (in `upsertNarrationAudio`) with the exact string passed to `generateNarration()`. Applier: `scripts/poi-import/apply-narration-text.mjs`.
+- 20260504000021 `narration_audio_bucket_codecs_mime` — extends the narration-audio bucket's `allowed_mime_types` to accept `'audio/ogg; codecs=opus'` (the parameterised form returned by the Google TTS wrapper) in addition to bare `'audio/ogg'` / `'audio/opus'`. `storage.buckets.allowed_mime_types` does exact-string matching; without this entry every narration upload errored with "mime type audio/ogg; codecs=opus is not supported", which ate Claude + Google TTS spend silently before the precache could log it. Applier: `scripts/poi-import/apply-narration-bucket-codecs-mime.mjs`. Discovered during the 2026-05-10 LA→Cambria smoke batch — see "Three audit / display quirks" note in the precache section.
 
 **Out-of-band live patches (no migration file — applied directly via pg):**
 - `get_corridor_pois` + `get_nearby_pois` RPCs patched (2026-05-06): live DB had diverged to reference a nonexistent `categories` table instead of `poi_categories`. Re-applied both `CREATE OR REPLACE FUNCTION` bodies from `20250503000001_trip_mode.sql` directly. Root cause unknown (likely a hand-edit in the Supabase SQL editor at some point). If you ever reset or re-apply migrations from scratch, these functions will be correct — the migration files were already right.
@@ -681,7 +682,7 @@ npx tsx precache-popular-routes.ts --named-route pch-sf-la --mode driving --dept
 
 **Named routes:** `pch-sf-la`, `i5-sf-la`, `us101-la-sf`, `us101-la-cambria` (hardcoded WKT waypoints)
 
-**Smoke batch (LA→Cambria corridor, Family Deep Dive):**
+**Smoke batch (LA→Cambria corridor, Family Deep Dive) — LANDED 2026-05-10:**
 ```
 # 1. Resolve UUIDs for the two known-bad selections (run once before the live batch):
 #      SELECT id, name, significance_score
@@ -696,13 +697,26 @@ npx tsx scripts/precache-popular-routes.ts \
   --mode driving --depth deep_dive \
   --corridor-mi 10 \
   --min-score 70 \
+  --audience family \
   --exclude-ids <hollywood-walk-of-fame-uuid>,<jurassic-world-uuid>
-# Pipeline (verified 2026-05-10 dry-run):
+# Pipeline (verified 2026-05-10):
 #   2,947 in corridor → 39 after --min-score 70 → 37 after --exclude-ids
-#   estimated ~$1.52 upper-bound (driving/deep_dive, all cache misses);
-#   realistic ~$1.00–$1.10
+#   Actual run: 795s (~13min) across 37 POIs, all status=ready.
+#   Actual spend: ~$1.05 real (Claude $0.18 + Google TTS $0.87).
+#   Note: llm_calls double-counts TTS rows (auto-log + explicit
+#   precache log = 2x); raw sum reports ~$1.92.
 ```
-Verified 2026-05-10 dry-run: corridor returns 2,947 POIs (paginated past PostgREST 1000-row default); 13 at score>=80, 39 at >=70, 138 at >=60. Top 10 are corridor-correct (Santa Monica Pier, Walk of Fame, Hollywood Sign, Mission San Buenaventura, Mission Santa Bárbara, Mission SLO de Tolosa, Mission La Purísima Concepción, Jurassic World—The Ride, Fire Station No. 23). Known noise in the >=70 set: Walk of Fame / Hollywood Walk of Fame duplicate (data-quality-issues.md), and Jurassic World—The Ride is a Universal Studios venue child surfaced because `get_corridor_pois` deliberately omits the `parent_poi_id IS NULL` filter (migration 000018 design note — corridor narration may want children at slow drive-by). Both flagged for exclusion via `--exclude-ids` rather than touching the RPC.
+Verified end-to-end on 2026-05-10. Voice committed: Iapetus / family / rate 1.0 (`voice_configs.id=b0d81862-de44-42fe-9c25-3ff4838cf5ad`). 37 narration_audio rows, 37 Storage objects under `narration-audio/{poi_id}/driving/deep_dive/en-US-Chirp3-HD-Iapetus.opus`, 37 `pois.narration_cache` keys, 37 narration_text values (1,310-1,614 chars, median 1,438).
+
+Known noise in the >=70 set: Walk of Fame / Hollywood Walk of Fame duplicate (data-quality-issues.md), and Jurassic World—The Ride is a Universal Studios venue child surfaced because `get_corridor_pois` deliberately omits the `parent_poi_id IS NULL` filter (migration 000018 design note — corridor narration may want children at slow drive-by). Both flagged for exclusion via `--exclude-ids` rather than touching the RPC.
+
+**Three audit / display quirks uncovered during the smoke batch (worth a follow-up PR):**
+
+1. **Trip-mode vs audience-mode collision.** Pre-PR-I the precache script passed `--mode driving` (trip taxonomy) directly to `voice_configs.mode` (audience taxonomy: family/kids/unfiltered/local). The CHECK constraint rejected the lookup. Fixed by adding `--audience <a>` flag (default `family`), routing voice lookup through it. **server/routes/narration.js has the same shape — works by coincidence because the mobile client passes audience-mode as `mode` in the request body.** A unified audience-mode parameter across both writers (and the mobile call site) is the proper fix.
+
+2. **Bucket MIME exact-string match.** `storage.buckets.allowed_mime_types` does exact-string matching, not RFC 7231 parameter-aware comparison. The Google TTS wrapper returns `audio/ogg; codecs=opus`; the bucket's original allow-list only had `audio/ogg` and `audio/opus`. Every upload failed silently from the bucket's view but ate Claude + TTS spend upstream. Fixed by migration 20260504000021 extending the allow-list. Worth considering whether `; codecs=opus` should be stripped at upload time instead (smaller blast radius).
+
+3. **Claude cost-logging happens after Storage upload.** `scripts/precache-popular-routes.ts` logs `llm_calls` row for both Claude and TTS **inside** the try block, after `uploadAudio()`. If the upload throws, both costs go untracked even though both API calls already billed. During the 2nd smoke-batch attempt (MIME-rejection era), ~28 POIs incurred ~$0.27 untracked Claude spend before the script was stopped. TTS partially escaped this because `scripts/lib/tts/index.ts` `generateNarration()` auto-logs TTS via `logCost` independently (which is also why successful runs **double-count** TTS — once via the abstraction, once via precache's explicit log; raw sum is 2× actual). Fix: log costs immediately after each provider call returns, before downstream steps that can throw.
 
 **Logic:**
 1. Calls `get_corridor_pois` RPC → re-fetches full POI rows for `narration_cache`, `source_type`

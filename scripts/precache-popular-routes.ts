@@ -38,6 +38,10 @@
  *                         the per-POI generation loop. Use to remove known bad
  *                         selections (duplicates, venue children that surface in
  *                         corridor mode but aren't drive-by appropriate).
+ *   --audience <a>        Audience mode for voice lookup (family|kids|unfiltered|local).
+ *                         Indexes into voice_configs.mode, which is the audience
+ *                         taxonomy — distinct from --mode, which is the trip
+ *                         taxonomy (driving|hiking|city). Default: family.
  */
 
 import { readFileSync } from 'node:fs';
@@ -69,6 +73,8 @@ function loadEnv(): void {
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 type NarrationMode  = 'driving' | 'hiking' | 'city';
+type AudienceMode   = 'family' | 'kids' | 'unfiltered' | 'local';
+const AUDIENCES: readonly AudienceMode[] = ['family', 'kids', 'unfiltered', 'local'];
 type NarrationDepth = 'glance' | 'ride_along' | 'deep_dive';
 
 interface POIRow {
@@ -454,40 +460,38 @@ async function fetchTopCombos(limit: number): Promise<Array<{ mode: NarrationMod
   return combos.slice(0, limit);
 }
 
-// ── Fetch active voice per mode ────────────────────────────────────────────────
-// Mirrors server/routes/narration.js lookupVoiceConfig: surface query errors
-// rather than swallowing them. Caller validates that every required mode
-// produced a row (see assertVoicesForModes below).
-async function fetchActiveVoices(modes: NarrationMode[]): Promise<Map<NarrationMode, VoiceConfigRow>> {
+// ── Fetch active voice for the chosen audience ────────────────────────────────
+// voice_configs.mode is the AUDIENCE taxonomy (family/kids/unfiltered/local) —
+// distinct from --mode, which is the trip taxonomy (driving/hiking/city). A
+// single run uses one audience voice across all trip-mode × depth combos.
+//
+// Fails loud on missing/duplicate rows for the same reasons as
+// server/routes/narration.js lookupVoiceConfig — silent fallback would orphan
+// generated audio under the wrong voice_id.
+async function fetchActiveVoiceForAudience(audience: AudienceMode): Promise<VoiceConfigRow> {
   const { data, error } = await getAdminClient()
     .from('voice_configs')
     .select('mode, voice_id, provider, voice_settings')
-    .in('mode', modes)
+    .eq('mode', audience)
     .eq('is_active', true);
 
   if (error) {
     throw new Error(`[precache] voice_configs query failed: ${error.message}`);
   }
-
-  const map = new Map<NarrationMode, VoiceConfigRow>();
-  for (const row of (data ?? []) as VoiceConfigRow[]) map.set(row.mode as NarrationMode, row);
-  return map;
-}
-
-// Fail loud when any requested mode lacks an active voice_configs row.
-// Parity with server/routes/narration.js lookupVoiceConfig — silent fallback
-// would orphan generated audio under the wrong voice_id once audition commits
-// a real voice.
-function assertVoicesForModes(
-  voiceMap: Map<NarrationMode, VoiceConfigRow>,
-  modes: NarrationMode[],
-): void {
-  const missing = modes.filter(m => !voiceMap.has(m));
-  if (missing.length > 0) {
+  if (!data || data.length === 0) {
     throw new Error(
-      `[precache] no active voice configured for mode(s): ${missing.join(', ')} — run \`pnpm audition --commit\` to set one`,
+      `[precache] no active voice configured for audience '${audience}' — ` +
+      `run \`pnpm audition --commit --mode=${audience} --voice=<id>\` to set one`,
     );
   }
+  if (data.length > 1) {
+    // voice_configs has a partial unique index on (mode) WHERE is_active=true —
+    // hitting >1 means the index is missing or has drifted. Surface it.
+    throw new Error(
+      `[precache] voice_configs has ${data.length} active rows for audience '${audience}' — partial unique index likely missing`,
+    );
+  }
+  return data[0] as VoiceConfigRow;
 }
 
 // ── Main ───────────────────────────────────────────────────────────────────────
@@ -515,6 +519,13 @@ async function main() {
       ? excludeIdsRaw.split(',').map(s => s.trim()).filter(Boolean)
       : [],
   );
+  const audienceRaw = get('--audience');
+  const audience: AudienceMode = (() => {
+    if (audienceRaw === undefined) return 'family';  // default
+    if ((AUDIENCES as readonly string[]).includes(audienceRaw)) return audienceRaw as AudienceMode;
+    console.error(`[precache] invalid --audience '${audienceRaw}' — must be one of: ${AUDIENCES.join(', ')}`);
+    process.exit(1);
+  })();
 
   // Score bounds — accepted in both selection modes. Top-N pushes them into
   // the SQL query (server-side filter); corridor applies them post-fetch
@@ -650,17 +661,16 @@ async function main() {
     console.log(`\n[precache] Estimated upper-bound cost: $${estUsd.toFixed(4)} (${pois.length} POIs × ${combos.length} combos; assumes none are cache hits — actual will be lower)`);
   }
 
-  // 4. Active voice per mode — fail loud if any required mode is unseeded
-  const modes = [...new Set(combos.map(c => c.mode))];
-  const voiceMap = await fetchActiveVoices(modes);
-  assertVoicesForModes(voiceMap, modes);
+  // 4. Active voice for the chosen audience — fail loud if unseeded.
+  // One audience voice covers every trip-mode × depth combo in this run.
+  const voiceConfig = await fetchActiveVoiceForAudience(audience);
+  console.log(`[precache] Voice (${audience}): ${voiceConfig.provider}/${voiceConfig.voice_id}`);
 
   // 5. Process each POI × combo
   let generated = 0, skipped = 0, failed = 0;
 
   for (const poi of pois) {
     for (const { mode, depth } of combos) {
-      const voiceConfig = voiceMap.get(mode)!;
       const voiceId     = voiceConfig.voice_id;
       const cacheKey    = `${mode}-${depth}-${voiceId}`;
 
