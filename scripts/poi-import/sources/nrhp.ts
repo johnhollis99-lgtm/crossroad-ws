@@ -2,7 +2,11 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import chalk from 'chalk';
 import * as XLSX from 'xlsx';
-import { geocodeOne } from '../lib/geocode.js';
+import {
+  fetchNrhpCoordinates,
+  nrhpAssetDetailUrl,
+  type NrhpResult,
+} from '../lib/nrhp-arcgis.js';
 import { upsertPOIs } from '../lib/upsert.js';
 import { classifyPOI } from '../lib/classify-poi.js';
 import {
@@ -230,37 +234,6 @@ function parseNrhpXlsx(buf: Buffer): NrhpRow[] {
   return rows;
 }
 
-// ---- Geocoding strategy ----------------------------------------------------
-// Tier 1: full address + city + county + CA (most precise)
-// Tier 2: city + county + CA        (city-level approximation)
-// Tier 3: county + CA               (county centroid, last resort)
-
-async function resolveCoords(
-  row:      NrhpRow,
-  cacheDir: string,
-): Promise<{ lat: number; lng: number } | null> {
-  const countyStr = row.county ? `${row.county} County` : '';
-  const queries: string[] = [];
-
-  if (row.address) {
-    queries.push(
-      [row.address, row.city, countyStr, 'California, USA'].filter(Boolean).join(', '),
-    );
-  }
-  if (row.city) {
-    queries.push([row.city, countyStr, 'California, USA'].filter(Boolean).join(', '));
-  }
-  if (countyStr) {
-    queries.push(`${countyStr}, California, USA`);
-  }
-
-  for (const query of queries) {
-    const geo = await geocodeOne(query, { cacheDir, countrycodes: 'us' });
-    if (geo) return { lat: geo.lat, lng: geo.lng };
-  }
-  return null;
-}
-
 // ---- Main ------------------------------------------------------------------
 
 export async function runImport(opts: ImportOptions): Promise<ImportResult> {
@@ -313,50 +286,51 @@ export async function runImport(opts: ImportOptions): Promise<ImportResult> {
 
   result.fetched = caRows.length;
   console.log(chalk.cyan(`[nrhp] ${result.fetched} California listings`));
-  console.log(chalk.yellow(
-    '[nrhp] NPS spreadsheet has no coordinates — geocoding via Nominatim (results cached)',
+  console.log(chalk.cyan(
+    '[nrhp] resolving coordinates via NPS ArcGIS FeatureServer (authoritative)…',
   ));
 
-  // 3. Geocode + normalize ----------------------------------------------------
+  // 3. Fetch ArcGIS coords up-front for every refnum -------------------------
+
+  const refnumsToFetch = caRows.map((r) => r.refNum);
+  const arcgisResults: NrhpResult[] = await fetchNrhpCoordinates(refnumsToFetch, {
+    cacheDir: opts.cacheDir,
+    force:    opts.force,
+  });
+  const byRefnum = new Map(arcgisResults.map((r) => [r.refnum, r]));
+
+  let resolved      = 0;
+  let unparseable   = 0;
+  let outsideCa     = 0;
+  let bboxSkip      = 0;
+
+  // 4. Normalize each row using ArcGIS coords -------------------------------
 
   const pois: NormalizedPOI[] = [];
-  let geocodeHit  = 0;
-  let geocodeMiss = 0;
-  let bboxSkip    = 0;
-
-  for (let i = 0; i < caRows.length; i++) {
-    const row = caRows[i];
-    if (!row) continue;
-
+  for (const row of caRows) {
     if (opts.limit != null && pois.length >= opts.limit) break;
 
-    if ((i + 1) % 200 === 0) {
-      console.log(chalk.gray(
-        `[nrhp] progress: ${i + 1}/${result.fetched}` +
-        ` geocoded=${geocodeHit} missed=${geocodeMiss}`,
-      ));
-    }
-
-    let coords: { lat: number; lng: number } | null = null;
-    try {
-      coords = await resolveCoords(row, opts.cacheDir);
-    } catch (err) {
-      console.warn(chalk.yellow(`[nrhp] geocode error for "${row.name}": ${err}`));
-      result.errors++;
-    }
-
-    if (!coords) {
-      geocodeMiss++;
-      console.log(chalk.gray(`[nrhp] no coords — skip: ${row.refNum} ${row.name}`));
+    const arc = byRefnum.get(row.refNum);
+    if (!arc || arc.status !== 'resolved' || arc.lat == null || arc.lng == null) {
+      if (!arc || arc.status === 'unparseable') {
+        unparseable++;
+        console.log(chalk.gray(`[nrhp] unparseable — skip: ${row.refNum} ${row.name}`));
+      } else if (arc.status === 'outside_ca') {
+        outsideCa++;
+        console.log(chalk.yellow(
+          `[nrhp] outside CA bbox — skip: ${row.refNum} ${row.name} ` +
+          `at (${arc.lat ?? '?'}, ${arc.lng ?? '?'})`,
+        ));
+      }
       continue;
     }
-    geocodeHit++;
+    resolved++;
 
     if (opts.bbox) {
       const { minLat, maxLat, minLon, maxLon } = opts.bbox;
       if (
-        coords.lat < minLat || coords.lat > maxLat ||
-        coords.lng < minLon || coords.lng > maxLon
+        arc.lat < minLat || arc.lat > maxLat ||
+        arc.lng < minLon || arc.lng > maxLon
       ) {
         bboxSkip++;
         continue;
@@ -369,22 +343,24 @@ export async function runImport(opts: ImportOptions): Promise<ImportResult> {
     const poi: NormalizedPOI = {
       name:               row.name,
       category_slug:      slugFromType(resType),
-      lat:                coords.lat,
-      lng:                coords.lng,
+      lat:                arc.lat,
+      lng:                arc.lng,
       tags:               [tag],
       significance_score: nrhpSignificance(row.isNhl),
       trip_mode:          'all',
       source_type:        'nrhp',
       source_id:          row.refNum,
-      source_citation:    `https://npgallery.nps.gov/GetAsset/${encodeURIComponent(row.refNum)}`,
+      // GetAsset URLs are dead — use AssetDetail (Phase 4 fix).
+      source_citation:    nrhpAssetDetailUrl(row.refNum),
       confidence_score:   1.0,
       verified:           true,
       description:        buildDesc(
         resType, row.period, row.areas, row.city, row.county, row.dateListed,
       ),
+      venue_metadata:     arc.venueMetadata
+        ? (arc.venueMetadata as unknown as Record<string, unknown>)
+        : null,
     };
-    // No venue-detecting signals at the NRHP row level (no OSM tags / P31).
-    // classify-children.ts handles the parent-child step at backfill time.
     classifyPOI(poi);
     pois.push(poi);
   }
@@ -392,20 +368,34 @@ export async function runImport(opts: ImportOptions): Promise<ImportResult> {
   result.normalized = pois.length;
   console.log(chalk.cyan(
     `[nrhp] ${result.normalized} normalized` +
-    ` | geocode: hit=${geocodeHit} miss=${geocodeMiss}` +
+    ` | arcgis: resolved=${resolved} unparseable=${unparseable} outside_ca=${outsideCa}` +
     (bboxSkip ? ` bbox-skip=${bboxSkip}` : ''),
   ));
 
-  // 4. Upsert ----------------------------------------------------------------
+  // 5. Sample log — confirm shape matches Phase 4's pattern -----------------
+
+  if (pois.length > 0) {
+    console.log(chalk.gray('[nrhp] sample (first 5):'));
+    for (const p of pois.slice(0, 5)) {
+      console.log(chalk.gray(
+        `  • ${p.source_id} ${p.name} → (${p.lat.toFixed(5)}, ${p.lng.toFixed(5)}) ` +
+        `layer=${(p.venue_metadata as Record<string, unknown> | null)?.['nrhp_layer'] ?? '?'} ` +
+        `bnd=${(p.venue_metadata as Record<string, unknown> | null)?.['nrhp_bnd_type'] ?? '?'} ` +
+        `accu=${(p.venue_metadata as Record<string, unknown> | null)?.['nrhp_src_accu'] ?? '?'}`,
+      ));
+    }
+  }
+
+  // 6. Upsert ----------------------------------------------------------------
 
   const outcome    = await upsertPOIs(pois, { dryRun: opts.dryRun });
   result.inserted  = outcome.inserted;
   result.updated   = outcome.updated;
-  result.skipped   = geocodeMiss + bboxSkip + outcome.skipped;
+  result.skipped   = unparseable + outsideCa + bboxSkip + outcome.skipped;
   result.errors   += outcome.errors;
   result.durationMs = Date.now() - start;
 
-  // 5. Summary JSON ----------------------------------------------------------
+  // 7. Summary JSON ----------------------------------------------------------
 
   const ts          = new Date().toISOString().replace(/[:.]/g, '-');
   const summaryPath = path.join(opts.cacheDir, `nrhp-${ts}.json`);
@@ -413,7 +403,7 @@ export async function runImport(opts: ImportOptions): Promise<ImportResult> {
     timestamp:    new Date().toISOString(),
     sourceUrl:    xlsxUrl,
     caListings:   result.fetched,
-    geocode:      { hit: geocodeHit, miss: geocodeMiss, bboxSkip },
+    arcgis:       { resolved, unparseable, outside_ca: outsideCa, bboxSkip },
     pois: {
       normalized: result.normalized,
       inserted:   result.inserted,

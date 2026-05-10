@@ -41,6 +41,7 @@ export interface NormalizedPOI {
   confidence_score: number;
   verified: boolean;
   description?: string | null;
+  venue_metadata?: Record<string, unknown> | null;
 }
 
 export interface ImportOptions {

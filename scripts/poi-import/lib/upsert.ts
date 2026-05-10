@@ -19,6 +19,7 @@ const COLS = [
   'name', 'category_id', 'location', 'tags', 'significance_score',
   'trip_mode', 'source_type', 'source_id', 'source_citation',
   'confidence_score', 'verified', 'description', 'imported_at',
+  'venue_metadata',
 ] as const;
 
 const N_COLS = COLS.length;
@@ -38,13 +39,24 @@ function buildBatchSql(nRows: number): string {
     const base = rowIdx * N_COLS;
     const params = COLS.map((col, colIdx) => {
       const p = `$${base + colIdx + 1}`;
-      return col === 'location' ? `ST_GeogFromText(${p})` : p;
+      if (col === 'location') return `ST_GeogFromText(${p})`;
+      if (col === 'venue_metadata') return `${p}::jsonb`;
+      return p;
     });
     return `(${params.join(', ')})`;
   });
 
+  // Don't clobber an existing venue_metadata on update — merge with EXCLUDED.
+  // The importer only sets keys it owns (e.g. nrhp_*) so a sibling source
+  // that wrote venue_metadata.wikidata stays intact.
   const updateCols = COLS.filter(c => c !== 'source_type' && c !== 'source_id');
-  const updateSet = updateCols.map(c => `${c} = EXCLUDED.${c}`).join(', ');
+  const updateSet = updateCols
+    .map(c =>
+      c === 'venue_metadata'
+        ? `${c} = COALESCE(pois.${c}, '{}'::jsonb) || COALESCE(EXCLUDED.${c}, '{}'::jsonb)`
+        : `${c} = EXCLUDED.${c}`,
+    )
+    .join(', ');
 
   return `
     INSERT INTO pois (${COLS.join(', ')})
@@ -68,6 +80,7 @@ interface DbRow {
   verified: boolean;
   description: string | null;
   imported_at: string;
+  venue_metadata: string | null;
 }
 
 function rowToParams(r: DbRow): unknown[] {
@@ -75,6 +88,7 @@ function rowToParams(r: DbRow): unknown[] {
     r.name, r.category_id, r.location, r.tags, r.significance_score,
     r.trip_mode, r.source_type, r.source_id, r.source_citation,
     r.confidence_score, r.verified, r.description, r.imported_at,
+    r.venue_metadata,
   ];
 }
 
@@ -109,6 +123,7 @@ export async function upsertPOIs(
       verified: r.verified,
       description: r.description ?? null,
       imported_at: new Date().toISOString(),
+      venue_metadata: r.venue_metadata ? JSON.stringify(r.venue_metadata) : null,
     });
   }
 
