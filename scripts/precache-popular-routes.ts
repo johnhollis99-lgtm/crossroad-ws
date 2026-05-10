@@ -311,6 +311,9 @@ async function fetchTopCombos(limit: number): Promise<Array<{ mode: NarrationMod
 }
 
 // ── Fetch active voice per mode ────────────────────────────────────────────────
+// Mirrors server/routes/narration.js lookupVoiceConfig: surface query errors
+// rather than swallowing them. Caller validates that every required mode
+// produced a row (see assertVoicesForModes below).
 async function fetchActiveVoices(modes: NarrationMode[]): Promise<Map<NarrationMode, VoiceConfigRow>> {
   const { data, error } = await getAdminClient()
     .from('voice_configs')
@@ -318,10 +321,29 @@ async function fetchActiveVoices(modes: NarrationMode[]): Promise<Map<NarrationM
     .in('mode', modes)
     .eq('is_active', true);
 
+  if (error) {
+    throw new Error(`[precache] voice_configs query failed: ${error.message}`);
+  }
+
   const map = new Map<NarrationMode, VoiceConfigRow>();
-  if (error || !data) return map;
-  for (const row of data as VoiceConfigRow[]) map.set(row.mode as NarrationMode, row);
+  for (const row of (data ?? []) as VoiceConfigRow[]) map.set(row.mode as NarrationMode, row);
   return map;
+}
+
+// Fail loud when any requested mode lacks an active voice_configs row.
+// Parity with server/routes/narration.js lookupVoiceConfig — silent fallback
+// would orphan generated audio under the wrong voice_id once audition commits
+// a real voice.
+function assertVoicesForModes(
+  voiceMap: Map<NarrationMode, VoiceConfigRow>,
+  modes: NarrationMode[],
+): void {
+  const missing = modes.filter(m => !voiceMap.has(m));
+  if (missing.length > 0) {
+    throw new Error(
+      `[precache] no active voice configured for mode(s): ${missing.join(', ')} — run \`pnpm audition --commit\` to set one`,
+    );
+  }
 }
 
 // ── Main ───────────────────────────────────────────────────────────────────────
@@ -376,19 +398,17 @@ async function main() {
   if (depthFilter) combos = combos.filter(c => c.depth === depthFilter);
   console.log('[precache] Mode×depth combos:', combos.map(c => `${c.mode}/${c.depth}`).join(', '));
 
-  // 3. Active voice per mode
+  // 3. Active voice per mode — fail loud if any required mode is unseeded
   const modes = [...new Set(combos.map(c => c.mode))];
   const voiceMap = await fetchActiveVoices(modes);
-  const defaultVoice: VoiceConfigRow = {
-    mode: 'driving', voice_id: 'en-US-Chirp3-HD-Aoede', provider: 'google', voice_settings: null,
-  };
+  assertVoicesForModes(voiceMap, modes);
 
   // 4. Process each POI × combo
   let generated = 0, skipped = 0, failed = 0;
 
   for (const poi of pois) {
     for (const { mode, depth } of combos) {
-      const voiceConfig = voiceMap.get(mode) ?? defaultVoice;
+      const voiceConfig = voiceMap.get(mode)!;
       const voiceId     = voiceConfig.voice_id;
       const cacheKey    = `${mode}-${depth}-${voiceId}`;
 

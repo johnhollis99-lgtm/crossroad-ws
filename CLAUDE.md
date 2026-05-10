@@ -154,6 +154,37 @@ On error at steps 2-5: UPDATE `status='failed'`, rethrow. Do NOT delete Storage 
 **New server dep:** `@google-cloud/text-to-speech: ^5.3.0` — run `npm install` in `server/`.
 **New env vars for server:** `ANTHROPIC_API_KEY`, `GOOGLE_APPLICATION_CREDENTIALS` (added to `server/.env.example`).
 
+## Narration prompt construction — current vs. planned (recon 2026-05-10)
+
+**Two parallel implementations exist; only the simpler one is wired to production.**
+
+### Wired (production today)
+`server/routes/narration.js` calls a generic ~10-line inline prompt at `generateNarrationText()` ([narration.js:66-114](server/routes/narration.js#L66-L114)). No narrator persona, no `audience_mode` awareness. Same for `scripts/precache-popular-routes.ts` ([precache-popular-routes.ts:103-138](scripts/precache-popular-routes.ts#L103-L138)) — duplicated copy of the same prompt. Mode/depth axes affect length (`DEPTH_CFG`) and Storage path only; they do not change tone.
+
+### Unwired (richer engine, dead in production)
+`server/narration-engine.js` is a composable narrator-aware engine: `base_prompt(narrator)` + `depth_modifier(depth)` + `context_injection(trip_context, history, narrator, corridor_mode)` + JSON `OUTPUT_FORMAT`. Reads narrator persona from `narrators` table. Exports `generateNarration({poi, narrator, depth, trip_context, narration_history, corridor_mode})` and `updateNarrationHistory(history, newEntry)`. Audience-mode-scaled history injection: kids→count only, family→theme list, local/unfiltered→full callbacks + running gags. Depth ranges baked in: glance 15-30s / ride_along 45-90s / deep_dive 120-240s.
+
+**No callers reference it** (`grep narration-engine` matches only the route's own comment + this file).
+
+### Why it's not wired — `server/lib/llm.js` is xAI/Grok, not Claude
+`narration-engine.js` calls `callLLM` from `./lib/llm`, which posts to `https://api.x.ai/v1/chat/completions` with model `grok-2-latest` and `response_format: {type: 'json_object'}`. Project has been migrating off xAI (see Q&A `askQuestion` stub note in useTTS.ts section). Calling the engine's exported `generateNarration()` from the route would fire xAI, double-spend, and drop off the `provider='anthropic'` audit trail in `llm_calls`. Engine must be invoked for **prompt construction only** — never its LLM call.
+
+### Integration plan (when wiring it up)
+Approach: **adapter shim, not pure swap.**
+1. Add `buildNarrationPrompts({poi, narrator, depth, trip_context, narration_history, corridor_mode})` export to `narration-engine.js`. Returns `{systemPrompt, userPrompt, maxTokens}` — no LLM call. Existing `generateNarration()` export stays untouched (still xAI-bound, still uncalled).
+2. In `server/routes/narration.js`:
+   - Module-level narrator cache keyed by `audience_mode` (4 rows, never change in a server lifetime). Lookup query: `SELECT slug, system_prompt_fragment, tone_keywords, content_guardrails, audience_mode FROM narrators WHERE audience_mode = $1 AND is_active = true AND is_preset = true LIMIT 1`. Fail-loud on miss (mirrors `lookupVoiceConfig`).
+   - Per-POI fetch: `SELECT description, significance_score FROM pois WHERE id = $1`. Optional context — engine accepts missing.
+   - Synthesize neutral `trip_context` stub (route is stateless re: trip).
+   - Call `buildNarrationPrompts` → POST to Anthropic with engine-built system + user prompts (Claude, same retry logic, same `claude-sonnet-4-6` model).
+   - Parse JSON response (engine's `OUTPUT_FORMAT` demands JSON), extract `.narration`. Inline an `extractJSON()` helper (see `server/lib/llm.js:4-7` for the markdown-fence stripper pattern).
+   - Bump `PROMPT_VERSION` 1 → 2 so post-rewire `narration_audio` rows are distinguishable.
+   - Delete the generic prompt path entirely (no flag-gate — there's no caller that needs it).
+3. **trip_context wart:** engine's `context_injection` always emits a trip-progress sentence ("Starting the X trip" or "X/Y stories told"). For precache the route doesn't know what trip will play the audio. Mitigation: add a `precache_mode: true` flag in `context_injection` that suppresses the trip-progress sentence — 6-line engine change, contained, gives clean output. (Alternatives: pass neutral stub and accept "Starting the road trip trip — this is the opening narration" wart, or `route_summary: ''`.)
+4. **Out of scope:** TTS abstraction, voice_configs schema, narration_audio schema, precache `--top-n` flag, tests (none exist for the route — note but don't add).
+
+Audience guardrails are **all four modes seeded and engine-ready** in `narrators.content_guardrails` — Family, Kids ("Strict. No violence, death, or disturbing content"), Unfiltered (18+ age-gate), Local. No tech-debt flag for missing Kids.
+
 ## Narrator preset UUIDs (hardcoded + seeded)
 
 ```
@@ -494,7 +525,7 @@ ANTHROPIC_API_KEY=<key>                                  # used by precache scri
 DATABASE_URL=postgresql://postgres:<password>@db.<project-ref>.supabase.co:5432/postgres  # direct connection — NOT the pooler. URL-encode special chars in password (?→%3F)
 ```
 
-Also add `ANTHROPIC_API_KEY` and `GOOGLE_APPLICATION_CREDENTIALS` to `server/.env` — the narration generation route needs both.
+**Root `.env` is the single source of truth — do NOT create `server/.env`.** `server/index.js` calls `require('dotenv').config()` which resolves from `process.cwd()`, so the server must be launched from the project root: `node server/index.js` (NOT `cd server && npm start`). `cd server && npm install` is still fine — only the runtime invocation cares about cwd. `server/.env.example` is kept as a documentation artifact for the keys the server reads; `server/.env` itself remains in `.gitignore` defensively in case anyone ever creates one.
 
 ### Running the integration test
 ```
@@ -600,8 +631,8 @@ Verification script: `scripts/verify-migrations.mjs` (66/66 checks passed on 000
 **Remaining pre-flight before narration works end-to-end:**
 - `GOOGLE_APPLICATION_CREDENTIALS` is set and working in root `.env` ✓
 - `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` aliases set in root `.env` ✓
-- Add `ANTHROPIC_API_KEY` to root `.env` and `server/.env`
-- Run `cd server && npm install` to get `@google-cloud/text-to-speech`
+- Add `ANTHROPIC_API_KEY` to root `.env` (single source of truth — server reads from root .env via dotenv when launched from project root)
+- Run `cd server && npm install` to get `@google-cloud/text-to-speech` — install is cwd-agnostic; runtime is not. Launch the server from project root: `node server/index.js`
 - Run `pnpm audition --mode=<mode>` for all 4 modes → listen to output → run `pnpm audition --commit` for each
 - After 4 commits: voice_configs has one active row per mode → Phase 7 (lazy cache population) is unblocked
 - After picks confirmed: wire voice_configs lookup into `generateNarration()` in `scripts/lib/tts/index.ts`
