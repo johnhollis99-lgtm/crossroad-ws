@@ -312,21 +312,29 @@ drives) — separate concerns despite the name overlap.
 
 ---
 
-### 5.30 `corridors` free-form enum-like columns (originally 5.22)
+### 5.30 — corridors.region_type / editorial_status: no CHECK enforcement
 
 > Renumbered from the original §5 catalog's 5.22 because Prompt 08
 > assigned 5.22 to the highway_routes RLS fix (canonical 5.22 in this
 > file). See 5.22 above.
 
 `corridors.region_type text DEFAULT 'rural'` and `corridors.editorial_status
-text DEFAULT 'draft'` have defaults that strongly imply an enumerated
-value space, but no CHECK constraints enforce it.
+text DEFAULT 'draft'` had defaults that strongly implied an enumerated
+value space, but no CHECK constraints enforced it.
 
-**Posture:** add CHECKs once the value space is known.
+**Status:** Resolved 2026-05-11 via `supabase/migrations/20260511000002_corridors_enum_checks.sql`.
 
-**Action:** `SELECT DISTINCT region_type, editorial_status FROM corridors`
-(6 rows, instant), enumerate, write a one-line migration adding CHECK
-constraints. Low priority but easy.
+**Resolution:** Two CHECK constraints, single atomic migration.
+- `corridors_region_type_check`: `('geological', 'desert', 'suburban', 'alpine', 'mountain_pass', 'rural')` — 5 observed live values + 'rural' (schema default, zero live rows).
+- `corridors_editorial_status_check`: `('draft', 'verified')` — 'verified' is sole observed value (6/6), 'draft' is schema default; mirrors `pois.editorial_status` vocabulary used in RPC publication filters.
+
+**Judgment calls disclosed:**
+- Included 'rural' in region_type CHECK to avoid the default-rejected-by-its-own-CHECK footgun. 5.17 sidestepped this because 'point' was already in live data; 5.30 had aspirational defaults with zero live rows.
+- Held editorial_status to 2 values rather than speculatively adding 'archived' / 'published'. Principle: `corridors.editorial_status` and `pois.editorial_status` are parallel columns sharing a vocabulary; they expand together via paired migration, not unilaterally.
+
+**Sub-pattern established:** When one drift entry covers multiple CHECKs on a single table, use a plural `_<table>_enum_checks.sql` filename and combine constraints in one BEGIN/COMMIT block for atomic rollback. (5.17 was singular: one column → `_<table>_<column>_check.sql`. 5.30 extends the convention for the multi-column case.)
+
+**Schema prefix follow-up:** Resolved-no-action 2026-05-11. Convention codified in CLAUDE.md "Migration conventions" sub-section. Confirmed no drift introduced this session — 5.17 was already `public.`-qualified, and this session's migrations (5.30 / 5.16) matched the established pattern. The 7 most-recent migrations (contiguous from 2026-05-10) all use `public.` qualification; the bare-names era is legacy and frozen.
 
 ---
 
