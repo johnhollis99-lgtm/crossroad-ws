@@ -40,6 +40,31 @@ hiking.tsx → filters.tsx (mode='hiking') → trail.tsx
 
 **Drive screen safety:** No primary info as readable text while driving. "End trip" always visible and oversized. No nested menus on Drive.
 
+**Dimensional model (the canonical "mode" disambiguation):**
+
+"Mode" is overloaded in this codebase. Two distinct axes both use the
+column name `mode`: audience mode (personality) on `voice_configs`, and
+trip mode (driving/hiking/city) on `narration_audio`. In prose, always
+use `audience_mode` or `trip_mode` explicitly. The literal column
+references self-qualify by the table they sit on, so the columns
+themselves don't need renaming.
+
+| Column | Semantic | Value space |
+|---|---|---|
+| `voice_configs.mode` | audience mode | family / kids / unfiltered / local |
+| `narration_audio.mode` | trip mode | driving / hiking / city |
+| `narration_audio.narrator_slug` | voice id | per-voice slug |
+| `narration_audio.depth` | depth | glance / ride_along / deep_dive |
+| `trips` | no mode column today | depth + category_filter only |
+
+Operational notes:
+- `voice_configs.mode` enforces "one active row per audience mode" via the partial unique index `(mode) WHERE is_active = true`.
+- `narration_audio.mode` is enforced by CHECK on `('driving','hiking','city')`. The catalog's planned 4th value `venue_tour` requires a separate CHECK extension.
+- `user_preferences.default_audience_mode` shares the audience-mode value space and CHECK constraint.
+- Cache key shape: `{poi_id}-{trip_mode}-{depth}-{narrator_slug}.opus`. Audience mode is collapsed into `narrator_slug` via the `voice_configs` lookup — there is exactly one active voice per audience mode, so the voice identifies the audience implicitly.
+- `narration_audio.narrator_slug` is the voice-id column. Rename to `voice_id` is coordinated work and not committed; until then, every reader/writer uses `narrator_slug`.
+- (Cleanup of `trips.narrator_id` / `user_narrator_id` deferred — see migration backlog. Per drift catalog 5.19a, `narrators` and `user_narrators` are NOT retired.)
+
 ## Screen pages (primary flow)
 
 User mental model / naming convention used in conversation:
@@ -74,12 +99,12 @@ User mental model / naming convention used in conversation:
 - **Back button** — top-left map overlay, inside `overlayTL` row before the narrator avatar chip. Circular dark button `←`. Shows confirmation alert before navigating back to customize.
 - **Sheet snap points** — two states only: `peek` (96px) and `expanded` (82% screen height). `default === expanded` so the hook naturally collapses to two snaps. Sheet starts expanded.
 - **Peek state** — shows only: play/pause + skip forward + End Trip. Everything else hidden, map visible above.
-- **Expanded state** — single ScrollView containing: now-playing card, feedback/rating card, ⏮/▶/⏭ controls, up next queue (5 items, sorted by arc-length along route), story corridor slider. Below the scroll (pinned): mode segment + action row.
+- **Expanded state** — single ScrollView containing: now-playing card, feedback/rating card, ⏮/▶/⏭ controls, up next queue (5 items, sorted by arc-length along route), story corridor slider. Below the scroll (pinned): trip-mode segment + action row.
 - **Story corridor slider** — `PoiSlider` component (same as customize.tsx) in the expanded sheet. State: `poiDist` initialized from `filters.corridorMi`. Changes trigger POI re-fetch.
 - **Up next queue** — sorted by `arcLengthAlongRoute()` (projected arc-distance from route start). Display distance (`distanceMi`) comes from `liveQueue` — haversine from user's GPS position once available, arc-length from route start before GPS is acquired.
 - **Top-right counter** — shows `pois.length` (total POIs loaded along route), falling back to `routePreview.storyCount` before POIs load. Label is "stories" / "story".
 - **Distance field trap** — `get_corridor_pois` RPC returns `dist_from_route_m` (perpendicular distance to route line), NOT `distance_m`. Never sort or display distances using `p.distance_m` from corridor queries — it will always be `undefined`. Use `arcLengthAlongRoute()` for sequential ordering and `haversineM()` from user position for live display.
-- **Mode segmented control** — `[🚗 Driving | 🥾 Hiking]` pinned above action row, outside the ScrollView. Active side fills with `ACCENT_LIGHT`. Toggling hiking re-fetches POIs in `'hiking'` mode and auto-switches map to Topo. Switching back restores the previous map style (`prevStyleRef`).
+- **Trip-mode segmented control** — `[🚗 Driving | 🥾 Hiking]` pinned above action row, outside the ScrollView. Active side fills with `ACCENT_LIGHT`. Toggling hiking re-fetches POIs in `'hiking'` mode and auto-switches map to Topo. Switching back restores the previous map style (`prevStyleRef`).
 - **Recenter button** — `CompassIcon` component (teal north triangle + muted south triangle + "N" label). Positioned at `bottom: DRIVE_SNAPS.peek + 64` (above the MapStylePicker pill at `+16`) to avoid overlap.
 - **MapStylePicker** — `buttonBottom: DRIVE_SNAPS.peek + 16`, `buttonRight: 12`.
 - **POI callout card** — tapping any POI marker shows a floating overlay card at `bottom: DRIVE_SNAPS.peek + 20`. Displays POI name, category (teal uppercase), and tags as chips (underscores → spaces, up to 5). Tapping the same marker again or pressing `×` dismisses it. State: `selectedPoi: POI | null`. Markers use `tracksViewChanges={false}` for performance.
@@ -90,7 +115,7 @@ User mental model / naming convention used in conversation:
 
 ## Supabase schema (key tables)
 
-- `pois` — geography(Point,4326), category_id FK, tags[], significance_score numeric(4,2) **0-100 integer-point scale** (importers write 0-1 fractions; recompute-significance.ts normalises to 0-100), trip_mode('driving'|'hiking'|'city'|'all'). Provenance columns (added 20260504000005): source_type CHECK ∈ {osm,wikidata,nrhp,state_landmark,gnis,narrative_extracted,editorial,user_contributed}, source_id, source_citation, confidence_score(0–1, default 1.0), verified bool, additional_sources text[], merged_into uuid (self-FK, set when row is a merged duplicate), imported_at. Partial UNIQUE(source_type, source_id) WHERE merged_into IS NULL. `significance_breakdown jsonb` (added 20260504000006): `{ source_base, cross_source, pageviews, route_adjacency, total }` in integer points — populated by recompute-significance.ts. `narration_cache jsonb` (added 20260504000014; populated by server after generation): `{ "{mode}-{depth}-{voice_id}": "{audio_url}" }` — O(1) lookup on the same row as the POI, checked before the narration_audio table. Venue columns (added 20260504000016): `parent_poi_id uuid` (self-FK to parent venue), `is_venue bool`, `venue_polygon geography(Polygon, 4326)`, `venue_type text` (14-value CHECK enum), `venue_metadata jsonb`. Cross-column constraints prevent venue/child overlap.
+- `pois` — geography(Point,4326), category_id FK, tags[], significance_score numeric(4,2) **0-100 integer-point scale** (importers write 0-1 fractions; recompute-significance.ts normalises to 0-100), trip_mode('driving'|'hiking'|'city'|'all'). Provenance columns (added 20260504000005): source_type CHECK ∈ {osm,wikidata,nrhp,state_landmark,gnis,narrative_extracted,editorial,user_contributed}, source_id, source_citation, confidence_score(0–1, default 1.0), verified bool, additional_sources text[], merged_into uuid (self-FK, set when row is a merged duplicate), imported_at. Partial UNIQUE(source_type, source_id) WHERE merged_into IS NULL. `significance_breakdown jsonb` (added 20260504000006): `{ source_base, cross_source, pageviews, route_adjacency, total }` in integer points — populated by recompute-significance.ts. `narration_cache jsonb` (added 20260504000014; populated by server after generation): `{ "{trip_mode}-{depth}-{narrator_slug}": "{audio_url}" }` — O(1) lookup on the same row as the POI, checked before the narration_audio table. Venue columns (added 20260504000016): `parent_poi_id uuid` (self-FK to parent venue), `is_venue bool`, `venue_polygon geography(Polygon, 4326)`, `venue_type text` (14-value CHECK enum), `venue_metadata jsonb`. Cross-column constraints prevent venue/child overlap.
 - `poi_categories` — id, slug, display_name, sort_order, relevant_driving bool
 - `narrators` — preset narrator rows; 4 seeded with fixed UUIDs `00000000-0000-0000-0000-00000000000{1-4}`
 - `user_narrators` — user-created narrators; slug GENERATED as `'user-' || id`
@@ -104,14 +129,14 @@ Key RPCs: `get_corridor_pois`, `get_nearby_pois(... , p_include_children boolean
 
 ## Narration cache key
 
-Always: `{poi_id}-{mode}-{depth}-{voice_id}.opus` (Storage path) / `{mode}-{depth}-{voice_id}` (JSON key in pois.narration_cache)
+Always: `{poi_id}-{trip_mode}-{depth}-{narrator_slug}.opus` (Storage path) / `{trip_mode}-{depth}-{narrator_slug}` (JSON key in pois.narration_cache)
 
 ## hooks/useTTS.ts — architecture (rewritten this session)
 
 **Options:** `{ mode: NarrationMode, depth: NarrationDepth }` — no longer takes `voice`, `guideName`, or `tone`.
 
 **Lookup chain (fastest → authoritative):**
-1. `poi.narration_cache["{mode}-{depth}-{voice_id}"]` — O(1) if POI row includes this field
+1. `poi.narration_cache["{trip_mode}-{depth}-{narrator_slug}"]` — O(1) if POI row includes this field
 2. `narration_audio` table query by `(poi_id, narrator_slug=voice_id, depth, status='ready')`
 3. `POST /api/narration/generate` — only when `generateIfMissing=true`
 
@@ -142,7 +167,7 @@ Write ordering (atomic, status-tracked):
 1. INSERT `narration_audio` with `status='pending'`, `audio_url=NULL` → get `pendingId`
 2. Generate Claude text → fire-and-forget log `llm_calls` (`call_type='claude'`, `related_id=pendingId`)
 3. Synthesize Google TTS → fire-and-forget log `llm_calls` (`call_type='tts'`, `related_id=pendingId`)
-4. Upload Opus to Storage at `{poi_id}/{mode}/{depth}/{voice_id}.opus`
+4. Upload Opus to Storage at `{poi_id}/{trip_mode}/{depth}/{narrator_slug}.opus`
 5. UPDATE `narration_audio` SET `status='ready'`, `audio_url`, `duration_ms`, `cost_usd` WHERE `id=pendingId`
 6. Fire-and-forget: patch `pois.narration_cache`
 7. Returns `{ audio_url }`
@@ -159,7 +184,7 @@ On error at steps 2-5: UPDATE `status='failed'`, rethrow. Do NOT delete Storage 
 **Two parallel implementations exist; only the simpler one is wired to production.**
 
 ### Wired (production today)
-`server/routes/narration.js` calls a generic ~10-line inline prompt at `generateNarrationText()` ([narration.js:66-114](server/routes/narration.js#L66-L114)). No narrator persona, no `audience_mode` awareness. Same for `scripts/precache-popular-routes.ts` ([precache-popular-routes.ts:103-138](scripts/precache-popular-routes.ts#L103-L138)) — duplicated copy of the same prompt. Mode/depth axes affect length (`DEPTH_CFG`) and Storage path only; they do not change tone.
+`server/routes/narration.js` calls a generic ~10-line inline prompt at `generateNarrationText()` ([narration.js:66-114](server/routes/narration.js#L66-L114)). No narrator persona, no `audience_mode` awareness. Same for `scripts/precache-popular-routes.ts` ([precache-popular-routes.ts:103-138](scripts/precache-popular-routes.ts#L103-L138)) — duplicated copy of the same prompt. Trip-mode/depth axes affect length (`DEPTH_CFG`) and Storage path only; they do not change tone.
 
 ### Unwired (richer engine, dead in production)
 `server/narration-engine.js` is a composable narrator-aware engine: `base_prompt(narrator)` + `depth_modifier(depth)` + `context_injection(trip_context, history, narrator, corridor_mode)` + JSON `OUTPUT_FORMAT`. Reads narrator persona from `narrators` table. Exports `generateNarration({poi, narrator, depth, trip_context, narration_history, corridor_mode})` and `updateNarrationHistory(history, newEntry)`. Audience-mode-scaled history injection: kids→count only, family→theme list, local/unfiltered→full callbacks + running gags. Depth ranges baked in: glance 15-30s / ride_along 45-90s / deep_dive 120-240s.
@@ -183,7 +208,7 @@ Approach: **adapter shim, not pure swap.**
 3. **trip_context wart:** engine's `context_injection` always emits a trip-progress sentence ("Starting the X trip" or "X/Y stories told"). For precache the route doesn't know what trip will play the audio. Mitigation: add a `precache_mode: true` flag in `context_injection` that suppresses the trip-progress sentence — 6-line engine change, contained, gives clean output. (Alternatives: pass neutral stub and accept "Starting the road trip trip — this is the opening narration" wart, or `route_summary: ''`.)
 4. **Out of scope:** TTS abstraction, voice_configs schema, narration_audio schema, precache `--top-n` flag, tests (none exist for the route — note but don't add).
 
-Audience guardrails are **all four modes seeded and engine-ready** in `narrators.content_guardrails` — Family, Kids ("Strict. No violence, death, or disturbing content"), Unfiltered (18+ age-gate), Local. No tech-debt flag for missing Kids.
+Audience guardrails are **all four audience modes seeded and engine-ready** in `narrators.content_guardrails` — Family, Kids ("Strict. No violence, death, or disturbing content"), Unfiltered (18+ age-gate), Local. No tech-debt flag for missing Kids.
 
 ## Narrator preset UUIDs (hardcoded + seeded)
 
@@ -536,7 +561,7 @@ Skips gracefully if `GOOGLE_APPLICATION_CREDENTIALS` is not set. When credential
 
 ### voice_configs table (migration 20260504000012)
 - Columns: id, mode CHECK('family','kids','unfiltered','local'), provider, voice_id, voice_settings jsonb, display_name, description, is_active, version, created_at
-- Partial unique index: `idx_voice_configs_active_mode ON voice_configs(mode) WHERE is_active = true` — one active voice per mode at all times
+- Partial unique index: `idx_voice_configs_active_mode ON voice_configs(mode) WHERE is_active = true` — one active voice per audience mode at all times
 - RLS: service_role only
 - Audience modes: family (warm doc narrator), kids (Junior Explorer), unfiltered (Off the Leash deadpan), local (insider neighbor)
 
@@ -545,7 +570,7 @@ Skips gracefully if `GOOGLE_APPLICATION_CREDENTIALS` is not set. When credential
 Three tools exist. **Use `audition-voices.ts` for picking voices** (it integrates with the TTS abstraction + voice_configs table). `audition-family-realistic.ts` is a production-shape alternative for Family mode that runs hand-picked Chirp 3 HD voices through real narration paragraphs at two speaking rates and builds a blinded HTML comparison page (`scripts/voice-audition/audition-family-realistic.ts` → `scripts/audition-output/family-realistic/index.html`; idempotent on re-run). `run.ts` is the older HTML-based tool kept for reference.
 
 #### Primary: `scripts/audition-voices.ts`
-Single-file CLI run from `scripts/voice-audition/`. Uses `generateNarration()` with `voiceConfigOverride` (no voice_configs table required), logs to `llm_calls`, writes Opus to `scripts/audition-output/{mode}/{voice_id}.opus`.
+Single-file CLI run from `scripts/voice-audition/`. Uses `generateNarration()` with `voiceConfigOverride` (no voice_configs table required), logs to `llm_calls`, writes Opus to `scripts/audition-output/{audience_mode}/{voice_id}.opus`.
 
 New helper file: `scripts/lib/tts/supabase-admin.ts` — exports `getAdminClient()` for `--commit` writes.
 
@@ -571,7 +596,7 @@ pnpm audition --commit --mode=family --voice=en-US-Chirp3-HD-Aoede --rate=1.0 --
   # After listening: deactivates existing active row, inserts new voice_configs row
 ```
 
-Listen: OGG/Opus — Chrome or Firefox (not Safari). Output: `scripts/audition-output/{mode}/`.
+Listen: OGG/Opus — Chrome or Firefox (not Safari). Output: `scripts/audition-output/{audience_mode}/`.
 
 #### Legacy: `scripts/voice-audition/run.ts`
 Generates samples + builds `scripts/voice-audition/output/index.html` browser player. Calls Google TTS directly without TTS abstraction.
@@ -584,9 +609,9 @@ pnpm html            # rebuild index.html only
 
 ### Voice candidate shortlist (Step 3 — user has not yet picked)
 
-3 candidates per mode. Default speaking rates: family 1.0, kids 1.1, unfiltered 0.95, local 1.0.
+3 candidates per audience mode. Default speaking rates: family 1.0, kids 1.1, unfiltered 0.95, local 1.0.
 
-| Mode | Candidate voice_id | Reasoning |
+| Audience mode | Candidate voice_id | Reasoning |
 |------|--------------------|-----------|
 | family | `en-US-Chirp3-HD-Aoede` | Warm, clear; default HD voice used throughout TTS build — solid doc baseline |
 | family | `en-US-Chirp3-HD-Charon` | Male, measured; resonant rather than bright — authoritative without being stiff |
@@ -638,8 +663,8 @@ Verification script: `scripts/verify-migrations.mjs` (66/66 checks passed on 000
 - `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` aliases set in root `.env` ✓
 - Add `ANTHROPIC_API_KEY` to root `.env` (single source of truth — server reads from root .env via dotenv when launched from project root)
 - Run `cd server && npm install` to get `@google-cloud/text-to-speech` — install is cwd-agnostic; runtime is not. Launch the server from project root: `node server/index.js`
-- Run `pnpm audition --mode=<mode>` for all 4 modes → listen to output → run `pnpm audition --commit` for each
-- After 4 commits: voice_configs has one active row per mode → Phase 7 (lazy cache population) is unblocked
+- Run `pnpm audition --mode=<mode>` for all 4 audience modes → listen to output → run `pnpm audition --commit` for each
+- After 4 commits: voice_configs has one active row per audience mode → Phase 7 (lazy cache population) is unblocked
 - After picks confirmed: wire voice_configs lookup into `generateNarration()` in `scripts/lib/tts/index.ts`
 - Run precache: `cd scripts && npx tsx precache-popular-routes.ts --named-route pch-sf-la --dry-run`
 
@@ -670,7 +695,7 @@ One-time DB seeder (categories, POIs, corridors, badges). Uses Supabase Manageme
 
 ## Narration precache script (`scripts/precache-popular-routes.ts`)
 
-Standalone script (run with `npx tsx` from `scripts/`). Pre-generates narration audio for all eligible POIs along a route, covering the top (mode, depth) combos from the trips table.
+Standalone script (run with `npx tsx` from `scripts/`). Pre-generates narration audio for all eligible POIs along a route, covering the top (trip-mode, depth) combos from the trips table.
 
 ```
 cd scripts
@@ -723,8 +748,8 @@ Known noise in the >=70 set: Walk of Fame / Hollywood Walk of Fame duplicate (da
 **Logic:**
 1. Calls `get_corridor_pois` RPC → re-fetches full POI rows for `narration_cache`, `source_type`
 2. Skips `source_type = 'narrative_extracted'` (need user validation first)
-3. Queries `trips.depth` distribution → derives top mode×depth combos (default: driving + hiking × top 3 depths)
-4. Reads active voice per mode from `voice_configs`
+3. Queries `trips.depth` distribution → derives top trip-mode×depth combos (default: driving + hiking × top 3 depths)
+4. Reads active voice per audience mode from `voice_configs`
 5. For each POI × combo: checks `narration_cache` JSON → checks `narration_audio` table (status='ready') → generates if missing
 6. Generation: Claude text → Google TTS → Storage upload → `narration_audio` upsert (status='ready', mode set) → `narration_cache` patch → `llm_calls` log (2 rows: claude + tts)
 7. 500ms pause between generations to stay within API rate limits
@@ -743,7 +768,7 @@ npx tsx sweep-orphaned-narration.ts --dry-run  # preview only
 
 **Rules:**
 - `status='pending'` rows older than 1 hour: generation never completed; `audio_url` is NULL so no Storage object. DB row deleted only.
-- `status='failed'` rows older than 24 hours: may have a Storage object if upload succeeded but ready-update failed. Attempts Storage delete at `{poi_id}/{mode}/{depth}/{narrator_slug}.opus` (404 is ignored), then deletes DB row.
+- `status='failed'` rows older than 24 hours: may have a Storage object if upload succeeded but ready-update failed. Attempts Storage delete at `{poi_id}/{trip_mode}/{depth}/{narrator_slug}.opus` (404 is ignored), then deletes DB row.
 
 **Intended cadence:** hourly cron. Schedule via `crontab` or a task scheduler once the server is deployed.
 
