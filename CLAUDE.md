@@ -645,6 +645,24 @@ pnpm html            # rebuild index.html only
 | local | `en-US-Chirp3-HD-Sulafat` | Warm, casual inflection |
 | local | `en-US-Chirp3-HD-Schedar` | Natural; slightly more informal than Aoede |
 
+### Migration conventions
+
+- **Schema-qualified table names.** Use `public.<table>` in `ALTER TABLE` / DDL and `'public.<table>'::regclass` in verification casts. Established practice since `20260510000001_user_preferences_capture.sql`, which emitted DDL from Postgres's own `pg_get_*def` helpers (always schema-qualified). All migrations from 2026-05-10 forward follow this.
+- **Pre-2026-05-10 migrations use bare names** (`pois`, not `public.pois`). Applied and frozen; do not retroactively rewrite.
+- **Date prefix accuracy.** The `YYYYMMDD` portion of the filename must reflect the actual local-clock day of file creation. Verify against `date +%Y%m%d` before staging. (Precedent: 5.16/5.30/5.35 migrations were originally drafted with `20260512*` prefixes on 2026-05-11 and renamed pre-commit.)
+- **File-suffix vocabulary.** Operation-verb-at-end. Running list of suffixes established this session:
+  - `_check.sql` — single-column CHECK constraint add (precedent: 5.17 → `20260511000001_pois_poi_type_check.sql`)
+  - `_enum_checks.sql` — multiple CHECK constraints on one table in a single atomic migration (precedent: 5.30 → `20260511000002_corridors_enum_checks.sql`)
+  - `_drop.sql` — column drop (precedent: 5.16 → `20260511000003_pois_source_drop.sql`)
+  - `_comment.sql` — function-level COMMENT (precedent: 5.35 → `20260511000004_get_corridor_pois_comment.sql`)
+- **Naming-form patterns.**
+  - `<table>_<column>_<verb>.sql` — column-level ops
+  - `<table>_<scope>.sql` — table-level multi-column ops (e.g., `scope = enum_checks`)
+  - `<function_name>_<verb>.sql` — function-level ops
+  - Column-level COMMENT, if ever needed: `<table>_<column>_comment.sql`
+- **Destructive-op posture.** DROP statements use default RESTRICT (no CASCADE) so unexpected dependencies fail loudly at migration time rather than silently nuking dependents (precedent: 5.16).
+- **Migration body shape.** See recent resolved catalog entries (5.17, 5.30, 5.16, 5.35) for the canonical body: drift-catalog ref + rationale header, inline pre-flight summary, `BEGIN` / `COMMIT` wrapper, trailing verification query.
+
 ### Migration backlog status (updated 2026-05-11)
 
 **DB watermark: `20260511000001`** — all migrations through 20260511000001 applied. No migration files currently staged-but-not-applied.
