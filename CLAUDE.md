@@ -82,6 +82,8 @@ Operational notes:
 - `narration_audio.narrator_slug` is the voice-id column. Rename to `voice_id` is coordinated work and not committed; until then, every reader/writer uses `narrator_slug`.
 - (Cleanup of `trips.narrator_id` / `user_narrator_id` deferred — see migration backlog. Per drift catalog 5.19a, `narrators` and `user_narrators` are NOT retired.)
 
+**Mirror note:** This section is duplicated in SKILL.md for the chat-side Claude. Any edit here needs a parallel edit there.
+
 ## Screen pages (primary flow)
 
 User mental model / naming convention used in conversation:
@@ -137,7 +139,7 @@ User mental model / naming convention used in conversation:
 - `narrators` — preset narrator rows; 4 seeded with fixed UUIDs `00000000-0000-0000-0000-00000000000{1-4}`
 - `user_narrators` — user-created narrators; slug GENERATED as `'user-' || id`
 - `trips` — `id` uuid PK, `user_id` uuid FK→`auth.users` ON DELETE SET NULL, `route_id` text (free-form; no FK — see drift catalog 5.27), `route_name` text, `origin` text, `destination` text, `distance_mi` double, `duration_min` int, `narrator_id` uuid FK→`narrators` ON DELETE SET NULL, `user_narrator_id` uuid FK→`user_narrators` ON DELETE SET NULL, `narrator_name` text, `depth` text NOT NULL DEFAULT `'ride_along'` CHECK (`'glance'|'ride_along'|'deep_dive'`), `category_filter` text[] NOT NULL DEFAULT `'{}'`, `poi_distance_m` int NOT NULL DEFAULT 500, `status` text NOT NULL DEFAULT `'pending'` CHECK (`'pending'|'active'|'completed'|'abandoned'`), `started_at` timestamptz, `completed_at` timestamptz, `created_at` timestamptz NOT NULL DEFAULT `now()`. Indexes: `trips_user_id_idx`, `trips_status_idx`. No `mode` column (audience/trip-mode separation lives in code request params per the Dimensional model). Reconciled with live DB 2026-05-11.
-- `narration_audio` — poi_id, narrator_slug (= voice_id), depth, audio_url (nullable — NULL while pending), mode, status CHECK('pending','ready','failed') DEFAULT 'ready'. UNIQUE(poi_id, narrator_slug, depth). 30-day TTL. Added columns (migration 20260504000011): provider, character_count, duration_ms, cost_usd, prompt_version. Added (migration 20260504000013): status, mode, audio_url made nullable.
+- `narration_audio` — poi_id, narrator_slug (= voice_id), depth, audio_url (nullable — NULL while pending), mode, status CHECK('pending','ready','failed') DEFAULT 'ready'. UNIQUE(poi_id, narrator_slug, depth, mode) — widened from the original 3-column shape by migration 20260510000005 (Prompt 07). 30-day TTL. Added columns (migration 20260504000011): provider, character_count, duration_ms, cost_usd, prompt_version. Added (migration 20260504000013): status, mode, audio_url made nullable.
 - `user_contributions`, `user_badges`, `contribution_rewards` — contribution/points system
 - `user_recent_locations` — **PENDING MIGRATION** (SQL is in lib/supabase.ts as a comment)
 - `venue_classification_review` (added 20260504000016) — admin queue for venue candidates without polygons
@@ -673,7 +675,7 @@ Verification scripts: `scripts/verify-migrations.mjs` (66/66 checks passed on 00
 - 20260510000002 `user_preferences_autocreate` — `handle_new_user_preferences()` SECURITY DEFINER function + `on_auth_user_created_preferences` AFTER INSERT trigger on `auth.users` so future signups get a preferences row automatically (with `ON CONFLICT (user_id) DO NOTHING` for safety). Backfill INSERT for existing `auth.users` was a 0-row no-op (no users registered yet — `auth.users` count = 0). `SECURITY DEFINER` is required because the trigger runs as the inserting user, who has no INSERT privilege on `public.user_preferences` without the elevation.
 
 **Applied 2026-05-11 (corrected from "staged" — see drift catalog 5.32):**
-- 20260510000003 `narration_audio_index` — `CREATE INDEX idx_narration_audio_lookup ON narration_audio(poi_id, mode, depth, narrator_slug)`. Composite covers the read-path query "do I have audio for this POI in this trip-mode + depth + voice already?" The existing `na_unique` UNIQUE index (poi_id, narrator_slug, depth) covers write-time uniqueness but not mode-filtered SELECTs. Confirmed live via `pg_indexes`.
+- 20260510000003 `narration_audio_index` — `CREATE INDEX idx_narration_audio_lookup ON narration_audio(poi_id, mode, depth, narrator_slug)`. Composite covers the read-path query "do I have audio for this POI in this trip-mode + depth + voice already?" The existing `na_unique` UNIQUE index (poi_id, narrator_slug, depth) covers write-time uniqueness but not mode-filtered SELECTs. Confirmed live via `pg_indexes`. (Note: na_unique constraint was widened to 4-column on 2026-05-11 — see 20260510000005 entry below.)
 - 20260510000004 `llm_calls_index` — three b-tree indexes (`created_at DESC`, `(call_type, created_at DESC)`, `related_id WHERE NOT NULL`) plus a partial UNIQUE on `(related_id) WHERE call_type='tts' AND related_id IS NOT NULL`. The partial unique is the durable guard against the duplicate-TTS-logging regression. Confirmed live via `pg_indexes`: all 4 indexes present (`idx_llm_calls_created_at`, `idx_llm_calls_call_type_created_at`, `idx_llm_calls_related_id`, `idx_llm_calls_tts_unique`).
 - 20260511000001 `pois_poi_type_check` — adds `pois_poi_type_check` constraint locking `pois.poi_type` to `('point','area','viewpoint')`. Resolves drift catalog 5.17.
 
