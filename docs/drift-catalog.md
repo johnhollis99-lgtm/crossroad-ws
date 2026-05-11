@@ -462,6 +462,24 @@ needed.
 
 ---
 
+### 5.35 — `get_corridor_pois` function name overlaps with `corridors` table without consuming it
+
+**Status:** Resolved 2026-05-11 via `supabase/migrations/20260511000004_get_corridor_pois_comment.sql`.
+
+**Surfaced by:** the live-state strengthening finding inside 5.28's close — `corridors` is fully orphaned from the request graph, and the function whose name suggests it should be a consumer (`get_corridor_pois`) does not in fact consume the table. The name overlap is a misleading signal for future maintainers reading function definitions without grepping the body.
+
+**Resolution:** Added `COMMENT ON FUNCTION public.get_corridor_pois(text, double precision, text[], text)` clarifying the function's actual behavior (buffer search around a WKT route LineString) and explicitly disambiguating from `public.corridors`. The COMMENT is kept self-contained as function metadata; broader context on the orphaned table lives in 5.28.
+
+**Judgment calls disclosed:**
+- COMMENT does not cross-reference the drift catalog. Function metadata should answer "what does this do," not "what's the meta-context for why this comment exists." Catalog→COMMENT linkage flows from the entry side only.
+- COMMENT includes one WKT format hint on `route_geom` (the least self-documenting of the four params); other parameter names are sufficiently self-describing not to warrant inline docs.
+
+**Sub-pattern established:** Extends the migration-file suffix vocabulary with `_comment.sql` for function-level metadata operations. Running suffix vocabulary: `_check.sql` (5.17), `_enum_checks.sql` (5.30), `_drop.sql` (5.16), `_comment.sql` (5.35). Naming form: `<function_name>_comment.sql` for function metadata; future precedent for column-level metadata would be `<table>_<column>_comment.sql`.
+
+**Cross-reference:** 5.28 (corridors orphan finding).
+
+---
+
 ## Cross-cutting observation
 
 Five entries (5.18, 5.19, 5.24, 5.25, 5.26) shared the same root: out-of-band
