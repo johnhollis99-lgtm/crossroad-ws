@@ -291,6 +291,8 @@ constraint-backed — see drift 5.33. Applier:
 
 ### 5.28 `corridors` table content and intent
 
+**Status:** documented; no action needed.
+
 Holds 6 editorial named-drive corridors, all in eastern Sierra / Owens
 Valley / Tehachapi: Antelope Valley Aerospace Corridor, Carson Valley
 Approach, Long Valley Volcanic Zone, Mono Basin to Bridgeport Valley,
@@ -298,14 +300,16 @@ Southern Owens Valley, Tehachapi Mountains Transition.
 
 LA→Cambria, where the 37 cached `narration_audio` rows live, is **not**
 present. The cache doesn't depend on a `corridors` row to function;
-narrations are keyed by POI ID, not corridor.
+narrations are keyed by POI ID, not corridor. Zero app-side consumers;
+`get_corridor_pois` RPC does not consume this table despite the name
+overlap (it takes a `route_geom` WKT parameter, not a `corridors.id`).
 
 **Posture:** documented. Semantic is "editorial named drives," not "every
 route a user takes."
 
-**Action:** if editorial bundling on named corridors becomes a product
-feature, new corridors need actual LineString geometry (routing service
-or hand-traced). Not in v1 scope.
+**Future-feature note:** if editorial bundling on named corridors becomes
+a product feature, new corridors will need LineString geometry (routing
+service or hand-traced); tracked here for context only, not as open work.
 
 ---
 
