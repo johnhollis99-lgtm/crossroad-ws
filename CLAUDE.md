@@ -34,6 +34,21 @@ hiking.tsx → filters.tsx (mode='hiking') → trail.tsx
 - Food→food_drink, Music→local_culture, Weird→hidden_gems
 - Roadside→local_culture, Film→art, Science→geology
 
+**Aspirational poi_categories slugs:** Some `poi_categories` rows exist as
+narrative-extracted / editorial-only buckets that the bulk importers will never
+populate (no clean OSM/Wikidata signal). They get rows from the admin app
+review queue or from narrative-extraction, not from `osm.ts`/`wikidata.ts`/etc.
+Currently reserved: `legends`, `native_history`. Do NOT add OSM/Wikidata rules
+in `scripts/poi-import/lib/category-map.ts` for these — they would need a
+hand-tuned heuristic that's outside the scope of the importer pipeline.
+
+**Mobile category chips MUST be derived dynamically.** The customize/filters
+screens should query `poi_categories` filtered to slugs with `EXISTS (SELECT 1
+FROM pois p WHERE p.category_id = pc.id AND p.merged_into IS NULL)`. Hardcoding
+the full taxonomy (as `app/customize.tsx`'s `ALL_CATEGORIES` does today) makes
+empty slugs render as dead chips users can't get any results from. Tracked in
+`docs/audit-poi-categories.md`.
+
 **Scenic badge:** Never assign "Scenic" by elimination. Only award it when a route has strictly more POIs than the fastest route (`poiCount`). If POI data is null, show no badge.
 
 **Mobile-only:** No desktop UI. Design at 390×844 (iPhone) / 412×915 (Android). Touch targets ≥ 64pt on the Drive screen.

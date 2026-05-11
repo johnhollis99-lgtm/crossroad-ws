@@ -18,7 +18,12 @@ export type CategorySlug =
   | 'local_culture'
   | 'hidden_gems'
   | 'art'
-  | 'geology';
+  | 'geology'
+  | 'bridges'
+  | 'dams'
+  | 'hot_springs'
+  | 'volcanic'
+  | 'mining';
 
 export interface BoundingBox {
   minLat: number;

@@ -15,13 +15,22 @@ const OSM_RULES: Array<{
   { match: (k, v) => k === 'historic' && v === 'monument', slug: 'history', tags: ['monument'] },
   { match: (k, v) => k === 'historic' && v === 'memorial', slug: 'history', tags: ['memorial'] },
   { match: (k, v) => k === 'historic' && v === 'archaeological_site', slug: 'history', tags: ['archaeology'] },
+  // Mining: historic mines (closed). landuse=quarry handled separately below.
+  { match: (k, v) => k === 'historic' && v === 'mine', slug: 'mining', tags: ['mine', 'historic'] },
   { match: (k) => k === 'historic', slug: 'history' },
 
-  { match: (k, v) => k === 'natural' && (v === 'peak' || v === 'volcano'), slug: 'nature', trip_mode: 'hiking', tags: ['summit'] },
+  // Volcanoes: dedicated slug — must come before the broader natural=peak rule.
+  { match: (k, v) => k === 'natural' && v === 'volcano', slug: 'volcanic', trip_mode: 'hiking', tags: ['volcano'] },
+  { match: (k, v) => k === 'natural' && v === 'peak', slug: 'nature', trip_mode: 'hiking', tags: ['summit'] },
+  // Hot springs / geysers — geothermal features get the dedicated slug rather
+  // than getting bucketed into generic 'nature'.
+  { match: (k, v) => k === 'natural' && (v === 'hot_spring' || v === 'geyser'), slug: 'hot_springs', tags: [v] },
   { match: (k, v) => k === 'natural' && v === 'waterfall', slug: 'nature', tags: ['waterfall'] },
   { match: (k, v) => k === 'waterway' && v === 'waterfall', slug: 'nature', tags: ['waterfall'] },
   { match: (k, v) => k === 'natural' && v === 'cave_entrance', slug: 'geology', tags: ['cave'] },
   { match: (k) => k === 'natural', slug: 'nature' },
+  // Active quarries / open-pit mining sites
+  { match: (k, v) => k === 'landuse' && v === 'quarry', slug: 'mining', tags: ['quarry'] },
   { match: (k, v) => k === 'leisure' && (v === 'park' || v === 'nature_reserve'), slug: 'nature' },
   { match: (k, v) => k === 'boundary' && v === 'national_park', slug: 'nature', tags: ['national_park'] },
   { match: (k, v) => k === 'boundary' && v === 'protected_area', slug: 'nature' },
@@ -31,6 +40,14 @@ const OSM_RULES: Array<{
   { match: (k, v) => k === 'tourism' && v === 'museum', slug: 'history', tags: ['museum'] },
   { match: (k, v) => k === 'tourism' && v === 'artwork', slug: 'art' },
   { match: (k, v) => k === 'tourism' && v === 'attraction', slug: 'hidden_gems' },
+
+  // Bridges and dams: dedicated slugs. OSM importer's Overpass query is gated
+  // by source-signal filters (wikipedia/wikidata tag) so we only get notable
+  // structures here, not every overpass on the highway.
+  { match: (k, v) => k === 'man_made' && v === 'bridge', slug: 'bridges', tags: ['bridge'] },
+  { match: (k, v) => k === 'bridge' && v === 'yes', slug: 'bridges', tags: ['bridge'] },
+  { match: (k, v) => k === 'waterway' && v === 'dam', slug: 'dams', tags: ['dam'] },
+  { match: (k, v) => k === 'man_made' && v === 'dam', slug: 'dams', tags: ['dam'] },
 
   { match: (k, v) => k === 'amenity' && v === 'place_of_worship', slug: 'architecture', tags: ['religious'] },
   { match: (k, v) => k === 'amenity' && (v === 'restaurant' || v === 'cafe' || v === 'pub' || v === 'bar'), slug: 'food_drink' },

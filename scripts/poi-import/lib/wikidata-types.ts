@@ -46,21 +46,25 @@ export const WIKIDATA_CLASSES: WikidataClass[] = [
   { qid: 'Q62832',    label: 'observatory',           slug: 'architecture', tripMode: 'all',    tags: ['observatory'],             bonus: 10 },
   { qid: 'Q16970',    label: 'church building',       slug: 'architecture', tripMode: 'all',    tags: ['religious'],               bonus:  8 },
   { qid: 'Q44613',    label: 'monastery',             slug: 'architecture', tripMode: 'all',    tags: ['religious'],               bonus:  8 },
-  { qid: 'Q12280',    label: 'bridge',                slug: 'architecture', tripMode: 'all',    tags: ['bridge'],                  bonus:  8 },
-  { qid: 'Q12323',    label: 'dam',                   slug: 'architecture', tripMode: 'all',    tags: ['dam'],                     bonus:  8 },
+  { qid: 'Q12280',    label: 'bridge',                slug: 'bridges',      tripMode: 'all',    tags: ['bridge'],                  bonus:  8 },
+  { qid: 'Q12323',    label: 'dam',                   slug: 'dams',         tripMode: 'all',    tags: ['dam'],                     bonus:  8 },
 
   // ── Museums & culture ─────────────────────────────────────────────────────
   { qid: 'Q207694',   label: 'art museum',            slug: 'art',          tripMode: 'all',    tags: ['museum', 'art'],           bonus: 12 },
   { qid: 'Q33506',    label: 'museum',                slug: 'history',      tripMode: 'all',    tags: ['museum'],                  bonus: 10 },
 
   // ── Nature features ───────────────────────────────────────────────────────
+  { qid: 'Q8072',     label: 'volcano',               slug: 'volcanic',     tripMode: 'hiking', tags: ['volcano'],                 bonus: 12 },
   { qid: 'Q8502',     label: 'mountain',              slug: 'nature',       tripMode: 'hiking', tags: ['summit'],                  bonus: 10 },
   { qid: 'Q34038',    label: 'waterfall',             slug: 'nature',       tripMode: 'hiking', tags: ['waterfall'],               bonus: 12 },
   { qid: 'Q23397',    label: 'lake',                  slug: 'nature',       tripMode: 'all',    tags: ['lake'],                    bonus:  8 },
-  { qid: 'Q191860',   label: 'hot spring',            slug: 'nature',       tripMode: 'all',    tags: ['hot_spring'],              bonus:  8 },
+  { qid: 'Q191860',   label: 'hot spring',            slug: 'hot_springs',  tripMode: 'all',    tags: ['hot_spring'],              bonus:  8 },
   { qid: 'Q40080',    label: 'beach',                 slug: 'nature',       tripMode: 'all',    tags: ['beach'],                   bonus:  8 },
   { qid: 'Q35509',    label: 'cave',                  slug: 'geology',      tripMode: 'hiking', tags: ['cave'],                    bonus:  8 },
   { qid: 'Q2811216',  label: 'scenic viewpoint',      slug: 'nature',       tripMode: 'all',    tags: ['viewpoint'],               bonus:  8 },
+
+  // ── Industrial / mining ───────────────────────────────────────────────────
+  { qid: 'Q820477',   label: 'mine',                  slug: 'mining',       tripMode: 'all',    tags: ['mine'],                    bonus:  8 },
 
   // ── Tourist / generic ─────────────────────────────────────────────────────
   { qid: 'Q570116',   label: 'tourist attraction',    slug: 'hidden_gems',  tripMode: 'all',    tags: [],                          bonus: 10 },
