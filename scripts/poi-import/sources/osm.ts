@@ -114,6 +114,10 @@ function buildQuery(cell: BoundingBox): string {
     `${t}[leisure=park][~"^(wikipedia|wikidata)$"~"."](${bb});`,
     `${t}[amenity=place_of_worship][~"^(heritage|wikidata)$"~"."](${bb});`,
     `${t}[man_made~"^(${mv})$"][name](${bb});`,
+    `${t}[man_made=bridge](${bb});`,
+    `${t}[man_made=dam](${bb});`,
+    `${t}[waterway=dam](${bb});`,
+    `${t}[landuse=quarry](${bb});`,
   ]);
   return `[out:json][timeout:60];\n(\n  ${lines.join('\n  ')}\n);\nout center tags;`;
 }

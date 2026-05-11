@@ -1,5 +1,7 @@
 # Audit — `poi_categories` coverage (Track B / 5.23)
 
+**Status:** implemented 2026-05-11 (Prompt 07). See drift catalog 5.23.
+
 **Date:** 2026-05-10
 **Question:** 9 of 20 `poi_categories` slugs have zero rows. Drop, populate, or both?
 **Decision:** Mixed — 5 wired up (importer route changes), 2 dropped, 2 kept aspirational.

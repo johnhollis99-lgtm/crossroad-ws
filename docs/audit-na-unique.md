@@ -1,5 +1,7 @@
 # Audit — `narration_audio.na_unique` constraint shape (Track A / 5.26)
 
+**Status:** implemented 2026-05-11 (Prompt 07). See drift catalog 5.26 / 5.33.
+
 **Date:** 2026-05-10
 **Question:** Should `narration_audio.na_unique` include `mode` (trip_mode) alongside `(poi_id, narrator_slug, depth)`?
 **Decision:** **Outcome A — add `mode` to `na_unique`**. Migration written but **STAGED, not applied** (breaks existing upsert call sites until they're updated to match).

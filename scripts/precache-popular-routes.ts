@@ -241,7 +241,7 @@ async function upsertNarrationAudio(args: {
         prompt_version:  PROMPT_VERSION,
         narration_text:  args.narrationText,
       },
-      { onConflict: 'poi_id,narrator_slug,depth', ignoreDuplicates: false },
+      { onConflict: 'poi_id,narrator_slug,depth,mode', ignoreDuplicates: false },
     )
     .select('id')
     .single();
