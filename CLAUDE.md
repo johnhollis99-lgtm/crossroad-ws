@@ -332,7 +332,7 @@ cache/
   gnis-{ts}.json      run summary
 ```
 
-Old `source` text column (default 'curated') is now redundant with `source_type` — leave it for now; deprecate in a later migration once importers are live.
+Legacy `source text DEFAULT 'curated'` column was dropped 2026-05-11 via `20260511000003_pois_source_drop.sql`; provenance is now carried by `source_type` / `source_id` / `source_citation` (added in `20260504000005_poi_source_provenance.sql`). See drift catalog 5.16 for rationale.
 
 ## Venue Tour (V1 — applied 2026-05-07)
 

@@ -32,14 +32,21 @@ goes through `category_id` and the JOIN. Never reintroduce a scalar
 
 ---
 
-### 5.16 — `pois.source` legacy column is redundant with `source_type`
+### 5.16 — `pois.source` legacy column redundant with `source_type`
 
-- **Status:** open
-- **Severity:** low
-- **Detected:** pre-2026-05-04 importer work
-- **Summary:** `pois.source text DEFAULT 'curated'` predates the source-provenance migration `20260504000005_poi_source_provenance.sql` which introduced `source_type` (CHECK enum). The two columns now describe the same thing; the importers write `source_type` and ignore `source`.
-- **Reference:** CLAUDE.md POI ingestion section ("Old `source` text column (default 'curated') is now redundant with `source_type` — leave it for now; deprecate in a later migration once importers are live.")
-- **Resolution path:** drop the column in a tier-two cleanup migration after a final read-audit confirms zero callers depend on it. Originally bundled with 5.19 in a "dead-letter column" mini-audit; with 5.19 superseded (see 5.19a), this is the only remaining target — fold into the next doc-sweep PR or run as a 30-line standalone audit.
+**Status:** Resolved 2026-05-11 via `supabase/migrations/20260511000003_pois_source_drop.sql`.
+
+**Resolution:** Dropped `pois.source`. 23,922/23,922 rows carried the schema default 'curated' with zero code/RPC readers; functional displacement by `source_type` (added in `20260504000005_poi_source_provenance.sql`) was complete since pre-2026-05-04 importer work.
+
+**Judgment calls disclosed:**
+- Used `DROP COLUMN` with default RESTRICT (no CASCADE) so any unexpected dependent object would fail the migration loudly rather than silently nuke dependents. `pg_depend` pre-flight confirmed 0 dependents before applying.
+- The 'curated' default was being applied to 23,804 rows that were not actually curated (OSM / Wikidata / NRHP / state_landmark imports). The semantic mismatch dissolves with the column. If a "this row was hand-curated" signal is ever wanted again, `source_type = 'editorial'` (118 rows) is the correct signal and was the intended one.
+
+**Sub-pattern established:** Extends the migration-file suffix vocabulary with `_drop.sql` for column-drop migrations (operation-verb-at-end). Existing precedent: `_check.sql` (5.17, single-column constraint add), `_enum_checks.sql` (5.30, multi-column constraint add). 5.16 adds the destructive-op verb.
+
+**Follow-up (not blocking close):** CLAUDE.md POI ingestion section contains the line *"deprecate in a later migration once importers are live"* — update to reference this migration in a separate docs commit.
+
+**Catalog-narrative correction:** Earlier framing of 5.16, including in this session's opening state-of-world summary, described it as having "lost siblings when 5.19 dissolved." 5.19 was not dissolved — it remains in the catalog marked superseded by 5.19a, which explicitly redirected the surviving scope into 5.16. The articulation pre-flight surfaced this. Logging so the misframing doesn't propagate.
 
 ---
 
