@@ -270,16 +270,22 @@ constraint-backed — see drift 5.33. Applier:
 
 ### 5.27 `trips.route_id` is text, no FK, unconstrained
 
-The column exists but doesn't reference anything. It's `text` type
-(confirmed by `uuid = text` operator error when attempting to JOIN
-against `corridors.id`). Doesn't point at the saved-routes table either
-(different shape).
+- **Status:** open. Rewritten 2026-05-11 after pre-flight surfaced live-state mismatch with original framing.
 
-**Posture:** defer. The column isn't load-bearing today.
+- **Live state:** 31 of 32 `trips` rows hold `route_id = ''` (hardcoded empty string written from [app/index.tsx:529](../app/index.tsx#L529), flowing through [app/customize.tsx:477](../app/customize.tsx#L477) → [lib/supabase.ts:236](../lib/supabase.ts#L236) `saveTrip` INSERT). 1 row is NULL. Zero meaningful values. Zero readers across `app/`, `server/`, `scripts/`, `admin/`, `lib/`. Type is `text`; both candidate FK targets (`corridors.id`, `routes.id`) are `uuid`, so any future coercion requires backfill or row deletion for the `''` rows.
 
-**Action:** when a feature actually uses route association, decide its
-target (`corridors`, `routes`, or its own new table), coerce the type,
-add the FK. Not blocking anything currently.
+- **Why rewritten:** the original framing ("defer until a feature uses it, then coerce + FK") assumed a dormant placeholder. The live state shows an active junk-write — the column isn't waiting for a feature, it's already a sink. The original entry's posture statement ("isn't load-bearing today") was technically true in the strict no-reader sense but missed the active write pattern, which materially changes what "resolve" means.
+
+- **Paths:**
+  - **Path 1 (strict deferral, as originally written):** leave the column and the writes in place; defensible only if a near-term feature is genuinely anticipated to consume `route_id`.
+  - **Path 2 (stop-writing):** remove `route_id` from the navigation payload + payload assembly + `saveTrip` INSERT; keep the column nullable for future use. Cleans the write pattern without committing to a target table.
+  - **Path 3 (drop):** remove the write sites AND drop the column; rebuild correctly (uuid + FK + sensible default) when a feature actually wants route association.
+
+- **Recommended path:** **Path 3.** Same shape as 5.16: zero readers, drop-and-rebuild-later posture. Type is wrong for any plausible target (`text` vs `uuid`); the default-via-write of `''` is sentinel garbage, not signal. The column-name-as-intent counter-argument ("`route_id` carries semantic value even unused") fails because `text` + `''` corrupts whatever signal the name carries — readers added later would have to special-case the sentinel before trusting the column, which is strictly worse than rebuilding from scratch.
+
+- **Execution:** deferred to Bucket H triage. The three write sites ([app/index.tsx](../app/index.tsx), [app/customize.tsx](../app/customize.tsx), [lib/supabase.ts](../lib/supabase.ts)) are all in Bucket H's dirty file list as of 2026-05-11 EOD. Folding `route_id` cleanup into Bucket H avoids competing edits to the same files. Path 3, if confirmed at triage, produces a single coherent PR: write-site removal + `20260513NNNNNN_trips_route_id_drop.sql` migration (mirroring the 5.16 `_drop.sql` sub-pattern) + [CLAUDE.md:141](../CLAUDE.md#L141) bullet deletion.
+
+- **Cross-reference:** [CLAUDE.md:141](../CLAUDE.md#L141) currently reads `route_id text (free-form; no FK — see drift catalog 5.27)`. If Path 3 executes, deleted with the column. If Path 1 or 2 wins, updated to reflect new state.
 
 ---
 
