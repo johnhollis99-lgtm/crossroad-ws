@@ -109,8 +109,15 @@ export async function getPOIsAlongRoute(
 ): Promise<POI[]> {
   if (polylinePoints.length < 2) return [];
 
+  // Match countPOIsAlongRoute's downsampling. A Google-decoded long-haul
+  // polyline (e.g. LA→Cambria) is 1000–2000 points; sending the full WKT
+  // makes ST_DWithin/ST_LineLocatePoint slow enough to time out
+  // server-side. 150 points preserves shape and matches the count call's
+  // shape so badge counts and rendered markers stay consistent.
+  const pts = downsamplePolyline(polylinePoints, 150);
+
   const wkt = `SRID=4326;LINESTRING(${
-    polylinePoints.map(p => `${p.longitude} ${p.latitude}`).join(',')
+    pts.map(p => `${p.longitude} ${p.latitude}`).join(',')
   })`;
 
   const { data, error } = await supabase.rpc('get_corridor_pois', {

@@ -292,7 +292,17 @@ export default function MapScreen() {
     if (!selectedRoute || selectedRoute.polylineCoords.length < 2) { setRoutePOIs([]); return; }
     getPOIsAlongRoute(
       selectedRoute.polylineCoords, 1, null, 'driving'
-    ).then(pois => setRoutePOIs(pois));
+    ).then(pois => {
+      if (__DEV__) {
+        console.info('[home] post-route POI fetch:',
+          'polyline=' + selectedRoute.polylineCoords.length,
+          'corridorMi=1',
+          'mode=driving',
+          'fetched=' + pois.length,
+        );
+      }
+      setRoutePOIs(pois);
+    });
   }, [selectedRouteIdx, routes]);
 
   // ── Fetch routes ───────────────────────────────────────────────────────────

@@ -819,21 +819,20 @@ Label-style variants (`routesLabel`, `legendText`, `badgeText`) intentionally ke
 
 ### 5.64 — POI markers missing on drive.tsx after trip start
 
-**Status:** `open` (instrumented this commit; speculative fix pending runtime confirmation)
+**Status:** `open` — likely resolved by the same root cause as 5.66 (this-commit's `getPOIsAlongRoute` downsample fix in `lib/supabase.ts`); pending hardware confirmation.
 
 **Surface:** User reports zero ink-red POI dots render on `app/drive.tsx` after a trip starts. Phase 0 investigation reported this screen calls `getPOIsAlongRoute('driving')` and renders uncapped `<Marker>` children from the `pois` state. Static code review of the file (no changes since the initial commit `d1b5c30`) didn't surface an obvious break:
 - `routePreview.polylineCoords` round-trips through JSON params correctly (home → customize → drive); the Polyline at `drive.tsx:565` is gated on `polylineCoords.length > 1` and per user's screenshots renders fine, so the polyline IS present.
 - The fetch effect at `drive.tsx:430` calls `getPOIsAlongRoute(polyline, poiDist, cats, mode)` with valid args; the JSX map at `drive.tsx:583` is straightforward.
 - Default `poiDist = filters.corridorMi ?? 1` (1-mile corridor). 1 mile on a typical 50–60 mi route should still return some POIs based on smoke-batch corridor counts in CLAUDE.md, but a sparse rural route could plausibly return very few.
 
-**Resolution (this commit):** Added a `__DEV__`-gated `console.info` at the fetch effect entry that prints `polyline=N, corridorMi=K, mode=M, categories=…, fetched=W`. On next test run the user can read the log and confirm whether the fetch fires, what corridor it uses, and how many POIs come back. Three follow-up hypotheses depending on what the log shows:
-- `polyline=0` → params didn't round-trip; check customize.tsx → drive.tsx serialization.
-- `polyline=N, fetched=0` → corridor too narrow for the test route, or RLS/filter rejection. Likely fix: bump default `poiDist` fallback from 1 to 5 miles for drive (home stays at 1).
-- `polyline=N, fetched=M>0` → render-side bug; check map camera vs marker coordinates.
+**Resolution (commit `cd1881e`):** Added a `__DEV__`-gated `console.info` at the fetch effect entry that prints `polyline=N, corridorMi=K, mode=M, categories=…, fetched=W`.
 
-**Test:** Start a trip → ink-red POI dots visible along the route polyline. Tap one → callout opens. (Acceptance criterion 3.)
+**Likely actual root cause (5.66 follow-up):** `getPOIsAlongRoute` in `lib/supabase.ts` did not downsample the polyline before sending the WKT to `get_corridor_pois`. `countPOIsAlongRoute` (the function backing the route-card "stories" badge) DID downsample to ≤150 points. For a long route (LA→Cambria, ~2000 polyline points), the unbounded WKT makes the server-side ST_DWithin + ST_LineLocatePoint computation slow enough to time out / return empty / fail silently. The count call worked because of its downsampling; the data call failed because of its absence. `drive.tsx` calls the same `getPOIsAlongRoute` wrapper, so it inherits the same failure mode — long-haul trips would see zero POIs, same as home post-route. The downsample fix in 5.66 covers both.
 
-**Decided by:** User-filed regression. Could not diagnose statically without runtime visibility; instrumentation deferred to next test run.
+**Test:** Start a trip → ink-red POI dots visible along the route polyline. Tap one → callout opens. The `__DEV__` log added in `cd1881e` should now show `fetched=M>0` instead of 0.
+
+**Decided by:** User-filed regression; root cause surfaced during 5.66 diagnosis.
 
 ---
 
@@ -854,6 +853,28 @@ For a user mid-trip, list distances stay frozen at "60 mi to Joshua Tree" even a
 **Test:** Start a trip → scroll the Up next list → each item shows a distance value that updates as GPS position changes. (Acceptance criterion 4.)
 
 **Decided by:** User-filed regression. Diagnosed statically by following the two consumers.
+
+---
+
+### 5.66 — Post-route corridor POIs not rendering on home map after route selection
+
+**Status:** `resolved` (fixed in this commit)
+
+**Surface:** After selecting a long-haul route on `app/index.tsx` (user's hardware repro: LA→Cambria), the route polyline draws, the route card displays the correct "309 stories" badge, but zero ink-red POI dots render along the corridor. Pre-route browse clustering works correctly; post-route render does not.
+
+**Diagnosis:** The render path (`!browseMode && filteredRoutePOIs.slice(0, 40).map(...)`), state machine (`browseMode = routes.length === 0` flips false correctly when routes load), and Marker styling (`s.poiDot` = same ink-red 10×10 dot that browse markers use successfully) were all verified correct via static review. ClusteredMapView's `clusteringEnabled={browseMode}` passes all children straight through to inner MapView when `browseMode === false`, so the clustering wrapper isn't shadowing post-route markers either.
+
+**Root cause:** `getPOIsAlongRoute` in `lib/supabase.ts` did not downsample its polyline before sending the WKT to `get_corridor_pois`. Its sibling `countPOIsAlongRoute` (the one populating the route-card "stories" badge) explicitly downsamples to ≤150 points with the in-source comment "Downsample to ≤150 points to keep the WKT payload small while preserving shape." Both functions hit the same RPC; only one applied the downsample. A Google-decoded long-haul polyline (LA→Cambria, ~2000 points) sent as a 60+ KB WKT made the server-side ST_DWithin + ST_LineLocatePoint computation against ~24k POIs slow enough to time out / fail silently. The count call returned the right number (downsampled, fast); the data call returned nothing useful (full polyline, slow/failed). The post-route render path was correct all along — it just had no data to render.
+
+**Resolution:**
+- Lifted the existing `downsamplePolyline` helper call from `countPOIsAlongRoute` into `getPOIsAlongRoute` (same 150-point cap). Both functions now send identically-shaped WKT to the RPC, so badge counts and rendered markers stay consistent.
+- Added a `__DEV__`-gated `console.info` on the home-screen post-route fetch path mirroring the one added on `drive.tsx` in commit `cd1881e`. Persistent observability for future debugging, not a temp diagnostic.
+
+**Side benefit:** likely resolves drift 5.64 (drive.tsx POI markers missing) — `drive.tsx` calls the same `getPOIsAlongRoute` wrapper, so it inherits the same failure mode on long-haul trips. The drift 5.64 entry updated to note this; formal resolution still pending hardware confirmation since the symptom needs a live test to re-verify.
+
+**Test:** Select a long-haul route on home (e.g. LA→Cambria) → ink-red POI dots render along the route polyline (capped at 40 per Stage 1 scope). The `__DEV__` log should show `fetched=N>0`.
+
+**Decided by:** User-filed regression after commit `420f5bc` shipped Stage 1 clustering; diagnosed by reading both RPC wrappers and identifying the downsample asymmetry.
 
 ---
 
