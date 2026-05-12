@@ -403,7 +403,7 @@ const s = StyleSheet.create({
   nextBadge: { position:'absolute', left:16, right:16, bottom:112, backgroundColor:'rgba(10,26,10,0.85)', borderRadius:8, borderWidth:1, borderColor:'rgba(255,255,255,0.06)', paddingHorizontal:12, paddingVertical:6, zIndex:10 },
   nextText: { fontSize:11, color:'#8b949e' },
   btnSafe: { position:'absolute', bottom:0, left:0, right:0 },
-  btnBar: { flexDirection:'row', gap:8, paddingHorizontal:12, paddingTop:10, paddingBottom:12, backgroundColor:'rgba(10,26,10,0.95)', borderTopWidth:1, borderColor:'rgba(63,185,80,0.15)' },
+  btnBar: { flexDirection:'row', gap:8, paddingHorizontal:12, paddingTop:10, paddingBottom:16, backgroundColor:'rgba(10,26,10,0.95)', borderTopWidth:1, borderColor:'rgba(63,185,80,0.15)' },
   btn: { flex:1, minHeight:56, backgroundColor:'#161b22', borderRadius:10, borderWidth:1, borderColor:'rgba(255,255,255,0.08)', alignItems:'center', justifyContent:'center', paddingVertical:8, gap:3 },
   btnGreen: { backgroundColor:'rgba(63,185,80,0.1)', borderColor:'rgba(63,185,80,0.35)' },
   btnOrange: { backgroundColor:'rgba(240,136,62,0.1)', borderColor:'rgba(240,136,62,0.3)' },

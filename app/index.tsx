@@ -289,21 +289,46 @@ export default function MapScreen() {
 
   // ── POI dots for selected route ────────────────────────────────────────────
   useEffect(() => {
-    if (!selectedRoute || selectedRoute.polylineCoords.length < 2) { setRoutePOIs([]); return; }
+    if (!selectedRoute || selectedRoute.polylineCoords.length < 2) {
+      if (__DEV__) {
+        console.info('[home] fetch:skip',
+          'selectedRoute=' + (selectedRoute ? 'present' : 'null'),
+          'polyline=' + (selectedRoute?.polylineCoords.length ?? 0),
+        );
+      }
+      setRoutePOIs([]);
+      return;
+    }
+    if (__DEV__) {
+      console.info('[home] fetch:start',
+        'polyline=' + selectedRoute.polylineCoords.length,
+        'corridorMi=1',
+        'mode=driving',
+        'routeIdx=' + selectedRouteIdx,
+      );
+    }
     getPOIsAlongRoute(
       selectedRoute.polylineCoords, 1, null, 'driving'
     ).then(pois => {
       if (__DEV__) {
-        console.info('[home] post-route POI fetch:',
-          'polyline=' + selectedRoute.polylineCoords.length,
-          'corridorMi=1',
-          'mode=driving',
-          'fetched=' + pois.length,
-        );
+        console.info('[home] fetch:state-set count=' + pois.length);
       }
       setRoutePOIs(pois);
     });
   }, [selectedRouteIdx, routes]);
+
+  // ── Diagnostic: render-side observability for post-route POI markers ───────
+  useEffect(() => {
+    if (__DEV__ && !browseMode) {
+      console.info('[home] render:markers',
+        'source=filteredRoutePOIs',
+        'routePOIs=' + routePOIs.length,
+        'filtered=' + filteredRoutePOIs.length,
+        'rendered=' + Math.min(filteredRoutePOIs.length, 40),
+        'activeChips=' + activeCatChips.size,
+      );
+    }
+  }, [routePOIs, filteredRoutePOIs.length, browseMode, activeCatChips.size]);
 
   // ── Fetch routes ───────────────────────────────────────────────────────────
   // oCoords: explicit origin override — pass null to force GPS, omit to use current state.
@@ -1136,7 +1161,7 @@ export default function MapScreen() {
       </ClusteredMapView>
 
       {/* ── BOTTOM SHEET — route picker (mobile only) ───────────────────── */}
-      {!isDesktop && <Animated.View style={[s.sheet, { height: sheetAnim, paddingBottom: insets.bottom }]}>
+      {!isDesktop && <Animated.View style={[s.sheet, { height: sheetAnim, paddingBottom: insets.bottom + 16 }]}>
         <View {...sheetPan} style={s.dragHandleWrap}>
           <View style={s.dragHandle} />
         </View>

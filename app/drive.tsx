@@ -18,7 +18,7 @@ import {
   Platform, ScrollView, Share, StatusBar,
   StyleSheet, Text, TouchableOpacity, View,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from 'react-native-maps';
 import { CommonActions, useNavigation, useRoute } from '@react-navigation/native';
 import { Audio, AVPlaybackStatus } from 'expo-av';
@@ -207,8 +207,17 @@ export default function Drive() {
   const [ratedPois,    setRatedPois]    = useState<Set<string>>(new Set());
   const [poiDist,      setPoiDist]      = useState<number>(filters.corridorMi ?? 1);
 
+  // Peek must clear Android nav / gesture zone — base 96 + insets.bottom + 16
+  // safety buffer so the End trip button never sits inside the system overlay.
+  const insets = useSafeAreaInsets();
+  const driveSnaps = useMemo(() => ({
+    peek:     DRIVE_SNAPS.peek + insets.bottom + 16,
+    default:  DRIVE_SNAPS.default,
+    expanded: DRIVE_SNAPS.expanded,
+  }), [insets.bottom]);
+
   const { anim: sheetAnim, panHandlers: sheetPan, level: snapLevel } =
-    useSheetSnap(DRIVE_SNAPS, 'expanded');
+    useSheetSnap(driveSnaps, 'expanded');
 
   useEffect(() => { loadMapStyle().then(setMapStyleId); }, []);
   const handleMapStyleChange = (id: MapStyleId) => { setMapStyleId(id); saveMapStyle(id); };
@@ -433,16 +442,20 @@ export default function Drive() {
       const polyline   = routePreview.polylineCoords ?? [];
       const cats: string[] | null = filters.categoryFilter?.length ? filters.categoryFilter : null;
       const mode = trailMode ? 'hiking' : 'driving';
-      const fetched = await getPOIsAlongRoute(polyline, poiDist, cats, mode);
 
       if (__DEV__) {
-        console.info('[drive] POI fetch:',
+        console.info('[drive] fetch:start',
           'polyline=' + polyline.length,
           'corridorMi=' + poiDist,
           'mode=' + mode,
           'categories=' + (cats?.join(',') ?? 'all'),
-          'fetched=' + fetched.length,
         );
+      }
+
+      const fetched = await getPOIsAlongRoute(polyline, poiDist, cats, mode);
+
+      if (__DEV__) {
+        console.info('[drive] fetch:state-set count=' + fetched.length);
       }
 
       // Project each POI onto the route polyline to get sequential arc-distance from start.
@@ -464,6 +477,16 @@ export default function Drive() {
       })));
     })();
   }, [params.routePreview, trailMode, poiDist]);
+
+  // ── Diagnostic: render-side observability for corridor POI markers ─────────
+  // Drift 5.64 hypothesis was that Markers read from liveQueue; static check
+  // confirms they read from `pois` (the full corridor fetch). Log emits the
+  // count so hardware test verifies render-time array size matches fetch.
+  useEffect(() => {
+    if (__DEV__) {
+      console.info('[drive] render:markers source=pois count=' + pois.length);
+    }
+  }, [pois.length]);
 
   // ── Re-center ─────────────────────────────────────────────────────────────
   const recenter = useCallback(() => {
@@ -675,13 +698,13 @@ export default function Drive() {
         value={mapStyleId}
         onChange={handleMapStyleChange}
         mapboxToken={MAPBOX_TOKEN}
-        buttonBottom={DRIVE_SNAPS.peek + 16}
+        buttonBottom={driveSnaps.peek + 16}
         buttonRight={12}
       />
 
       {/* Recenter button — above map style picker */}
       <TouchableOpacity
-        style={[s.recenterBtn, { bottom: DRIVE_SNAPS.peek + 64 }]}
+        style={[s.recenterBtn, { bottom: driveSnaps.peek + 64 }]}
         onPress={recenter}
         hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
         activeOpacity={0.7}
@@ -691,7 +714,7 @@ export default function Drive() {
 
       {/* ── POI callout card ─────────────────────────────────────────────── */}
       {selectedPoi && (
-        <View style={[s.poiCallout, { bottom: DRIVE_SNAPS.peek + 20 }]}>
+        <View style={[s.poiCallout, { bottom: driveSnaps.peek + 20 }]}>
           <View style={s.poiCalloutHeader}>
             <Text style={s.poiCalloutName} numberOfLines={2}>{selectedPoi.name}</Text>
             <TouchableOpacity
@@ -1087,8 +1110,10 @@ const s = StyleSheet.create({
   modeSegTextActive:{ color: C.ACCENT_TEXT },
   modeSegDivider:   { width: 1.5, backgroundColor: C.BORDER_STRONG },
 
-  // Actions row
-  actions:      { flexDirection: 'row', gap: 10, paddingTop: 0, paddingBottom: 4 },
+  // Actions row — paddingBottom 16 ensures End trip CTA stays ≥16px above the
+  // SafeAreaView inset edge in expanded state, clearing Android nav / gesture
+  // zone. Peek state clearance comes from driveSnaps.peek (insets.bottom + 16).
+  actions:      { flexDirection: 'row', gap: 10, paddingTop: 0, paddingBottom: 16 },
 
   // Quiet mode — ghost/secondary
   quietBtn:         { borderRadius: 12, borderWidth: 1.5, borderColor: C.BORDER_STRONG, paddingHorizontal: 18, height: 48, alignItems: 'center', justifyContent: 'center', backgroundColor: 'transparent' },

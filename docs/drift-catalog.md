@@ -819,7 +819,7 @@ Label-style variants (`routesLabel`, `legendText`, `badgeText`) intentionally ke
 
 ### 5.64 — POI markers missing on drive.tsx after trip start
 
-**Status:** `open` — likely resolved by the same root cause as 5.66 (this-commit's `getPOIsAlongRoute` downsample fix in `lib/supabase.ts`); pending hardware confirmation.
+**Status:** `open` — **reopened**; hardware re-test on `c069d5d` (Android Expo Go) shows the downsample fix did NOT restore drive-screen POI markers. Static review confirms the JSX maps `pois.map(poi => <Marker/>)` from the corridor-fetch state, not `liveQueue` (the original hypothesis), so the marker-source split is unnecessary. Diagnostic observability added below; root cause is still latent and will surface on the next hardware boot via the new logs.
 
 **Surface:** User reports zero ink-red POI dots render on `app/drive.tsx` after a trip starts. Phase 0 investigation reported this screen calls `getPOIsAlongRoute('driving')` and renders uncapped `<Marker>` children from the `pois` state. Static code review of the file (no changes since the initial commit `d1b5c30`) didn't surface an obvious break:
 - `routePreview.polylineCoords` round-trips through JSON params correctly (home → customize → drive); the Polyline at `drive.tsx:565` is gated on `polylineCoords.length > 1` and per user's screenshots renders fine, so the polyline IS present.
@@ -829,6 +829,8 @@ Label-style variants (`routesLabel`, `legendText`, `badgeText`) intentionally ke
 **Resolution (commit `cd1881e`):** Added a `__DEV__`-gated `console.info` at the fetch effect entry that prints `polyline=N, corridorMi=K, mode=M, categories=…, fetched=W`.
 
 **Likely actual root cause (5.66 follow-up):** `getPOIsAlongRoute` in `lib/supabase.ts` did not downsample the polyline before sending the WKT to `get_corridor_pois`. `countPOIsAlongRoute` (the function backing the route-card "stories" badge) DID downsample to ≤150 points. For a long route (LA→Cambria, ~2000 polyline points), the unbounded WKT makes the server-side ST_DWithin + ST_LineLocatePoint computation slow enough to time out / return empty / fail silently. The count call worked because of its downsampling; the data call failed because of its absence. `drive.tsx` calls the same `getPOIsAlongRoute` wrapper, so it inherits the same failure mode — long-haul trips would see zero POIs, same as home post-route. The downsample fix in 5.66 covers both.
+
+**Hardware re-test on `c069d5d` (reopen, this commit):** Tester confirmed the symptom persists on Android Expo Go after the downsample fix landed — Scene B (Begin trip → drive screen with full route) still shows zero POI dots. The drift 5.64 hypothesis that the drive Markers read from a `liveQueue` subset rather than the full `pois` array was checked statically and found incorrect: [app/drive.tsx:595](app/drive.tsx#L595) maps over `pois`, not `liveQueue`. No marker-source split needed. Diagnostic observability added this commit at every handoff (fetch:start / rpc-start / rpc-response / state-set / render:markers) across `lib/supabase.ts`, `app/index.tsx`, and `app/drive.tsx`; the next hardware boot will surface whichever stage is dropping rows or failing to render. Logs are kept as long-term observability, not removed after diagnosis.
 
 **Test:** Start a trip → ink-red POI dots visible along the route polyline. Tap one → callout opens. The `__DEV__` log added in `cd1881e` should now show `fetched=M>0` instead of 0.
 
@@ -858,7 +860,7 @@ For a user mid-trip, list distances stay frozen at "60 mi to Joshua Tree" even a
 
 ### 5.66 — Post-route corridor POIs not rendering on home map after route selection
 
-**Status:** `resolved` (fixed in this commit)
+**Status:** `open` — **reopened**; hardware re-test on `c069d5d` (Android Expo Go) shows Scene A (Cambria destination, route picked, home post-route) still renders zero ink-red POI dots along the polyline. The downsample fix in `lib/supabase.ts` landed correctly (both `countPOIsAlongRoute` and `getPOIsAlongRoute` send identical 150-point WKT to the RPC) but the symptom persists, so the asymmetric downsample was not the only / not the actual root cause. Diagnostic observability added at every handoff this commit; next hardware boot surfaces the real stage.
 
 **Surface:** After selecting a long-haul route on `app/index.tsx` (user's hardware repro: LA→Cambria), the route polyline draws, the route card displays the correct "309 stories" badge, but zero ink-red POI dots render along the corridor. Pre-route browse clustering works correctly; post-route render does not.
 
@@ -866,15 +868,43 @@ For a user mid-trip, list distances stay frozen at "60 mi to Joshua Tree" even a
 
 **Root cause:** `getPOIsAlongRoute` in `lib/supabase.ts` did not downsample its polyline before sending the WKT to `get_corridor_pois`. Its sibling `countPOIsAlongRoute` (the one populating the route-card "stories" badge) explicitly downsamples to ≤150 points with the in-source comment "Downsample to ≤150 points to keep the WKT payload small while preserving shape." Both functions hit the same RPC; only one applied the downsample. A Google-decoded long-haul polyline (LA→Cambria, ~2000 points) sent as a 60+ KB WKT made the server-side ST_DWithin + ST_LineLocatePoint computation against ~24k POIs slow enough to time out / fail silently. The count call returned the right number (downsampled, fast); the data call returned nothing useful (full polyline, slow/failed). The post-route render path was correct all along — it just had no data to render.
 
-**Resolution:**
+**Resolution (c069d5d, since reopened):**
 - Lifted the existing `downsamplePolyline` helper call from `countPOIsAlongRoute` into `getPOIsAlongRoute` (same 150-point cap). Both functions now send identically-shaped WKT to the RPC, so badge counts and rendered markers stay consistent.
 - Added a `__DEV__`-gated `console.info` on the home-screen post-route fetch path mirroring the one added on `drive.tsx` in commit `cd1881e`. Persistent observability for future debugging, not a temp diagnostic.
 
-**Side benefit:** likely resolves drift 5.64 (drive.tsx POI markers missing) — `drive.tsx` calls the same `getPOIsAlongRoute` wrapper, so it inherits the same failure mode on long-haul trips. The drift 5.64 entry updated to note this; formal resolution still pending hardware confirmation since the symptom needs a live test to re-verify.
+**Side benefit (since invalidated):** initially expected to resolve drift 5.64 (drive.tsx POI markers missing) via the same shared wrapper. Hardware re-test invalidated the hypothesis — see the reopen note above and on 5.64.
 
-**Test:** Select a long-haul route on home (e.g. LA→Cambria) → ink-red POI dots render along the route polyline (capped at 40 per Stage 1 scope). The `__DEV__` log should show `fetched=N>0`.
+**Diagnostic observability (this commit):** [lib/supabase.ts](lib/supabase.ts) `getPOIsAlongRoute` now logs `rpc-start` (polyline / downsampled / corridorMi / categories / mode / wktBytes) and `rpc-response` (rows / error code+message) under `__DEV__`. [app/index.tsx](app/index.tsx) logs `[home] fetch:start`, `[home] fetch:state-set`, and a render-effect `[home] render:markers` printing `routePOIs`, `filtered`, `rendered`, `activeChips`. Next hardware boot reveals whether the RPC returns zero rows (server-side issue), returns N rows that don't survive `setRoutePOIs` (state-set issue), or survives state-set but doesn't reach the render path (filter / clustering wrapper / Marker issue).
 
-**Decided by:** User-filed regression after commit `420f5bc` shipped Stage 1 clustering; diagnosed by reading both RPC wrappers and identifying the downsample asymmetry.
+**Test:** Select a long-haul route on home (e.g. LA→Cambria) → ink-red POI dots render along the route polyline (capped at 40 per Stage 1 scope). Hardware booth: scan the dev log for the `[supabase] getPOIsAlongRoute:rpc-response` line and the `[home] render:markers` line — they identify which stage drops the data.
+
+**Decided by:** User-filed regression after commit `420f5bc` shipped Stage 1 clustering; reopened after `c069d5d` hardware test on Android Expo Go failed to render markers despite the downsample fix landing correctly.
+
+---
+
+### 5.69 — Android system nav bar overlaps Start / End trip CTAs
+
+**Status:** `resolved` (fixed in this commit)
+
+**Surface:** Hardware test on Android Expo Go after the broader insets pass (commit `26d4ece` / drift 5.46) shows the bottom action CTAs still overlap the system navigation overlay. Specifically:
+- **Home** (`app/index.tsx`): the Customize trip CTA at the bottom of the mobile bottom sheet sits flush against the Android nav / back-gesture zone — `paddingBottom: insets.bottom` alone is not enough buffer because Android's gesture hit-zone extends slightly past the visible nav bar height.
+- **Drive** (`app/drive.tsx`): the End trip CTA in the peek-state action row overlaps the nav area when the sheet is fully retracted. `DRIVE_SNAPS.peek` was a fixed 96px module constant that did not account for `insets.bottom` at all, so the peek sheet's bottom edge sat at the screen bottom and the End trip button bottom sat ~18px above screen bottom — fully inside Android's gesture zone.
+- **Trail** (`app/trail.tsx`): the End hike button in `btnBar` only had `paddingBottom: 12` on top of `SafeAreaView edges={['bottom']}`. The 12px gap above the inset edge is below Android's gesture-zone safety margin.
+
+**Safety angle:** a driver missing the End trip button and instead hitting Back / Home in the gesture zone can exit the app mid-trip. This is a real safety hazard, not a cosmetic complaint.
+
+**Resolution:**
+- `app/index.tsx`: bumped the mobile sheet's bottom padding from `insets.bottom` to `insets.bottom + 16` so the Customize trip CTA sits ≥16px above the inset edge.
+- `app/drive.tsx`: introduced `useSafeAreaInsets()` and `useMemo`-wrapped a per-render `driveSnaps` that overrides the module-level `DRIVE_SNAPS.peek` (base 96) to `96 + insets.bottom + 16`. Map-style picker, recenter button, and POI callout that previously read `DRIVE_SNAPS.peek + …` for their bottom offsets now read `driveSnaps.peek + …` so they stay above the (larger) peek sheet. Also bumped `actions.paddingBottom` from 4 to 16 so the End trip button in expanded state clears the SafeAreaView inset edge by 16px.
+- `app/trail.tsx`: bumped `btnBar.paddingBottom` from 12 to 16. The wrapping `SafeAreaView edges={['bottom']}` continues to supply `insets.bottom`; the inner padding now provides the 16px gesture-zone buffer above it.
+
+**Rationale for `+ 16`:** Android gesture targets extend slightly past the visible nav bar. `insets.bottom` reports the visible nav bar height; a `+ 16` buffer is the minimum that reliably keeps a 64pt touch target out of the back / home / recents gesture overlap.
+
+**Files touched:** [app/index.tsx](app/index.tsx#L1139), [app/drive.tsx](app/drive.tsx#L1091), [app/trail.tsx](app/trail.tsx#L406). No iOS visual change — `insets.bottom` on iOS already accounts for the home indicator and the `+ 16` lands above that, which matches existing iOS-friendly spacing.
+
+**Test:** Android hardware — Home expanded sheet: Customize trip button bottom edge ≥ `insets.bottom + 16` above screen bottom. Drive peek: End trip button bottom edge ≥ `insets.bottom + 40` (peek base 96 + buffer + inset). Drive expanded: End trip button bottom edge ≥ `insets.bottom + 16`. Trail: End hike button bottom edge ≥ `insets.bottom + 16`. iOS hardware — no regression; layout positions shift up by 16px relative to the inset edge, no visible change against home indicator.
+
+**Decided by:** Hardware test on `c069d5d` (Android Expo Go) — Start / End trip CTAs visibly clipped by the nav overlay. Same surface as 5.46 (resolved) but `26d4ece`'s `insets.bottom`-only fix didn't add the extra gesture-zone buffer that this entry resolves.
 
 ---
 

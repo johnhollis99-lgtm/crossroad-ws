@@ -120,12 +120,30 @@ export async function getPOIsAlongRoute(
     pts.map(p => `${p.longitude} ${p.latitude}`).join(',')
   })`;
 
+  if (__DEV__) {
+    console.info('[supabase] getPOIsAlongRoute:rpc-start',
+      'polyline=' + polylinePoints.length,
+      'downsampled=' + pts.length,
+      'corridorMi=' + corridorMi,
+      'categories=' + (categories?.join(',') ?? 'all'),
+      'mode=' + (mode ?? 'null'),
+      'wktBytes=' + wkt.length,
+    );
+  }
+
   const { data, error } = await supabase.rpc('get_corridor_pois', {
     route_geom: wkt,
     corridor_width_miles: corridorMi,
     category_filter: categories,
     mode_filter: mode ?? null,
   });
+
+  if (__DEV__) {
+    console.info('[supabase] getPOIsAlongRoute:rpc-response',
+      'rows=' + (data?.length ?? 0),
+      'error=' + (error ? `${error.code ?? ''} ${error.message ?? error}` : 'null'),
+    );
+  }
 
   if (error) {
     console.error('[Supabase] get_corridor_pois error:', error);
