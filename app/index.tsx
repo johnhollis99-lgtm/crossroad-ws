@@ -24,6 +24,7 @@ import {
   View,
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
+import { LinearGradient } from 'expo-linear-gradient';
 import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from 'react-native-maps';
 import * as Location from 'expo-location';
 import { useNavigation } from '@react-navigation/native';
@@ -172,6 +173,7 @@ export default function MapScreen() {
   const [loadingRoute,     setLoadingRoute]     = useState(false);
   // Category chip filter
   const [activeCatChips, setActiveCatChips] = useState<Set<string>>(new Set());
+  const [chipsScrolled,  setChipsScrolled]  = useState(false);
 
   // Pending pin (map-tap to drop a stop)
   const [pendingPin,        setPendingPin]        = useState<{ latitude: number; longitude: number } | null>(null);
@@ -867,8 +869,8 @@ export default function MapScreen() {
     // Search pill + chips
     desktopPillWrap: {
       position: 'absolute', top: 12, left: 332, right: 72,
-      gap: 8, pointerEvents: 'box-none',
-    } as any,
+      gap: 8,
+    },
     searchPill: {
       flexDirection: 'row', alignItems: 'center', gap: 10,
       height: 40, borderRadius: 20,
@@ -888,16 +890,19 @@ export default function MapScreen() {
       borderWidth: 1, borderColor: theme.colors.cardEdge,
       alignItems: 'center', justifyContent: 'center',
     },
+    chipRowWrap: { position: 'relative' },
+    chipFadeLeft:  { position: 'absolute', left: 0,  top: 0, bottom: 0, width: 20 },
+    chipFadeRight: { position: 'absolute', right: 0, top: 0, bottom: 0, width: 20 },
     chipRow: { paddingHorizontal: 12, paddingVertical: 2, gap: 8, flexDirection: 'row' },
     chip: {
       height: 30, borderRadius: 15,
       paddingHorizontal: 12, justifyContent: 'center',
-      backgroundColor: theme.colors.paperDeep,
-      borderWidth: 1, borderColor: theme.colors.cardEdge,
+      backgroundColor: theme.colors.paper,
+      borderWidth: 1, borderColor: theme.colors.rule,
     },
-    chipActive:     { backgroundColor: `${theme.colors.accent2}26`, borderColor: theme.colors.accent2 },
-    chipText:       { ...theme.textVariants.uiSmall, color: theme.colors.inkSoft },
-    chipTextActive: { color: theme.colors.accent2 },
+    chipActive:     { backgroundColor: theme.colors.accent2, borderColor: theme.colors.accent2 },
+    chipText:       { ...theme.textVariants.uiSmall, color: theme.colors.ink },
+    chipTextActive: { color: theme.colors.paper },
   }), [theme]);
 
   // ── Render ─────────────────────────────────────────────────────────────────
@@ -1160,30 +1165,52 @@ export default function MapScreen() {
               <Text style={{ fontSize: 13 }}>👤</Text>
             </View>
           </TouchableOpacity>
-          <ScrollView
-            horizontal
-            showsHorizontalScrollIndicator={false}
-            contentContainerStyle={s.chipRow}
-            style={{ pointerEvents: 'box-none' } as any}
-          >
-            {CAT_CHIPS.map(chip => {
-              const active = activeCatChips.has(chip);
-              return (
-                <TouchableOpacity
-                  key={chip}
-                  style={[s.chip, active && s.chipActive]}
-                  onPress={() => setActiveCatChips(prev => {
-                    const next = new Set(prev);
-                    active ? next.delete(chip) : next.add(chip);
-                    return next;
-                  })}
-                  activeOpacity={0.8}
-                >
-                  <Text style={[s.chipText, active && s.chipTextActive]}>{chip}</Text>
-                </TouchableOpacity>
-              );
-            })}
-          </ScrollView>
+          <View style={s.chipRowWrap}>
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={s.chipRow}
+              scrollEventThrottle={60}
+              onScroll={e => {
+                const scrolled = e.nativeEvent.contentOffset.x > 0;
+                if (scrolled !== chipsScrolled) setChipsScrolled(scrolled);
+              }}
+            >
+              {CAT_CHIPS.map(chip => {
+                const active = activeCatChips.has(chip);
+                return (
+                  <TouchableOpacity
+                    key={chip}
+                    style={[s.chip, active && s.chipActive]}
+                    onPress={() => setActiveCatChips(prev => {
+                      const next = new Set(prev);
+                      active ? next.delete(chip) : next.add(chip);
+                      return next;
+                    })}
+                    activeOpacity={0.8}
+                  >
+                    <Text style={[s.chipText, active && s.chipTextActive]}>{chip}</Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </ScrollView>
+            {chipsScrolled && (
+              <LinearGradient
+                pointerEvents="none"
+                colors={[theme.colors.paper, 'transparent']}
+                start={{ x: 0, y: 0 }}
+                end={{ x: 1, y: 0 }}
+                style={s.chipFadeLeft}
+              />
+            )}
+            <LinearGradient
+              pointerEvents="none"
+              colors={['transparent', theme.colors.paper]}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 0 }}
+              style={s.chipFadeRight}
+            />
+          </View>
         </SafeAreaView>
       )}
 

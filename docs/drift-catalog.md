@@ -580,17 +580,17 @@ needed.
 
 ### 5.42 — Two more `pointerEvents` occurrences inside style objects in `app/index.tsx`
 
-**Status:** `open`
+**Status:** `resolved` (fixed in this commit)
 
-**Surface:** After the Phase 1 fix at app/index.tsx:762, two further occurrences of `pointerEvents` inside a style object remain in the same file:
-- app/index.tsx:810 — `<ScrollView … style={{ pointerEvents: 'box-none' } as any}>`. The `'as any'` cast suppresses the TS error about the wrong location. Buried inside a style object, the prop is silently dropped — the chip row's parent ScrollView absorbs taps instead of letting them through to its children.
-- app/index.tsx:1539 — `gap: 8, pointerEvents: 'box-none',` inside `s.desktopPillWrap` (StyleSheet.create entry, with `'as any'` cast on line 1540). The corresponding consumer at app/index.tsx:962 ALSO passes `pointerEvents="box-none"` as a top-level prop — runtime behavior is correct (top-level prop wins), but the style entry is dead weight and reinforces the wrong pattern.
+**Surface:** After the Phase 1 fix at app/index.tsx:762, two further occurrences of `pointerEvents` inside a style object remained in the same file:
+- chip-row ScrollView — `<ScrollView … style={{ pointerEvents: 'box-none' } as any}>`. The `'as any'` cast suppressed the TS error about the wrong location. Buried inside a style object the prop was silently dropped; meanwhile the spurious intent (`'box-none'` on a horizontal ScrollView) would have prevented the ScrollView from capturing its own pan gestures had the prop been honored. User-visible bug: filter chip row didn't scroll horizontally past the first viewport's worth of chips.
+- `s.desktopPillWrap` StyleSheet entry — `gap: 8, pointerEvents: 'box-none',` (with `'as any'` cast). The consumer site ALSO passed `pointerEvents="box-none"` as a top-level prop; runtime was correct (top-level prop wins), but the style entry was dead weight and reinforced the wrong pattern.
 
-**Success state:** Both occurrences either moved to top-level `pointerEvents` props on their host components (line 810's ScrollView), or removed from the StyleSheet entry where redundant (line 1539). `'as any'` casts dropped once the underlying type error is gone.
+**Resolution:** Chip-row ScrollView's buried-in-style `pointerEvents` removed entirely — the ScrollView's default `auto` is exactly what we want (scroll captured by the ScrollView itself, taps passed through to TouchableOpacity chip children). `s.desktopPillWrap` `pointerEvents: 'box-none'` and `as any` cast removed from the StyleSheet entry; the consumer's top-level `pointerEvents="box-none"` prop is retained as the single source of truth.
 
-**Test:** After fix, `grep -n "pointerEvents" app/index.tsx` should report five hits, all classified TOP-LEVEL PROP.
+**Test:** After fix, `grep -n "pointerEvents" app/index.tsx` reports five hits, all top-level props on host components (`SafeAreaView` topSafe, `View` logoWrap, `View` desktopPillWrap, plus the two new `LinearGradient` chip-fade overlays which carry `pointerEvents="none"` so scroll/taps reach the ScrollView below).
 
-**Decided by:** Followed-up while fixing the Phase 1 dev-nav button tap bug; deferred to keep that fix surgical.
+**Decided by:** User-filed regression report after the Layer 1 home-screen migration; chip-row scroll failure on Android hardware made the latent bug visible.
 
 ---
 
@@ -695,6 +695,36 @@ Both modes derive POI sets from the existing `get_corridor_pois` / `get_nearby_p
 **Test:** Pre-route — load the home map at LA-area zoom with no destination; POIs cluster into density bubbles, expand on zoom-in. Post-route — pick a route; all corridor POIs render individually on home, customize map preview, and drive map regardless of zoom.
 
 **Decided by:** User flagged during the Layer 1.5 Android-insets pass; belongs to the POI pipeline arc, rendering phase.
+
+---
+
+### 5.50 — Filter chips are visual-only; not wired to route generation or POI filtering
+
+**Status:** `open`
+
+**Surface:** The home-screen chip row (`activeCatChips` state in `app/index.tsx`) and the customize-screen category pills (`selectedCats` state in `app/customize.tsx`) both toggle local state on tap but neither feeds into the underlying data fetch. Home-screen chips don't constrain route POI counts (`getPOIsAlongRoute` is called without a category filter on the home screen). Customize chips DO get serialized into the trip's `category_filter` array, but only at trip-save time — there's no live-filtered POI count or preview while toggling, and the corridor RPC's `category_filter` param is the only path that uses them.
+
+**Success state:** Home chips feed into route generation — selecting chips on the home screen narrows the POI count badge on each route card and the corridor preview to only matching categories, so the user picks a route knowing what stories it offers in their chosen categories. Customize chips drive live POI-level filtering with a visible count that updates as the user toggles. Slug mapping uses the existing `CAT_SLUG` table in both screens (UI labels → DB poi_categories slugs).
+
+**Trigger:** Wait until the POI pipeline lands actual category-tagged POIs across all 9 home-screen categories. Several home-screen chip labels currently map to slugs that have zero or near-zero POIs in production (per `docs/audit-poi-categories.md`); wiring chips before the data is there would just give users dead-state toggles.
+
+**Test:** Home — toggle "Nature" with a destination set; route POI counts shrink to nature-only POIs and the badge updates within ~2s. Customize — toggle "Food"; the live `liveStoryCount` figure in the context bar updates immediately.
+
+**Decided by:** User flagged during the Layer 1.5 chip-row visual fix; deferred to the POI pipeline arc (rendering / filtering phase) where the data side and the UI side both need work and should land together.
+
+---
+
+### 5.51 — Filter chip overflow at scale
+
+**Status:** `noted`
+
+**Surface:** The home-screen filter chip row uses a horizontal scroll with fade edges. It works for the current ~5–10 category pills, but past that neither linear scrolling nor a single dropdown serves the user well — scrolling buries options off-screen, and a flat dropdown loses the at-a-glance "what's active" affordance the chip row gives today.
+
+**Planned evolution:** "Active + Filters sheet" pattern. Only currently-selected filters appear as green-stamped pills in the chip row, plus a single outlined `+ Filters` pill that opens a grouped bottom sheet showing all categories with toggle states. The chip row stays compact regardless of taxonomy size; the sheet provides full discoverability.
+
+**Trigger:** Defer until category count justifies it — likely once the POI pipeline imports broader taxonomy and the home screen needs more than ~10 filter options. Premature now; the fade-edge scroll handles today's count cleanly.
+
+**Decided by:** User flagged after the Layer 1 home-screen migration (commit `a965214`); belongs to the home-screen rendering arc.
 
 ---
 
