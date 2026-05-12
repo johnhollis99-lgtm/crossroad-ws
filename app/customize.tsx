@@ -474,7 +474,6 @@ export default function CustomizeScreen() {
     setSaving(true);
 
     const payload = {
-      routeId:         routeInfo.id,
       routeName:       routeInfo.name,
       origin:          routeInfo.origin,
       destination:     routeInfo.destination,

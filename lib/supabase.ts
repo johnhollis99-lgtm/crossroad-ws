@@ -207,7 +207,6 @@ export async function getAvailableNarrators(userId?: string): Promise<NarratorRe
 
 // ── Save a trip session with narrator + filter configuration ─────────────
 export async function saveTrip(params: {
-  routeId?: string;
   routeName?: string;
   origin?: string;
   destination?: string;
@@ -226,7 +225,6 @@ export async function saveTrip(params: {
     .from('trips')
     .insert({
       user_id:          null, // replace with auth uid when auth is added
-      route_id:         params.routeId,
       route_name:       params.routeName,
       origin:           params.origin,
       destination:      params.destination,

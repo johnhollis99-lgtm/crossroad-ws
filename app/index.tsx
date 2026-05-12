@@ -526,7 +526,6 @@ export default function MapScreen() {
     const activeOrigin = originCoords ?? userLocation;
     navigation.navigate('customize', {
       route: JSON.stringify({
-        id: '',
         name: `Route ${selectedRoute.index + 1}`,
         distance_mi: selectedRoute.distanceMi,
         duration_minutes: selectedRoute.durationMin,

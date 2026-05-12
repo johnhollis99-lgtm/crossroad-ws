@@ -270,7 +270,7 @@ constraint-backed — see drift 5.33. Applier:
 
 ### 5.27 `trips.route_id` is text, no FK, unconstrained
 
-- **Status:** open. Rewritten 2026-05-11 after pre-flight surfaced live-state mismatch with original framing.
+- **Status:** Resolved 2026-05-11 via migration `20260511000005_trips_route_id_drop.sql` (Path 3). Note: the original reframe asserted all three write sites were already dirty in Bucket H, motivating the "avoid competing edits" fold-in. Pre-flight verification surfaced that customize.tsx was actually clean (last touched 2026-05-04). The substantive plan was unchanged; the fold-in rationale was misframed.
 
 - **Live state:** 31 of 32 `trips` rows hold `route_id = ''` (hardcoded empty string written from [app/index.tsx:529](../app/index.tsx#L529), flowing through [app/customize.tsx:477](../app/customize.tsx#L477) → [lib/supabase.ts:236](../lib/supabase.ts#L236) `saveTrip` INSERT). 1 row is NULL. Zero meaningful values. Zero readers across `app/`, `server/`, `scripts/`, `admin/`, `lib/`. Type is `text`; both candidate FK targets (`corridors.id`, `routes.id`) are `uuid`, so any future coercion requires backfill or row deletion for the `''` rows.
 
