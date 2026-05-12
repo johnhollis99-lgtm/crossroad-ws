@@ -759,7 +759,7 @@ export default function MapScreen() {
 
       {/* ── SEARCH PILL + CHIPS — mobile ────────────────────────────────── */}
       {!isDesktop && (
-        <SafeAreaView style={[s.topSafe, { pointerEvents: 'box-none' }]}>
+        <SafeAreaView style={s.topSafe} pointerEvents="box-none">
           {__DEV__ && (
             <View style={s.devNavRow}>
               <TouchableOpacity

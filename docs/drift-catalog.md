@@ -578,6 +578,22 @@ needed.
 
 ---
 
+### 5.42 — Two more `pointerEvents` occurrences inside style objects in `app/index.tsx`
+
+**Status:** `open`
+
+**Surface:** After the Phase 1 fix at app/index.tsx:762, two further occurrences of `pointerEvents` inside a style object remain in the same file:
+- app/index.tsx:810 — `<ScrollView … style={{ pointerEvents: 'box-none' } as any}>`. The `'as any'` cast suppresses the TS error about the wrong location. Buried inside a style object, the prop is silently dropped — the chip row's parent ScrollView absorbs taps instead of letting them through to its children.
+- app/index.tsx:1539 — `gap: 8, pointerEvents: 'box-none',` inside `s.desktopPillWrap` (StyleSheet.create entry, with `'as any'` cast on line 1540). The corresponding consumer at app/index.tsx:962 ALSO passes `pointerEvents="box-none"` as a top-level prop — runtime behavior is correct (top-level prop wins), but the style entry is dead weight and reinforces the wrong pattern.
+
+**Success state:** Both occurrences either moved to top-level `pointerEvents` props on their host components (line 810's ScrollView), or removed from the StyleSheet entry where redundant (line 1539). `'as any'` casts dropped once the underlying type error is gone.
+
+**Test:** After fix, `grep -n "pointerEvents" app/index.tsx` should report five hits, all classified TOP-LEVEL PROP.
+
+**Decided by:** Followed-up while fixing the Phase 1 dev-nav button tap bug; deferred to keep that fix surgical.
+
+---
+
 ## Cross-cutting observation
 
 Five entries (5.18, 5.19, 5.24, 5.25, 5.26) shared the same root: out-of-band
