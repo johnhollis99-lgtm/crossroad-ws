@@ -8,7 +8,7 @@ Drift entries 5.16, 5.19, 5.20, 5.21 (and others) had been referenced in audit d
 
 **Conventions:**
 - Entry numbers, once assigned, are immutable. Corrections get a letter suffix (e.g. `5.19a`) and the original entry stays as-is for history.
-- **Status:** `open` (not addressed) · `resolved` (migration/code shipped + verified) · `superseded` (replaced by a corrected entry) · `wontfix` (intentionally left).
+- **Status:** `open` (not addressed) · `resolved` (migration/code shipped + verified) · `superseded` (replaced by a corrected entry) · `wontfix` (intentionally left) · `noted` (drift observed and tracked for the record; no action warranted — distinct from `wontfix`, which implies a considered-and-declined fix proposal).
 - **Severity:** `urgent` (acutely user-impacting or security) · `high` (blocks downstream work) · `med` · `low` (cosmetic / convention).
 - New entries get appended; do not renumber existing ones.
 
@@ -28,7 +28,7 @@ Application code and the in-app `POI` type see a `category` field because
 goes through `category_id` and the JOIN. Never reintroduce a scalar
 `category` column on `pois`.
 
-**Status:** documented; no action needed.
+**Status:** `noted` — documented; no action needed.
 
 ---
 
@@ -291,7 +291,7 @@ constraint-backed — see drift 5.33. Applier:
 
 ### 5.28 `corridors` table content and intent
 
-**Status:** documented; no action needed.
+**Status:** `noted` — documented; no action needed.
 
 Holds 6 editorial named-drive corridors, all in eastern Sierra / Owens
 Valley / Tehachapi: Antelope Valley Aerospace Corridor, Carson Valley
@@ -322,7 +322,7 @@ lat/lng pairs, `distance_mi`, `duration_min`, `filter_snapshot jsonb`,
 
 **Posture:** documented.
 
-**Status as of 2026-05-10:** Schema hardened via the 5.20/5.21 hotfix
+**Status:** `noted` — schema hardened via the 5.20/5.21 hotfix
 (`20260510000008_routes_rls_hotfix.sql`). Captured here so future readers
 don't confuse `routes` (user favorites) with `corridors` (editorial named
 drives) — separate concerns despite the name overlap.
@@ -518,6 +518,24 @@ needed.
 
 ---
 
+### 5.38 — Catalog legend was missing a canonical keyword for "drift observed; no action warranted"
+
+**Status:** Resolved 2026-05-11 via this commit.
+
+**Surface:** The drift catalog legend defined four canonical statuses (`open` / `resolved` / `superseded` / `wontfix`), but entries 5.15 and 5.28 used an off-canon `**Status:** documented; no action needed.` because none of the four canonical values captured the semantic of "drift observed; tracked but no action warranted." Pre-flight check 4 surfaced a third entry (5.29) using a related off-canon variant (`**Status as of 2026-05-10:**` — its sole Status line, no later canonical) for the same semantic.
+
+**Success state:** Legend expanded to include `noted` as a fifth canonical status (drift observed and tracked for the record; no action warranted — distinct from `wontfix`, which implies a considered-and-declined fix proposal). Entries 5.15, 5.28, and 5.29 normalized to use `noted`, with existing explanatory prose preserved after the keyword. The "How to add the next entry" guidance updated from "four statuses" to "five statuses."
+
+**Test:** Reading the legend gives a distinct, unambiguous semantic for each of the five statuses; 5.15, 5.28, and 5.29 read as canonically-statused entries.
+
+**Judgment calls disclosed:**
+- The dual-Status pattern in 5.23 and 5.26 (`**Status as of YYYY-MM-DD:**` interim line + canonical `**Status:**` final line below it) was deliberately preserved. Those entries already have a canonical Status line; the interim line documents chronological resolution progress across sessions and was scoped out of this normalization by user direction.
+- 5.29's `**Status as of 2026-05-10:**` date-marker prefix was dropped (not converted to `**Status (as of 2026-05-10):**` or similar). With no later canonical Status line to contrast against, the date marker added clutter without value.
+- Legend positioning: `noted` placed after `wontfix` in the closing-state cluster. The closing-states cluster at the end of the legend, and `noted` is the softest close (no fix attempted versus `wontfix`'s considered-and-declined posture).
+- The legend bullet for `noted` is intentionally longer than the others because the disambiguation from `wontfix` is the whole point of the keyword — abbreviating it would defeat the purpose.
+
+---
+
 ## Cross-cutting observation
 
 Five entries (5.18, 5.19, 5.24, 5.25, 5.26) shared the same root: out-of-band
@@ -551,6 +569,6 @@ description so the swap happens alongside the git commit.
 ## How to add the next entry
 
 1. Pick the next free integer suffix in the appropriate section (currently §5 is the only section).
-2. Use one of the four statuses (`open`, `resolved`, `superseded`, `wontfix`).
+2. Use one of the five statuses (`open`, `resolved`, `superseded`, `wontfix`, `noted`).
 3. If you're filing a correction to an existing entry, append a letter suffix instead of editing the original — e.g. `5.20a`. The original stays as historical record.
 4. Cross-reference any related audit doc and migration files. Future operators should be able to navigate to the receipts without grepping.
