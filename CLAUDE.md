@@ -82,7 +82,7 @@ Operational notes:
 - `narration_audio.narrator_slug` is the voice-id column. Rename to `voice_id` is coordinated work and not committed; until then, every reader/writer uses `narrator_slug`.
 - (Cleanup of `trips.narrator_id` / `user_narrator_id` deferred — see migration backlog. Per drift catalog 5.19a, `narrators` and `user_narrators` are NOT retired.)
 
-**Mirror note:** This section is duplicated in SKILL.md for the chat-side Claude. Any edit here needs a parallel edit there.
+**Mirror note:** This section is duplicated in SKILL.md, which lives in the claude.ai project folder (not tracked in this repo) and is read by the chat-side Claude. When this section changes, sync via claude.ai project artefact swap — claude.ai produces an updated SKILL.md and the user replaces the project artefact. SKILL.md is not committed via git; flag the required mirror update in the PR description.
 
 ## Screen pages (primary flow)
 

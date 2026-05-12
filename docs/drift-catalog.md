@@ -52,7 +52,7 @@ goes through `category_id` and the JOIN. Never reintroduce a scalar
 
 ### 5.17 Undocumented `pois.poi_type` and `pois.visibility_radius_miles`
 
-Two columns on `pois` that neither CLAUDE.md nor SKILL.md mention:
+Two columns on `pois` that neither CLAUDE.md nor SKILL.md (chat-side, not tracked in repo) mention:
 
 - `poi_type text NOT NULL DEFAULT 'point'` — no CHECK constraint, value
   space unenforced.
@@ -64,7 +64,7 @@ trigger logic.
 
 **Posture:** document. Both stay as-is.
 
-**Action:** add to CLAUDE.md and SKILL.md schema sections. Add a CHECK
+**Action:** add to CLAUDE.md and SKILL.md (chat-side) schema sections. Add a CHECK
 constraint on `poi_type` once the value space is enumerated (a
 `SELECT DISTINCT` will be quick — most rows are likely 'point').
 
@@ -502,6 +502,22 @@ needed.
 
 ---
 
+### 5.37 — CLAUDE.md and drift-catalog SKILL.md references read as if SKILL.md were tracked in the repo
+
+**Status:** Resolved 2026-05-11 via this commit.
+
+**Surface:** CLAUDE.md contained references to SKILL.md that read as if SKILL.md were tracked in the repo; SKILL.md actually lives in the claude.ai project folder (loaded as a project skill) and is intentionally not tracked. The drift-catalog's cross-cutting observation and "Mirrored sections" subsection compounded this by saying CLAUDE.md / SKILL.md updates "should ride in the same PR" — internally contradictory if SKILL.md isn't in the repo.
+
+**Success state:** CLAUDE.md references updated to explicitly note SKILL.md is external (claude.ai-side, in the project folder, not tracked) and synced via project artefact swap per the convention codified end of session 2026-05-11. Drift-catalog cross-cutting observation and "Mirrored sections" subsection rewritten the same way: CLAUDE.md updates ride in the git PR; SKILL.md mirror updates are flagged in the PR description for the user to apply via claude.ai project artefact swap.
+
+**Test:** Reading CLAUDE.md from a fresh repo clone makes it clear SKILL.md lives external to the repo and where to find the sync convention.
+
+**Judgment calls disclosed:**
+- Historical SKILL.md references inside resolved entries (5.17 / 5.18 / 5.31 / 5.34) and the parallel `docs/audit-mode-terminology.md` session notes were left as historical record. The Status blocks within those entries already document SKILL.md's external-and-skipped nature for their session-frozen context; rewriting them would retroactively edit pre-resolution narratives. Two minimal parentheticals were added at 5.17 L55 and L67 (the only entry-narrative SKILL.md references that don't already self-clarify) to spare a new reader from waiting for the Status block.
+- `docs/venue-tour-design.md:671` SKILL.md mention (one-liner in a context-files list, already labeled "project skill") and the migration comment at `supabase/migrations/20260510000003_narration_audio_index.sql:9` (immutable historical artefact) left as-is.
+
+---
+
 ## Cross-cutting observation
 
 Five entries (5.18, 5.19, 5.24, 5.25, 5.26) shared the same root: out-of-band
@@ -509,19 +525,25 @@ schema work and documentation drift. The migration system contains 26 files;
 the live schema had at least one table (`user_preferences`), one function
 (`set_updated_at`), and documentation ambiguity (mode terminology) that
 weren't reproducible from those files. Going forward: anything that lands
-in production should land via the migration system, and CLAUDE.md / SKILL.md
-updates should ride in the same PR that introduces or changes a schema element.
+in production should land via the migration system, and CLAUDE.md updates should
+ride in the same PR that introduces or changes a schema element. SKILL.md
+(claude.ai-side, not in this repo) is synced separately via project artefact
+swap; flag any required SKILL.md mirror update in the PR description for the
+user to apply.
 
 ---
 
 ## Mirrored sections
 
-Some sections of CLAUDE.md are intentionally duplicated into SKILL.md so the
-chat-side Claude (which reads SKILL.md, not CLAUDE.md) has the same context.
-Edits to either side need a parallel edit to the other; if you change one,
-update the matching section in the other file in the same PR.
+SKILL.md is the chat-side Claude's project skill — it lives in the claude.ai
+project folder, not in this repo, and is not tracked by git. Some sections of
+CLAUDE.md are intentionally duplicated into SKILL.md so the chat-side Claude
+has the same context as Claude Code. When a mirrored section changes, sync via
+claude.ai project artefact swap (claude.ai produces the updated SKILL.md; user
+replaces the project artefact). Flag the required mirror update in the PR
+description so the swap happens alongside the git commit.
 
-- "Mode column semantics" — CLAUDE.md (canonical) ↔ SKILL.md (mirror).
+- "Mode column semantics" — CLAUDE.md (canonical) ↔ SKILL.md (mirror, chat-side).
   Either-side edits need parallel updates.
 
 ---
