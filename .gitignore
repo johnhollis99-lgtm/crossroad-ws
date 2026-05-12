@@ -48,6 +48,10 @@ scripts/audition-output/
 # ── One-off utility scripts ───────────────────────────────────────────────────
 scripts/verify-migrations.mjs
 
+# ── Session-scoped working notes ──────────────────────────────────────────────
+docs/alignment-plan.md
+docs/codebase-audit.md
+
 # ── Logs ─────────────────────────────────────────────────────────────────────
 *.log
 npm-debug.*
