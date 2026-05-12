@@ -34,7 +34,7 @@ const TYPE_SAMPLES: TypeSample[] = [
   { key: 'h2',         label: 'h2',         sample: 'Big Sur, California' },
   { key: 'h3',         label: 'h3',         sample: 'Today’s Story' },
   { key: 'body',       label: 'body',       sample: 'Half a mile up the road, the old Mission begins to rise from the dust.' },
-  { key: 'bodyItalic', label: 'bodyItalic', sample: 'Approaching Hearst Castle — three minutes out.' },
+  { key: 'bodyItalic', label: 'body italic', sample: 'Approaching Hearst Castle — three minutes out.' },
   { key: 'ui',         label: 'ui',         sample: 'Begin trip' },
   { key: 'uiSmall',    label: 'uiSmall',    sample: 'Next stop in 1.4 mi' },
   { key: 'meta',       label: 'meta',       sample: 'Now playing — 02:14' },

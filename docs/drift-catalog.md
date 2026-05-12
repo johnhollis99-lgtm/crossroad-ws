@@ -594,6 +594,20 @@ needed.
 
 ---
 
+### 5.43 — Field Notes type ramp clipped Fraunces descenders at display + h1
+
+**Status:** `resolved` (fixed in this commit)
+
+**Surface:** Direction A · Field Notes type ramp specified Fraunces display at 56/1.0 line-height and h1 at 32/1.05. Rendered on Android with Fraunces actually loaded, lowercase descenders (g, y, p, j) on these two variants get clipped by the line box bottom. Spec authored from static design comps without confirming rendered-on-hardware descender bounds.
+
+**Success state:** `display` lineHeight = 64 (1.15× at 56px), `h1` lineHeight = 38 (~1.19× at 32px). Headlines breathe; descenders fully visible. Editorial feel preserved (still tighter than RN default of 1.4).
+
+**Test:** Render a Fraunces h1 headline containing "g", "y", "p", or "j" on Android via Expo Go — descender fully visible within the line box.
+
+**Decided by:** User direction this session, after visually verifying Phase 1 on Android hardware via Expo Go for the first time.
+
+---
+
 ## Cross-cutting observation
 
 Five entries (5.18, 5.19, 5.24, 5.25, 5.26) shared the same root: out-of-band

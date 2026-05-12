@@ -765,12 +765,14 @@ export default function MapScreen() {
               <TouchableOpacity
                 onPress={() => navigation.navigate('design-system')}
                 hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                style={{ paddingHorizontal: 8, paddingVertical: 4 }}
               >
                 <Text style={s.devNavLabel}>[DS]</Text>
               </TouchableOpacity>
               <TouchableOpacity
                 onPress={() => navigation.navigate('components-demo')}
                 hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                style={{ paddingHorizontal: 8, paddingVertical: 4 }}
               >
                 <Text style={s.devNavLabel}>[CD]</Text>
               </TouchableOpacity>
@@ -1273,12 +1275,12 @@ const s = StyleSheet.create({
   topSafe:  { position: 'absolute', top: 0, left: 0, right: 0 },
   logoWrap: { alignItems: 'center', paddingVertical: 4 },
   devNavRow: {
-    position: 'absolute', top: 4, right: 16,
+    position: 'absolute', top: 4, right: 20,
     flexDirection: 'row', gap: 8, zIndex: 100,
   },
   devNavLabel: {
     fontFamily: Platform.select({ ios: 'Menlo', android: 'monospace', default: 'monospace' }),
-    fontSize: 10,
+    fontSize: 16,
     color: C.TEXT_TERTIARY,
   },
   topBar: {

@@ -8,12 +8,13 @@ Package/slug names still say "roadstory" internally; all user-facing strings say
 ## Stack
 
 - **Frontend:** React Native / Expo (TypeScript) — all UI hand-coded as standard RN. EAS Build for iOS/Android binaries, EAS Update for OTA. One codebase compiles to both platforms.
-- **Navigation:** `createNativeStackNavigator` in App.tsx (NOT Expo Router). All new screens must be registered there.
-  - Registered: index, filters, customize, drive, driving, hiking, trail
+- **Navigation:** `createNativeStackNavigator` in App.tsx (NOT Expo Router). All new screens must be registered there. No `app/_layout.tsx`; no `expo-router` import anywhere in source (transitive peer-dep references in `node_modules/.package-lock.json` only). Entry chain: `index.ts` → `registerRootComponent(App)` → `App.tsx` → `<NavigationContainer><Stack.Navigator>…</Stack.Navigator></NavigationContainer>`. First registered `Stack.Screen` (`"index"`) is the default boot route (no `initialRouteName` set).
+  - Registered: index, filters, customize, drive, driving, hiking, trail, design-system, components-demo
+  - `design-system` and `components-demo` are `__DEV__`-only demo screens (still always-registered routes — gating is at the nav-button level inside `app/index.tsx`, not at registration). See "Design system" section below.
 - **Backend:** Supabase + PostGIS, Node.js + Express + Socket.io on :3001
 - **Maps:** Google Maps / Directions / Elevation (native); Mapbox shim for web
 - **LLM:** xAI/Grok; TTS is provider-abstracted via `scripts/lib/tts/`. Primary provider is Google Cloud TTS. ElevenLabs, OpenAI, Polly, and self-hosted are pluggable but inactive.
-- **Design tokens:** `lib/theme.ts` → `C` object. `lib/mapStyle.ts` → `MAP_STYLES`.
+- **Design tokens:** Two palettes coexist during the migration. (a) `src/design/tokens.ts` → Field Notes (Phase 1, landed 2026-05-12 in commit `98d8243`) — light/dark palette, type ramp, spacing, radii. Consumed by `src/components/**` and any newly-migrated screen. Sole source of truth for new color / type values. (b) Legacy `lib/theme.ts` → `C` object (dark earthy palette) — still consumed by every screen in `app/**` and by `components/{MapStylePicker, XRoadLogo}.tsx`. `lib/mapStyle.ts` → `MAP_STYLES` (untouched by the design system).
 
 ## Screen flows
 
@@ -21,6 +22,9 @@ Package/slug names still say "roadstory" internally; all user-facing strings say
 index.tsx → customize.tsx → drive.tsx     (narrator-aware driving — primary flow)
 index.tsx → filters.tsx   → driving.tsx   (legacy flow, still functional)
 hiking.tsx → filters.tsx (mode='hiking') → trail.tsx
+
+index.tsx → design-system     (DEV-only — [DS] nav button, __DEV__ && !isDesktop)
+index.tsx → components-demo   (DEV-only — [CD] nav button, __DEV__ && !isDesktop)
 ```
 
 ## Hard rules — never break these
@@ -110,7 +114,13 @@ User mental model / naming convention used in conversation:
 | `scripts/precache-popular-routes.ts` | CLI: pre-generates narration for POIs along a named route or GeoJSON file |
 | `scripts/sweep-orphaned-narration.ts` | Sweeper: deletes stale pending rows (> 1 h) and old failed rows (> 24 h) from narration_audio + tries Storage cleanup. Run hourly. |
 | `components/MapStylePicker.tsx` | Floating map style selector. Button shows 22×22 thumbnail of active style (not a bars icon). Trail mode toggle prop still exists but is not wired from any screen. |
-| `components/XRoadLogo.tsx` | Brand wordmark — "X" teal #2EC4B6 + "Road" cream; sizes `sm`/`md`; road-intersection icon |
+| `components/XRoadLogo.tsx` | Brand wordmark — "X" teal #2EC4B6 + "Road" cream; sizes `sm`/`md`; road-intersection icon. Legacy; superseded for new screens by `src/components/Wordmark.tsx`. |
+| `src/design/tokens.ts` | Field Notes design tokens — sole source of color / type / spacing / radius / elevation. No hardcoded hex anywhere else in `src/`. |
+| `src/design/theme.ts` | `lightTheme` / `darkTheme` + `ThemeProvider` + `useTheme()`. AsyncStorage key `xroad.colorScheme`. Wrap the app root before `NavigationContainer`. |
+| `src/design/fonts.ts` | `useAppFonts()` → `useFonts(FONT_MAP)` over `@expo-google-fonts/{fraunces,inter-tight,jetbrains-mono}`. App.tsx fail-fast gates the navigator until fonts resolve. |
+| `src/design/DesignSystemScreen.tsx` | Demo screen at route `design-system` — every swatch + type variant, light + dark side-by-side. |
+| `src/components/index.ts` | Barrel for the Field Notes component library (12 primitives + 2 demo screens). |
+| `src/components/ComponentsDemoScreen.tsx` | Demo screen at route `components-demo` — every component variant, light + dark. |
 | `server/` | Node.js + Express + Socket.io on :3001 |
 
 ## drive.tsx UI details
@@ -131,6 +141,61 @@ User mental model / naming convention used in conversation:
 ## customize.tsx UI details
 
 - **Back button** — top-left of map header overlay (`s.backBtn`, circular dark, `←`). Calls `navigation.goBack()` → returns to index (home).
+
+## Design system — Field Notes (Phase 1, landed 2026-05-12 in commit `98d8243`)
+
+Editorial / NatGeo-travel-journal aesthetic. The new system lives entirely under `src/`. Existing screens stay on the legacy `lib/theme.ts` `C` palette until migrated screen-by-screen.
+
+### Structure
+
+```
+src/
+  design/
+    tokens.ts                 Sole source of color / type / spacing / radius / elevation.
+                              Light + dark palettes; type ramp (display → metaSmall
+                              + button + buttonStrong); 4px spacing; radii s/m/l/xl/pill;
+                              elevation e1/e2; glassTint + glassTintInverse overlay colors.
+    theme.ts                  lightTheme + darkTheme + ThemeProvider + useTheme().
+                              AsyncStorage key `xroad.colorScheme` persists user override
+                              (light | dark | system). Wrap before NavigationContainer.
+    fonts.ts                  useAppFonts() over @expo-google-fonts/{fraunces,
+                              inter-tight,jetbrains-mono}. FONT_MAP keys match
+                              the family-name strings in tokens.ts.fontFamilies.
+    DesignSystemScreen.tsx    Demo at route `design-system` — every color swatch,
+                              every type variant, light + dark side-by-side.
+  components/
+    Wordmark, Kicker, Card, SegmentedControl, PrimaryButton, DangerButton,
+    AudienceMark, GlassPill, OfflineBadge, NarrationCard, Waveform, FieldNotesDivider
+    index.ts                  Barrel export.
+    ComponentsDemoScreen.tsx  Demo at route `components-demo` — every component,
+                              every variant, light + dark side-by-side.
+```
+
+### Hard rules
+
+- **No hardcoded hex anywhere in `src/` outside `src/design/tokens.ts`.** Verify with `grep -rn '#[0-9a-fA-F]{3,8}' src/` — all hits must land in tokens.ts (12 palette entries + 2 elevation shadow literals).
+- **No inline `fontFamily` / `fontSize` literals outside `theme.textVariants`.** One documented exception: `src/components/Wordmark.tsx` uses inline `fontFamily` + `fontSize` for the brand-mark cap height (24 / 40 / 56), called out in `src/components/index.ts`'s header comment.
+- **All new components consume tokens via `useTheme()`.** No prop-drilled colors. Per-color overrides live on the variant prop (`<Card variant="ink">`), not as raw hex.
+- **Type-ramp variants are atomic.** Don't override `fontWeight` / `fontStyle` inline on a variant — add a new variant if the existing ramp doesn't cover the case. Precedent: Phase 1 added `button` + `buttonStrong` (both Fraunces italic 16/1.3, weights 500 / 600) precisely so PrimaryButton / DangerButton / NarrationCard didn't need inline italic overrides on `h3`.
+- **`AudienceMark`, not `NarratorMark`.** The repo aligns to the `voice_configs.mode` audience taxonomy (family / kids / unfiltered / local), not the spec's narrator taxonomy (professor / local / kid / trucker). Both glyph sets shared; only naming differs. See drift catalog 5.39 — `NarratorMark` deferred to the Prompt 10 narrator-picker arc.
+
+### Demo screen entry points
+
+Two `__DEV__`-gated buttons sit at the top-right of `app/index.tsx`'s mobile layout:
+- `[DS]` → `navigation.navigate('design-system')`
+- `[CD]` → `navigation.navigate('components-demo')`
+
+Render only when `__DEV__ && !isDesktop`. Production builds elide them.
+
+Implementation lives at [app/index.tsx](app/index.tsx#L763) inside the `<SafeAreaView style={s.topSafe} pointerEvents="box-none">` block. Styled via `s.devNavRow` (absolute top:4 right:16, zIndex 100) and `s.devNavLabel` (legacy `Platform.select` monospace 10pt — these two dev-only buttons are deliberately NOT migrated to the new design system).
+
+**`pointerEvents` posture on `SafeAreaView`:** must be a top-level prop, not inside the `style` array. The library (`react-native-safe-area-context` 5.6.2) accepts both forms in newer RN, but only the top-level form works reliably for `box-none`. See drift catalog 5.42 (proposed) for two remaining in-style hits in the same file (lines 810 and 1539) that are deferred for a follow-up cleanup.
+
+### Decisions logged in drift catalog
+
+- **5.39** (`noted`): `AudienceMark` over Prompt 03's `NarratorMark`. Audience-taxonomy alignment with `voice_configs.mode`. `NarratorMark` deferred to Prompt 10.
+- **5.40** (`noted`): PrimaryButton sublabel uses `metaSmall` (mono 9px) rather than spec's 8px. 9px is the smallest in the canonical ramp; 8px deemed below readability threshold.
+- **5.41** (`open`): repo-wide `npx tsc --noEmit` has 29 pre-existing type errors across 5 files / subprojects (admin/, app/drive.tsx:335, lib/__tests__/routeBadges.test.ts, scripts/poi-import/lib/category-map.ts:27, scripts/precache-popular-routes.ts:434). Deferred to a dedicated cleanup arc — does not block Phase 1. Phase 1's own files (App.tsx, app/index.tsx, src/**) have **zero** tsc errors.
 
 ## Supabase schema (key tables)
 
@@ -425,6 +490,7 @@ Do not implement any of these yet; confirm with user first. When touching the ro
 - **Always pass `--port <n>` explicitly.** When 8081 is occupied, `expo start` prompts "Use port 8084 instead?" — in non-interactive mode it errors with `Input is required, but 'npx expo' is in non-interactive mode` and prints `› Skipping dev server`, exit 1. The `npm start` script (`expo start`, no port) is fine in a real terminal but unusable from a background task.
 - **No QR code prints** in non-interactive mode — only `Waiting on http://localhost:<port>`. Connect from Expo Go via "Enter URL manually" → `exp://<LAN-ip>:<port>`.
 - **Stale Metro bundlers accumulate.** Each abandoned `expo start` keeps its port held until the node process is killed. Check with `netstat -ano | findstr :808` (lists 8081–8089 listeners + PIDs). Kill via Git Bash: `taskkill //PID <pid> //F` — **double-slash** on the flags so MSYS doesn't path-mangle them into `/PID` / `/F`.
+- **Stale-bundle gotcha (learned 2026-05-12).** Pressing `r` in Metro reloads JS on the device from whatever bundle Metro is currently serving — it does **not** force a re-bundle. On Windows, Metro's file watcher occasionally misses edits (drive-letter paths, OneDrive sync, antivirus interference). Symptom: source edit is correct on disk but the device behaves as if the change never happened (e.g., a freshly-added `console.log` in a `__DEV__` block never fires). Resolution: kill **all** Metro processes (`taskkill //PID <each-pid> //F`), confirm with `netstat -ano | findstr :808` returning no output, then restart with `--clear` (`npx expo start --port 8081 --clear`) in your interactive terminal so you get the QR + can press `r` from there. Multiple stacked Metro listeners compound this — if `netstat` shows more than one `:808x` listener, the device may be attached to a stale instance.
 
 ## Narrative extraction pipeline (`scripts/narrative-extraction/`)
 
@@ -730,7 +796,9 @@ Verification scripts: `scripts/verify-migrations.mjs` (66/66 checks passed on 00
 - **Repo:** `https://github.com/johnhollis99-lgtm/crossroad-ws.git` — main branch on origin/main.
 - Git binary (not on PATH): `C:\Users\johnh\AppData\Local\GitHubDesktop\app-3.5.8\resources\app\git\cmd\git.exe`
 - **`.gitignore`** — covers: `node_modules/` (all sub-packages), `.env` + `server/.env` (secrets), `.expo/`, `dist/`, `admin/.next/`, `scripts/*/cache/`, `scripts/audition-output/`, `*.opus`, `*.tsbuildinfo`, OS files, `.claude/scheduled_tasks.lock`, `.claude/settings.local.json`, `supabase/.temp/`, plus session-scoped pre-handoff working notes (`docs/alignment-plan.md`, `docs/codebase-audit.md` — added 2026-05-11 per chore(gitignore) commit, files retained locally for historical context).
-- **Recent commit history (top of `main`, 2026-05-11):**
+- **Recent commit history (top of `main`, 2026-05-12):**
+  - `bf3617f` fix(dev-nav): pointerEvents prop placement on top SafeAreaView (2026-05-12; +34 ahead of origin/main)
+  - `98d8243` feat(design-system): ship Phase 1 — Field Notes tokens + components (2026-05-12; +33 ahead of origin/main)
   - `70fbd68` docs(db): snapshot 2026-05-10 — post-watermark 20260511000001 baseline
   - `3f7db05` chore(gitignore): exclude session-scoped pre-handoff working notes
   - `3ec69ba` feat(diag): add diag-tts-readiness POI-pipeline pre-flight script
@@ -742,9 +810,11 @@ Verification scripts: `scripts/verify-migrations.mjs` (66/66 checks passed on 00
   - `a1c4c4b` migrate+docs(5.16): drop pois.source legacy column + catalog status
   - `0a7d516` migrate+docs(5.30): corridors enum_checks + catalog status
   - `cc9732c` docs(catalog): introduce drift-catalog covering sessions Prompt 06 through Prompt 08
-- **Deferred arcs awaiting follow-up prompts (2026-05-11 EOD):**
-  - **5.27 Path 3 implementation** — drop `trips.route_id` column + remove three write sites (`app/index.tsx:528` route object literal `id: ''`, `app/customize.tsx:477` saveTrip payload `routeId:`, `lib/supabase.ts:217+236` SaveTripParams type + INSERT). Add migration `<today-prefix>000NNN_trips_route_id_drop.sql` (date prefix MUST match local-clock creation day per L652 convention). Edit CLAUDE.md L141 trips bullet to drop the `route_id` clause. Update drift catalog 5.27 status to `Resolved`, attaching the rationale-correction note that customize.tsx was clean (not dirty as the original entry claimed). `app/drive.tsx`'s 5 `routeId` references are socket-room naming — out of scope.
-  - **Design-system integration commit** — five entries as one atomic change: `App.tsx` (ThemeProvider wrap + fonts gate + 2 demo screens registered), `app.json` (expo-font plugin), `package.json` + `package-lock.json` (deps: react-native-svg, expo-blur, expo-font, async-storage), and untracked `src/` (4 design files + 14 components, Field Notes editorial aesthetic). Pre-rollout state: demo screens registered but not navigable from production flows; zero production screens consume `useTheme()` or `src/components/*`; font assets not yet shipped (empty FONT_MAP). Open coordination concerns before the commit: two design-token sources (`lib/theme.ts` `C` vs `src/design/tokens.ts` Field Notes), three component homes (`components/` vs `app/` vs `src/components/`), `src/` naming, `xroad.colorScheme` AsyncStorage key vs `user_preferences` table boundary.
+- **Deferred arcs awaiting follow-up prompts (2026-05-12 EOD):**
+  - **5.27 Path 3 implementation** — drop `trips.route_id` column + remove three write sites (`app/index.tsx:528` route object literal `id: ''`, `app/customize.tsx:477` saveTrip payload `routeId:`, `lib/supabase.ts:217+236` SaveTripParams type + INSERT). Add migration `<today-prefix>000NNN_trips_route_id_drop.sql` (date prefix MUST match local-clock creation day per L652 convention). Edit CLAUDE.md trips bullet to drop the `route_id` clause. Update drift catalog 5.27 status to `Resolved`, attaching the rationale-correction note that customize.tsx was clean (not dirty as the original entry claimed). `app/drive.tsx`'s 5 `routeId` references are socket-room naming — out of scope.
+  - **Design-system integration commit** — ✅ **RESOLVED** 2026-05-12 via commit `98d8243` (`feat(design-system): ship Phase 1 — Field Notes tokens + components`). 25 files / 2,201 insertions. See "Design system" section above.
+  - **Drift 5.42 (open) — `pointerEvents` buried in style in two more spots in `app/index.tsx`.** Catalog entry LANDED in commit `bf3617f` (2026-05-12) alongside the SafeAreaView fix at line 762. Two further occurrences remain unfixed: line 810 on the chip-row `<ScrollView style={{ pointerEvents: 'box-none' } as any}>` (the `as any` cast suppresses the TS error — actually-buggy: ScrollView absorbs taps instead of forwarding to chip TouchableOpacity rows), and line 1539 inside the `s.desktopPillWrap` StyleSheet entry (its consumer at line 962 redundantly passes a top-level `pointerEvents="box-none"` prop, so runtime is fine but the dead style entry reinforces the wrong pattern for the next reader). Apply the fix in a dedicated small commit; do not touch unrelated lines. See `docs/drift-catalog.md#5.42` for the full entry.
+  - **Drift 5.41 (open) — 29 pre-existing tsc errors.** Repo-wide `npx tsc --noEmit` fails with 29 errors across `admin/` (15, Next.js path-alias resolution), `app/drive.tsx:335` (2, removed `setStoryCount` call site), `lib/__tests__/routeBadges.test.ts` (9, `BadgeRoute` widened), `scripts/poi-import/lib/category-map.ts:27` (1, typo), `scripts/precache-popular-routes.ts:434` (1, type narrowing). Cleanup arc on hold until a future session — does not block ongoing work but tooling like pre-commit type-gates can't run repo-wide until resolved.
 
 ## scripts/seed-db.mjs
 

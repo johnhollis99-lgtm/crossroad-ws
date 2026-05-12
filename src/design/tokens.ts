@@ -70,14 +70,14 @@ export const textVariants: Record<TextVariantName, TextStyle> = {
     fontFamily:    fontFamilies.serif,
     fontWeight:    '500',
     fontSize:      56,
-    lineHeight:    56,           // 1.0
+    lineHeight:    64,           // 1.15 — clears Fraunces descenders on Android
     letterSpacing: -1.6,
   },
   h1: {
     fontFamily:    fontFamilies.serif,
     fontWeight:    '500',
     fontSize:      32,
-    lineHeight:    33.6,         // 1.05
+    lineHeight:    38,           // 1.19 — clears Fraunces descenders on Android
     letterSpacing: -0.6,
   },
   h2: {
