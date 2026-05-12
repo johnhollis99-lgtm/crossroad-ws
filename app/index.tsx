@@ -76,10 +76,13 @@ const DESKTOP_BP = 768;
 
 const INITIAL_REGION = { latitude: 34.18, longitude: -118.33, latitudeDelta: 0.12, longitudeDelta: 0.12 };
 
-// Browse-mode POI fetch: throttle + cap radius. 200km matches "zoomed-way-out
-// shouldn't try to fetch the whole state in one query."
-const BROWSE_FETCH_DEBOUNCE_MS = 500;
-const BROWSE_MAX_RADIUS_M = 200_000;
+// Browse-mode POI fetch: zoom-aware radius, debounced. Radius derived from
+// the larger of latitudeDelta/longitudeDelta (each ° ≈ 111 km at the
+// equator; longitude scales by cos(lat) but max-delta dominates anyway).
+// 1000 km ceiling lets state-wide views actually fetch state-wide data.
+const BROWSE_FETCH_DEBOUNCE_MS = 250;
+const BROWSE_MAX_RADIUS_M = 1_000_000;
+const BROWSE_MAX_RESULTS  = 500;
 const SNAP_PTS = {
   peek:     Math.round(SCREEN_H * 0.18),
   default:  Math.round(SCREEN_H * 0.38),
@@ -234,16 +237,18 @@ export default function MapScreen() {
   const fetchBrowsePOIs = useCallback(async (region: {
     latitude: number; longitude: number; latitudeDelta: number; longitudeDelta: number;
   }) => {
-    // Center-to-corner distance in km. 1° latitude ≈ 111 km; longitude
-    // scales by cos(latitude). Cap at 200 km so state-wide views don't
-    // overwhelm get_nearby_pois.
-    const dLat = region.latitudeDelta / 2;
-    const dLng = (region.longitudeDelta / 2) * Math.cos(region.latitude * Math.PI / 180);
-    const radiusKm = Math.sqrt(dLat * dLat + dLng * dLng) * 111;
+    // Radius derived from the larger of the two viewport half-spans, so
+    // state-wide zoom fetches state-wide data instead of a small central
+    // disc that misses most of the visible map. 1° ≈ 111 km.
+    const halfLatKm = (region.latitudeDelta / 2) * 111;
+    const halfLngKm = (region.longitudeDelta / 2) * 111 * Math.cos(region.latitude * Math.PI / 180);
+    const radiusKm = Math.max(halfLatKm, halfLngKm);
     const radiusM = Math.min(radiusKm * 1000, BROWSE_MAX_RADIUS_M);
     try {
       const pois = await getNearbyPOIs(region.latitude, region.longitude, radiusM, null, 'driving');
-      setBrowsePOIs(pois);
+      // RPC returns distance-sorted (closest first). Cap at 500 to keep
+      // the cluster engine + render path bounded at very wide zoom.
+      setBrowsePOIs(pois.slice(0, BROWSE_MAX_RESULTS));
     } catch (err) {
       console.error('[home] browse POI fetch failed:', err);
     }

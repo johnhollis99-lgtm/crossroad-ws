@@ -784,6 +784,79 @@ Label-style variants (`routesLabel`, `legendText`, `badgeText`) intentionally ke
 
 ---
 
+### 5.62 — Browse-mode radius hard-cap at 200km caused state-wide cluster vanishing
+
+**Status:** `resolved` (fixed in this commit)
+
+**Surface:** After commit `420f5bc` shipped Stage 1 home-screen clustering, the user reported clusters appearing during pan/zoom but disappearing when the camera settled at state-wide zoom. Root cause: the original `BROWSE_MAX_RADIUS_M = 200_000` cap. At state-wide zoom (latitudeDelta ~6°, ~330 km half-span), the fetch radius clamped to 200 km, returning POIs only in a small central disc — ~80% of the visible viewport had no data. During pan the old POI set lingered visually until the new fetch returned the next small disc for the new center, producing the "snap to empty then snap back" feel.
+
+**Resolution:**
+- Replaced `200_000` cap with `1_000_000` (1000 km). Radius derivation switched from `sqrt(dLat² + dLng²)` (corner distance, smaller) to `max(halfLatKm, halfLngKm)` so state-wide zoom actually fetches state-wide data.
+- Capped POI count at 500 in JS post-fetch. The RPC `get_nearby_pois` doesn't currently expose a `limit` param or project `significance_score` into its return shape, so the slice is over the RPC's default `ORDER BY distance_m` (closest-first). User direction was "sorted by significance_score DESC if exposed; otherwise post-filter in JS" — taking the JS-side closest-first fallback. True significance-sorted top-N would require an RPC migration extending the projection + adding a `limit` param. Deferred.
+
+**Test:** Open home with no destination, zoom out to state-wide. Cluster bubbles appear and persist at rest, scattered across California's dense areas (LA basin, SF Bay, Central Coast, etc.) — not just near one center.
+
+**Decided by:** User-filed regression after commit `420f5bc`; Stage 1 clustering follow-up.
+
+---
+
+### 5.63 — Pan/zoom lag from 500ms debounce + post-cap render burden
+
+**Status:** `resolved` (fixed in this commit)
+
+**Surface:** The original Stage 1 home clustering used a 500ms debounce on `onRegionChangeComplete` and no cap on browse POIs returned. After a pan, the user saw a half-second pause before the cluster engine recomputed and ~uncapped Markers redrew. Combined with 5.62's "clusters vanish at rest" effect, the interaction felt sluggish.
+
+**Resolution:**
+- Debounce reduced from 500ms → 250ms.
+- Browse fetch capped at 500 POIs (see 5.62), bounding the cluster engine + render work regardless of zoom-out radius.
+- Verified Marker keys are `poi.id`-based (line `key={``browse-${poi.id}``}`), so React reconciles fetched-set deltas instead of remounting every Marker on each refetch.
+
+**Test:** At state-wide zoom on home, pan slowly across the state. Clusters update within ~250ms of pan-end with no flicker.
+
+**Decided by:** User-filed regression after commit `420f5bc`; same diagnosis pass as 5.62.
+
+---
+
+### 5.64 — POI markers missing on drive.tsx after trip start
+
+**Status:** `open` (instrumented this commit; speculative fix pending runtime confirmation)
+
+**Surface:** User reports zero ink-red POI dots render on `app/drive.tsx` after a trip starts. Phase 0 investigation reported this screen calls `getPOIsAlongRoute('driving')` and renders uncapped `<Marker>` children from the `pois` state. Static code review of the file (no changes since the initial commit `d1b5c30`) didn't surface an obvious break:
+- `routePreview.polylineCoords` round-trips through JSON params correctly (home → customize → drive); the Polyline at `drive.tsx:565` is gated on `polylineCoords.length > 1` and per user's screenshots renders fine, so the polyline IS present.
+- The fetch effect at `drive.tsx:430` calls `getPOIsAlongRoute(polyline, poiDist, cats, mode)` with valid args; the JSX map at `drive.tsx:583` is straightforward.
+- Default `poiDist = filters.corridorMi ?? 1` (1-mile corridor). 1 mile on a typical 50–60 mi route should still return some POIs based on smoke-batch corridor counts in CLAUDE.md, but a sparse rural route could plausibly return very few.
+
+**Resolution (this commit):** Added a `__DEV__`-gated `console.info` at the fetch effect entry that prints `polyline=N, corridorMi=K, mode=M, categories=…, fetched=W`. On next test run the user can read the log and confirm whether the fetch fires, what corridor it uses, and how many POIs come back. Three follow-up hypotheses depending on what the log shows:
+- `polyline=0` → params didn't round-trip; check customize.tsx → drive.tsx serialization.
+- `polyline=N, fetched=0` → corridor too narrow for the test route, or RLS/filter rejection. Likely fix: bump default `poiDist` fallback from 1 to 5 miles for drive (home stays at 1).
+- `polyline=N, fetched=M>0` → render-side bug; check map camera vs marker coordinates.
+
+**Test:** Start a trip → ink-red POI dots visible along the route polyline. Tap one → callout opens. (Acceptance criterion 3.)
+
+**Decided by:** User-filed regression. Could not diagnose statically without runtime visibility; instrumentation deferred to next test run.
+
+---
+
+### 5.65 — Drive "Up next" list shows distance from queue (static arc-length) not liveQueue (GPS-driven)
+
+**Status:** `resolved` (fixed in this commit)
+
+**Surface:** Drive screen has two consumers of POI distance data:
+- The "next story" pill at top reads `nextPoiDist = liveQueue[0]?.distanceMi` (haversine from user GPS to POI, recomputed on every GPS update).
+- The structured "Up next" list at `drive.tsx:805` iterated over `queue.slice(0, 5)` — the **static** queue set once at POI-fetch time with arc-length distances from route start (not from current position).
+
+For a user mid-trip, list distances stay frozen at "60 mi to Joshua Tree" even as they drive toward it, while the pill correctly counts down to ~5 mi. Also, when the socket pushes `narration_queued { next_pois }`, server-pushed items may lack a `distanceMi` field — `fmtMiles(undefined)` would crash on `.toFixed`.
+
+**Resolution:**
+- List now iterates `liveQueue.slice(0, 5)` — same source as the pill, distances update with GPS movement.
+- `fmtMiles()` hardened with `if (mi == null || !Number.isFinite(mi)) return '—'` so server-pushed items missing `distanceMi` render as '—' instead of crashing.
+
+**Test:** Start a trip → scroll the Up next list → each item shows a distance value that updates as GPS position changes. (Acceptance criterion 4.)
+
+**Decided by:** User-filed regression. Diagnosed statically by following the two consumers.
+
+---
+
 ## Cross-cutting observation
 
 Five entries (5.18, 5.19, 5.24, 5.25, 5.26) shared the same root: out-of-band

@@ -79,7 +79,8 @@ function fmtSeconds(s: number): string {
   return `${m}:${sec.toString().padStart(2, '0')}`;
 }
 
-function fmtMiles(mi: number): string {
+function fmtMiles(mi: number | undefined | null): string {
+  if (mi == null || !Number.isFinite(mi)) return '—';
   return mi < 0.1 ? `${Math.round(mi * 5280)} ft` : `${mi.toFixed(1)} mi`;
 }
 
@@ -431,7 +432,18 @@ export default function Drive() {
     (async () => {
       const polyline   = routePreview.polylineCoords ?? [];
       const cats: string[] | null = filters.categoryFilter?.length ? filters.categoryFilter : null;
-      const fetched = await getPOIsAlongRoute(polyline, poiDist, cats, trailMode ? 'hiking' : 'driving');
+      const mode = trailMode ? 'hiking' : 'driving';
+      const fetched = await getPOIsAlongRoute(polyline, poiDist, cats, mode);
+
+      if (__DEV__) {
+        console.info('[drive] POI fetch:',
+          'polyline=' + polyline.length,
+          'corridorMi=' + poiDist,
+          'mode=' + mode,
+          'categories=' + (cats?.join(',') ?? 'all'),
+          'fetched=' + fetched.length,
+        );
+      }
 
       // Project each POI onto the route polyline to get sequential arc-distance from start.
       const withArc = fetched.map(p => ({
@@ -799,17 +811,19 @@ export default function Drive() {
                 </TouchableOpacity>
               </View>
 
-              {/* Up next queue — sorted closest first */}
+              {/* Up next queue — sorted closest first.
+                  liveQueue (not queue) so distances update with GPS movement
+                  and survive server-pushed items that omit distanceMi. */}
               <View style={s.upNext}>
                 <Text style={s.upNextLabel}>Up next</Text>
-                {queue.slice(0, 5).map((item, idx) => (
+                {liveQueue.slice(0, 5).map((item, idx) => (
                   <View key={`${item.id}-${idx}`} style={s.queueRow}>
                     <View style={s.queueDot} />
                     <Text style={s.queueName} numberOfLines={1}>{item.name}</Text>
                     <Text style={s.queueDist}>{fmtMiles(item.distanceMi)}</Text>
                   </View>
                 ))}
-                {queue.length === 0 && (
+                {liveQueue.length === 0 && (
                   <Text style={s.queueEmpty}>Loading stories…</Text>
                 )}
               </View>
