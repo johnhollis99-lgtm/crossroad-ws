@@ -485,6 +485,16 @@ export default function Drive() {
   useEffect(() => {
     if (__DEV__) {
       console.info('[drive] render:markers source=pois count=' + pois.length);
+      // One-shot firstPOI shape dump — drop after marker-visibility fix is confirmed live.
+      const first = pois[0];
+      if (first) {
+        console.info('[drive] render:firstPOI',
+          'keys=' + Object.keys(first).join(','),
+          'lat=' + first.lat + '(' + typeof first.lat + ')',
+          'lng=' + first.lng + '(' + typeof first.lng + ')',
+          'coordinate=' + JSON.stringify({ latitude: first.lat, longitude: first.lng }),
+        );
+      }
     }
   }, [pois.length]);
 
@@ -615,6 +625,13 @@ export default function Drive() {
           </Marker>
         )}
 
+        {/* Corridor POI dots — tracksViewChanges omitted (drift 5.66): on
+            react-native-maps 1.20.1 + Android, setting tracksViewChanges={false}
+            on a Marker with a custom View child captures an empty bitmap before
+            the child renders, leaving the marker invisible. Default true is the
+            visibility-safe choice. Perf note: 1000-marker corridors re-snapshot
+            on each prop change; if pan/zoom jitters at scale, switch to a
+            delayed-flip pattern (track=true initially, flip false after mount). */}
         {pois.map(poi => {
           const isActive = poi.id === activePoiId;
           return (
@@ -623,7 +640,6 @@ export default function Drive() {
               coordinate={{ latitude: poi.lat, longitude: poi.lng }}
               anchor={{ x: 0.5, y: 0.5 }}
               onPress={() => setSelectedPoi(prev => prev?.id === poi.id ? null : poi)}
-              tracksViewChanges={false}
             >
               {isActive
                 ? <View style={s.poiActive}><View style={s.poiActiveDot} /></View>

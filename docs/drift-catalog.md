@@ -819,7 +819,7 @@ Label-style variants (`routesLabel`, `legendText`, `badgeText`) intentionally ke
 
 ### 5.64 — POI markers missing on drive.tsx after trip start
 
-**Status:** `open` — **reopened**; hardware re-test on `c069d5d` (Android Expo Go) shows the downsample fix did NOT restore drive-screen POI markers. Static review confirms the JSX maps `pois.map(poi => <Marker/>)` from the corridor-fetch state, not `liveQueue` (the original hypothesis), so the marker-source split is unnecessary. Diagnostic observability added below; root cause is still latent and will surface on the next hardware boot via the new logs.
+**Status:** `resolved` — closed this commit. Hardware logs from `ee2f921` confirmed the drive marker render path reads from the full corridor `pois` array (count=1000), not a `liveQueue` subset; the marker-source-split hypothesis was incorrect. The visibility bug is shared with home post-route — same root cause as 5.66 (Marker `tracksViewChanges={false}` + custom View child + react-native-maps 1.20.1 on Android = empty bitmap snapshot). Fix landed in the same commit that resolves 5.66.
 
 **Surface:** User reports zero ink-red POI dots render on `app/drive.tsx` after a trip starts. Phase 0 investigation reported this screen calls `getPOIsAlongRoute('driving')` and renders uncapped `<Marker>` children from the `pois` state. Static code review of the file (no changes since the initial commit `d1b5c30`) didn't surface an obvious break:
 - `routePreview.polylineCoords` round-trips through JSON params correctly (home → customize → drive); the Polyline at `drive.tsx:565` is gated on `polylineCoords.length > 1` and per user's screenshots renders fine, so the polyline IS present.
@@ -860,7 +860,7 @@ For a user mid-trip, list distances stay frozen at "60 mi to Joshua Tree" even a
 
 ### 5.66 — Post-route corridor POIs not rendering on home map after route selection
 
-**Status:** `open` — **reopened**; hardware re-test on `c069d5d` (Android Expo Go) shows Scene A (Cambria destination, route picked, home post-route) still renders zero ink-red POI dots along the polyline. The downsample fix in `lib/supabase.ts` landed correctly (both `countPOIsAlongRoute` and `getPOIsAlongRoute` send identical 150-point WKT to the RPC) but the symptom persists, so the asymmetric downsample was not the only / not the actual root cause. Diagnostic observability added at every handoff this commit; next hardware boot surfaces the real stage.
+**Status:** `resolved` — fixed this commit. Hardware logs from `ee2f921` proved data flowed through every observable handoff with non-zero counts (`routePOIs=309 filtered=309 rendered=40` on home; `count=1000` on drive); 40 / 1000 `<Marker>` components were emitted by the React render output, but none displayed on the map. Bug was downstream of React — in the native-side `react-native-maps` 1.20.1 marker pipeline on Android.
 
 **Surface:** After selecting a long-haul route on `app/index.tsx` (user's hardware repro: LA→Cambria), the route polyline draws, the route card displays the correct "309 stories" badge, but zero ink-red POI dots render along the corridor. Pre-route browse clustering works correctly; post-route render does not.
 
@@ -868,17 +868,26 @@ For a user mid-trip, list distances stay frozen at "60 mi to Joshua Tree" even a
 
 **Root cause:** `getPOIsAlongRoute` in `lib/supabase.ts` did not downsample its polyline before sending the WKT to `get_corridor_pois`. Its sibling `countPOIsAlongRoute` (the one populating the route-card "stories" badge) explicitly downsamples to ≤150 points with the in-source comment "Downsample to ≤150 points to keep the WKT payload small while preserving shape." Both functions hit the same RPC; only one applied the downsample. A Google-decoded long-haul polyline (LA→Cambria, ~2000 points) sent as a 60+ KB WKT made the server-side ST_DWithin + ST_LineLocatePoint computation against ~24k POIs slow enough to time out / fail silently. The count call returned the right number (downsampled, fast); the data call returned nothing useful (full polyline, slow/failed). The post-route render path was correct all along — it just had no data to render.
 
-**Resolution (c069d5d, since reopened):**
-- Lifted the existing `downsamplePolyline` helper call from `countPOIsAlongRoute` into `getPOIsAlongRoute` (same 150-point cap). Both functions now send identically-shaped WKT to the RPC, so badge counts and rendered markers stay consistent.
-- Added a `__DEV__`-gated `console.info` on the home-screen post-route fetch path mirroring the one added on `drive.tsx` in commit `cd1881e`. Persistent observability for future debugging, not a temp diagnostic.
+**Resolution arc (across three commits):**
 
-**Side benefit (since invalidated):** initially expected to resolve drift 5.64 (drive.tsx POI markers missing) via the same shared wrapper. Hardware re-test invalidated the hypothesis — see the reopen note above and on 5.64.
+1. **`c069d5d`** — asymmetric WKT downsample fix in `lib/supabase.ts`. Real bug (the count call worked, the data call didn't), but it wasn't this one. Hardware re-test showed the data call now returned 309 rows correctly, yet markers still didn't display. Necessary plumbing, not the visibility cause.
+2. **`ee2f921`** — diagnostic observability at every handoff (RPC start / RPC response / state-set / render). Hardware logs proved data reached the render path and `<Marker>` components were emitted in correct quantity, ruling out every fetch / state / filter stage. Forced the diagnosis into the native marker pipeline.
+3. **This commit** — root cause fix.
 
-**Diagnostic observability (this commit):** [lib/supabase.ts](lib/supabase.ts) `getPOIsAlongRoute` now logs `rpc-start` (polyline / downsampled / corridorMi / categories / mode / wktBytes) and `rpc-response` (rows / error code+message) under `__DEV__`. [app/index.tsx](app/index.tsx) logs `[home] fetch:start`, `[home] fetch:state-set`, and a render-effect `[home] render:markers` printing `routePOIs`, `filtered`, `rendered`, `activeChips`. Next hardware boot reveals whether the RPC returns zero rows (server-side issue), returns N rows that don't survive `setRoutePOIs` (state-set issue), or survives state-set but doesn't reach the render path (filter / clustering wrapper / Marker issue).
+**Root cause:** `<Marker tracksViewChanges={false}>` combined with a custom React Native `<View>` child, on `react-native-maps` 1.20.1 + Android. The library converts the View child to a native Android Bitmap on the marker's first render so it can be drawn into the Google Maps overlay efficiently. When `tracksViewChanges={false}` is set on the very first render — before the JS-side View has actually rasterized — the library snapshots an empty bitmap and never re-snapshots (because tracking is off). The Marker's coordinate is correct, the React tree contains the element, the parent map is rendering, but the per-marker bitmap is blank, so nothing appears at the coordinate. Markers without custom children (default pin), or with `tracksViewChanges` left default `true`, snapshot correctly because the bitmap is captured (or re-captured) after the child has rasterized.
 
-**Test:** Select a long-haul route on home (e.g. LA→Cambria) → ink-red POI dots render along the route polyline (capped at 40 per Stage 1 scope). Hardware booth: scan the dev log for the `[supabase] getPOIsAlongRoute:rpc-response` line and the `[home] render:markers` line — they identify which stage drops the data.
+**Why the cd1881e instrumentation didn't catch it earlier:** the `[drive] POI fetch:` log in cd1881e printed `fetched=N>0`, satisfying the static reviewers' "is the data there" question. The render-side `[drive] render:markers source=pois count=N` log added in ee2f921 showed the markers were ALSO emitted by the React render — the gap was between "React rendered the element" and "Google Maps drew a pixel," which sits in the native marker pipeline.
 
-**Decided by:** User-filed regression after commit `420f5bc` shipped Stage 1 clustering; reopened after `c069d5d` hardware test on Android Expo Go failed to render markers despite the downsample fix landing correctly.
+**Why browse mode (`react-native-map-clustering`) seemed to work earlier:** unverified — the user has not isolated browse-mode rendering this session. The browse markers used the same `tracksViewChanges={false}` + custom View child pattern, so they were likely also broken. The clustering wrapper renders cluster bubbles via the `renderCluster` callback (which produces a single View per cluster, not many individual markers), and at wide zoom the user mostly sees cluster bubbles; the per-marker bug only becomes obvious once you zoom in past the cluster threshold. The fix applies to browse markers too; this commit removes `tracksViewChanges={false}` there as well for consistency.
+
+**Resolution:**
+- `app/index.tsx`: removed `tracksViewChanges={false}` from browse-mode POI markers (line 1085) AND post-route POI markers (line 1097). Default `true` is the visibility-safe setting; the perf cost (re-snapshot on prop change) is acceptable at 500-cap (browse) and 40-cap (post-route).
+- `app/drive.tsx`: removed `tracksViewChanges={false}` from corridor POI markers (line 595). At 1000-marker corridors the re-snapshot cost is non-trivial, but visibility wins; the inline comment notes a delayed-flip pattern (track=true initially, flip to false after mount) as the future perf tune if pan/zoom jitters at scale.
+- Both screens gain a one-time `render:firstPOI` diagnostic log that dumps `keys`, `lat`, `lng`, their types, and the coordinate object actually passed to `<Marker>`. This is the user-requested verification that the coordinate field shape wasn't the cause. To be dropped after hardware confirms markers render; the pipeline-level fetch / state / render counters stay as persistent observability.
+
+**Test:** Select a long-haul route on home (e.g. LA→Cambria) → ink-red POI dots render along the polyline (capped at 40 per Stage 1 scope). Begin trip → drive screen renders all corridor POIs as ink-red dots (`pois.length` per `[drive] render:markers`). Hardware booth: confirm `[home] render:firstPOI` and `[drive] render:firstPOI` show `lat=<number>(number)` and `lng=<number>(number)` — confirms hypothesis #1 was not the cause and hypothesis #2 (Marker children invisible due to bitmap snapshot timing) was.
+
+**Decided by:** Hardware logs from `ee2f921` showed React render output had Markers but Google Maps drew nothing. Process of elimination on the user-supplied hypothesis ranking landed on bitmap snapshot timing under `tracksViewChanges={false}` + custom child.
 
 ---
 
@@ -905,6 +914,22 @@ For a user mid-trip, list distances stay frozen at "60 mi to Joshua Tree" even a
 **Test:** Android hardware — Home expanded sheet: Customize trip button bottom edge ≥ `insets.bottom + 16` above screen bottom. Drive peek: End trip button bottom edge ≥ `insets.bottom + 40` (peek base 96 + buffer + inset). Drive expanded: End trip button bottom edge ≥ `insets.bottom + 16`. Trail: End hike button bottom edge ≥ `insets.bottom + 16`. iOS hardware — no regression; layout positions shift up by 16px relative to the inset edge, no visible change against home indicator.
 
 **Decided by:** Hardware test on `c069d5d` (Android Expo Go) — Start / End trip CTAs visibly clipped by the nav overlay. Same surface as 5.46 (resolved) but `26d4ece`'s `insets.bottom`-only fix didn't add the extra gesture-zone buffer that this entry resolves.
+
+---
+
+### 5.70 — Home post-route `fetch:start` fires 4+ times per route selection
+
+**Status:** `noted` — note only; address later. Non-blocking.
+
+**Surface:** Hardware logs from `ee2f921` show `[home] fetch:start polyline=N corridorMi=1 mode=driving routeIdx=0` repeats 4+ times per single route selection on `app/index.tsx`. The repeated firings are not user-visible regressions (every fetch returns the same 309 rows in the user's LA→Cambria test, and `setRoutePOIs` re-sets to the same array each time so the render doesn't flicker), but each repeat sends the same 150-point WKT to `get_corridor_pois` and burns one round-trip.
+
+**Mechanism:** the POI fetch effect at [app/index.tsx](app/index.tsx#L291) depends on `[selectedRouteIdx, routes]`. After `fetchRoute` lands, `routes` is set to the 3 fetched options (1 effect fire), then a per-route `countPOIsAlongRoute(...).then(setRoutes(prev => prev.map(...)))` callback updates each route's `poiCount` (3 more effect fires — one per route). Total: 4 fires per selection. The first fire has accurate polyline; the next 3 re-fire for state updates that don't actually change the selected route's polyline.
+
+**Fix sketch (not landed):** depend on a derived primitive that only changes when the relevant polyline content changes, e.g. `[selectedRouteIdx, selectedRoute?.polylineCoords]`, or memoize a polyline hash. A `useRef` guard comparing the last-fetched polyline against the incoming one would also work. Either pattern eliminates the 3 redundant fires.
+
+**Why deferred:** the redundant calls don't break user-visible behavior, and the underlying RPC is now fast (downsampled WKT). Cleanup belongs to a focused perf pass on `fetchRoute`'s effect-fan-out story. Flagged here so future debugging doesn't get confused by the duplicated log lines.
+
+**Decided by:** Observed in `ee2f921`'s hardware logs while diagnosing 5.66.
 
 ---
 

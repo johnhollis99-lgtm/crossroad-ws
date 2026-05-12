@@ -327,6 +327,16 @@ export default function MapScreen() {
         'rendered=' + Math.min(filteredRoutePOIs.length, 40),
         'activeChips=' + activeCatChips.size,
       );
+      // One-shot firstPOI shape dump — drop after marker-visibility fix is confirmed live.
+      const first = filteredRoutePOIs[0];
+      if (first) {
+        console.info('[home] render:firstPOI',
+          'keys=' + Object.keys(first).join(','),
+          'lat=' + first.lat + '(' + typeof first.lat + ')',
+          'lng=' + first.lng + '(' + typeof first.lng + ')',
+          'coordinate=' + JSON.stringify({ latitude: first.lat, longitude: first.lng }),
+        );
+      }
     }
   }, [routePOIs, filteredRoutePOIs.length, browseMode, activeCatChips.size]);
 
@@ -1107,12 +1117,16 @@ export default function MapScreen() {
         )}
 
         {/* Browse-mode POI dots — clustered. */}
+        {/* tracksViewChanges omitted: react-native-maps 1.20.1 + Android snapshots
+            an empty bitmap when tracksViewChanges={false} fires before the View
+            child has rendered, leaving the marker invisible. Default true keeps
+            the dots visible at the (acceptable) cost of re-snapshots on prop
+            changes. See drift catalog 5.66 for the diagnosis. */}
         {browseMode && browsePOIs.map(poi => (
           <Marker
             key={`browse-${poi.id}`}
             coordinate={{ latitude: poi.lat, longitude: poi.lng }}
             anchor={{ x: 0.5, y: 0.5 }}
-            tracksViewChanges={false}
           >
             <View style={s.poiDot} />
           </Marker>
@@ -1124,7 +1138,6 @@ export default function MapScreen() {
             key={poi.id}
             coordinate={{ latitude: poi.lat, longitude: poi.lng }}
             anchor={{ x: 0.5, y: 0.5 }}
-            tracksViewChanges={false}
             {...({ cluster: false } as any)}
           >
             <View style={s.poiDot} />
