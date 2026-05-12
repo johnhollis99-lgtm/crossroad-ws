@@ -5,9 +5,16 @@
 
 import { createClient } from '@supabase/supabase-js';
 
-// ── Set these in your .env / app.config.js ──────────────────────────────
-const SUPABASE_URL = 'https://eusozlexmllovlmngmug.supabase.co';
-const SUPABASE_ANON_KEY = 'sb_publishable_objEbW_jPOPtT8Vdf75l8g_Rma3w_OM';
+// ── Env-driven config — fail-loud if missing ────────────────────────────
+const SUPABASE_URL      = process.env.EXPO_PUBLIC_SUPABASE_URL;
+const SUPABASE_ANON_KEY = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
+
+if (!SUPABASE_URL) {
+  throw new Error('Missing EXPO_PUBLIC_SUPABASE_URL in environment. Check .env.');
+}
+if (!SUPABASE_ANON_KEY) {
+  throw new Error('Missing EXPO_PUBLIC_SUPABASE_ANON_KEY in environment. Check .env.');
+}
 
 export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 

@@ -490,6 +490,18 @@ needed.
 
 ---
 
+### 5.36 — Supabase URL + anon key hardcoded as string literals in `lib/supabase.ts`
+
+**Status:** Resolved 2026-05-11 via this commit.
+
+**Surface:** Supabase URL + anon publishable key were hardcoded as string literals in `lib/supabase.ts`. Not a secrets-exposure issue (publishable keys are designed to be public; security gates on RLS, not the token), but blocks env-driven config — no rotation without code edits, no clean dev/staging/prod swap, and diverges from the `server/` directory's existing env pattern.
+
+**Success state:** Both values read from `process.env.EXPO_PUBLIC_SUPABASE_URL` and `process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY`; app throws at startup if either env var is missing (fail-loud).
+
+**Test:** With `.env` populated, app boots and Supabase queries work normally; with either var deleted from `.env`, app throws at startup naming the missing var.
+
+---
+
 ## Cross-cutting observation
 
 Five entries (5.18, 5.19, 5.24, 5.25, 5.26) shared the same root: out-of-band
