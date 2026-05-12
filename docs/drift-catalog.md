@@ -683,14 +683,20 @@ needed.
 
 ### 5.49 — POI clustering: pre-route browse vs. post-route fixed-narratable modes
 
-**Status:** `open`
+**Status:** `open` — Stage 1 shipped pre-route clustering on the home screen (this commit). Stages 2 (parity to customize / drive / hiking / trail) and 3 (lift post-route 40-POI cap + chip filter wiring per drift 5.50) still pending.
 
 **Surface:** Currently every fetched POI renders as an individual marker on the map. At wide zoom in pre-route browse mode, this produces marker pile-ups that obscure the map and degrade tap accuracy. There's no per-region density clustering and no zoom-aware break-apart behavior. Once a route is selected and POIs become "fixed narratable" stops along the corridor, the rendering needs change again — every selected POI should be persistently visible on every screen that shows the map (home/customize/drive), not clustered or hidden, since they're committed narration targets.
 
-**Success state:** Two distinct rendering modes implemented in the POI map layer:
-- **Pre-route browse:** regional density clusters that expand into individual markers as the user zooms in. Cluster bubbles show count and dominant category color.
-- **Post-route fixed:** all narratable POIs along the selected corridor render as individual markers at every zoom level on every screen that surfaces them, no clustering applied.
-Both modes derive POI sets from the existing `get_corridor_pois` / `get_nearby_pois` RPCs (no schema work needed).
+**Stage 1 (this commit) — home pre-route clustering:**
+- `react-native-map-clustering ^4.0.0` installed. Drop-in `<ClusteredMapView>` wraps `react-native-maps` and bundles `supercluster ^8.0.0` + `@mapbox/geo-viewport`. Peer deps `*` (no SDK 54 conflicts).
+- Pre-route browse mode (`routes.length === 0`) fetches via `getNearbyPOIs` (existing `get_nearby_pois` RPC wrapper) using the visible region's center + center-to-corner radius (cap 200 km). Debounced 500ms on `onRegionChangeComplete`.
+- Clustering enabled only in browse mode (`clusteringEnabled={browseMode}`); fixed markers (destination, manual origin, stop dots, pending pin, post-route POIs) all carry `cluster={false}` so the library skips them.
+- Custom `renderCluster` returns a Field Notes cluster bubble: cream `paper` bg, 1px `rule` border, `accent` count text. Three sizes — 40px for <10, 56px for 10–49, 72px for ≥50. Count uses the `button` type variant (Fraunces serifItalic 500 16px) — the spec asked for "Fraunces 500 italic, closest existing variant"; `button` is the exact match.
+- Last-seen region captured in a ref so re-entering browse mode (e.g., user clears destination) fetches around the current map position, not back at LA `INITIAL_REGION`.
+
+**Success state (remaining):**
+- **Stage 2 (parity):** apply the same clustering wrap to `app/customize.tsx` map preview, `app/drive.tsx`, `app/hiking.tsx`, `app/trail.tsx`. Customize map is `scrollEnabled={false}` so it's preview-only; the clustering wrapper still applies for the static view.
+- **Stage 3 (post-route enrichment):** lift the silent 40-POI cap on home / drive post-route markers. Wire chip filters (drift 5.50) so home chips narrow the route corridor preview and customize chips drive live POI filtering.
 
 **Test:** Pre-route — load the home map at LA-area zoom with no destination; POIs cluster into density bubbles, expand on zoom-in. Post-route — pick a route; all corridor POIs render individually on home, customize map preview, and drive map regardless of zoom.
 

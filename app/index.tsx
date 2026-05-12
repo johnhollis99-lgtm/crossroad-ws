@@ -26,11 +26,13 @@ import {
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from 'react-native-maps';
+import ClusteredMapView from 'react-native-map-clustering';
 import * as Location from 'expo-location';
 import { useNavigation } from '@react-navigation/native';
 import {
   countPOIsAlongRoute,
   getPOIsAlongRoute,
+  getNearbyPOIs,
   getRecentLocations,
   saveRecentLocation,
 } from '../lib/supabase';
@@ -71,6 +73,13 @@ const MAPBOX_TOKEN = process.env.EXPO_PUBLIC_MAPBOX_TOKEN!;
 
 const { height: SCREEN_H } = Dimensions.get('window');
 const DESKTOP_BP = 768;
+
+const INITIAL_REGION = { latitude: 34.18, longitude: -118.33, latitudeDelta: 0.12, longitudeDelta: 0.12 };
+
+// Browse-mode POI fetch: throttle + cap radius. 200km matches "zoomed-way-out
+// shouldn't try to fetch the whole state in one query."
+const BROWSE_FETCH_DEBOUNCE_MS = 500;
+const BROWSE_MAX_RADIUS_M = 200_000;
 const SNAP_PTS = {
   peek:     Math.round(SCREEN_H * 0.18),
   default:  Math.round(SCREEN_H * 0.38),
@@ -171,6 +180,11 @@ export default function MapScreen() {
   const [routePOIs,        setRoutePOIs]        = useState<POI[]>([]);
   const [waypoints,        setWaypoints]        = useState<Waypoint[]>([]);
   const [loadingRoute,     setLoadingRoute]     = useState(false);
+  // Pre-route browse POIs — fetched from get_nearby_pois based on the
+  // visible map region. Cleared when a route is selected.
+  const [browsePOIs,       setBrowsePOIs]       = useState<POI[]>([]);
+  const browseFetchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastRegionRef    = useRef(INITIAL_REGION);
   // Category chip filter
   const [activeCatChips, setActiveCatChips] = useState<Set<string>>(new Set());
   const [chipsScrolled,  setChipsScrolled]  = useState(false);
@@ -212,6 +226,47 @@ export default function MapScreen() {
   const filteredRoutePOIs = activeCatChips.size === 0
     ? routePOIs
     : routePOIs.filter(poi => activeCatChips.has(CAT_SLUG[poi.category] ?? poi.category));
+
+  // Browse mode = no routes selected yet. POIs come from get_nearby_pois,
+  // clustered. Post-route mode renders along-corridor POIs uncluttered.
+  const browseMode = routes.length === 0;
+
+  const fetchBrowsePOIs = useCallback(async (region: {
+    latitude: number; longitude: number; latitudeDelta: number; longitudeDelta: number;
+  }) => {
+    // Center-to-corner distance in km. 1° latitude ≈ 111 km; longitude
+    // scales by cos(latitude). Cap at 200 km so state-wide views don't
+    // overwhelm get_nearby_pois.
+    const dLat = region.latitudeDelta / 2;
+    const dLng = (region.longitudeDelta / 2) * Math.cos(region.latitude * Math.PI / 180);
+    const radiusKm = Math.sqrt(dLat * dLat + dLng * dLng) * 111;
+    const radiusM = Math.min(radiusKm * 1000, BROWSE_MAX_RADIUS_M);
+    try {
+      const pois = await getNearbyPOIs(region.latitude, region.longitude, radiusM, null, 'driving');
+      setBrowsePOIs(pois);
+    } catch (err) {
+      console.error('[home] browse POI fetch failed:', err);
+    }
+  }, []);
+
+  // Initial browse fetch on mount + clear when transitioning to a route.
+  // On mode flip back to browse, fetch the last-seen region (not INITIAL_REGION)
+  // so the user doesn't see the map snap back to LA when they clear a route.
+  useEffect(() => {
+    if (!browseMode) { setBrowsePOIs([]); return; }
+    fetchBrowsePOIs(lastRegionRef.current);
+  }, [browseMode, fetchBrowsePOIs]);
+
+  const handleRegionChangeComplete = useCallback((region: {
+    latitude: number; longitude: number; latitudeDelta: number; longitudeDelta: number;
+  }) => {
+    lastRegionRef.current = region;
+    if (!browseMode) return;
+    if (browseFetchTimer.current) clearTimeout(browseFetchTimer.current);
+    browseFetchTimer.current = setTimeout(() => {
+      fetchBrowsePOIs(region);
+    }, BROWSE_FETCH_DEBOUNCE_MS);
+  }, [browseMode, fetchBrowsePOIs]);
 
   const clearRoutes = () => { setRoutes([]); setSelectedRouteIdx(0); setRoutePOIs([]); };
 
@@ -485,6 +540,30 @@ export default function MapScreen() {
     setWaypoints(updated);
     if (destination) fetchRoute(destination, destCoords ?? undefined, updated);
   };
+
+  // Cluster bubble — Field Notes paper bg, ink-rule border, accent count.
+  // Tapping zooms in so the cluster breaks apart. Sizes step at 10 and 50.
+  const renderCluster = useCallback((cluster: any) => {
+    const { id, geometry, onPress, properties } = cluster;
+    const count: number = properties?.point_count ?? 0;
+    const sizeStyle =
+      count < 10 ? s.clusterBubble40 :
+      count < 50 ? s.clusterBubble56 :
+                   s.clusterBubble72;
+    return (
+      <Marker
+        key={`cluster-${id}`}
+        coordinate={{ longitude: geometry.coordinates[0], latitude: geometry.coordinates[1] }}
+        onPress={onPress}
+        anchor={{ x: 0.5, y: 0.5 }}
+        tracksViewChanges={false}
+      >
+        <View style={[s.clusterBubble, sizeStyle]}>
+          <Text style={s.clusterText}>{count}</Text>
+        </View>
+      </Marker>
+    );
+  }, [s]);
 
   const handleMapPress = useCallback(async (e: any) => {
     const coord = e?.nativeEvent?.coordinate ?? e?.coordinate;
@@ -890,6 +969,18 @@ export default function MapScreen() {
       borderWidth: 1, borderColor: theme.colors.cardEdge,
       alignItems: 'center', justifyContent: 'center',
     },
+    // Cluster bubble — cream paper bg, ink rule border, accent count.
+    // 'button' variant = Fraunces serifItalic 500 16px — closest match to spec.
+    clusterBubble: {
+      alignItems: 'center', justifyContent: 'center',
+      backgroundColor: theme.colors.paper,
+      borderWidth: 1, borderColor: theme.colors.rule,
+    },
+    clusterBubble40: { width: 40, height: 40, borderRadius: 20 },
+    clusterBubble56: { width: 56, height: 56, borderRadius: 28 },
+    clusterBubble72: { width: 72, height: 72, borderRadius: 36 },
+    clusterText:     { ...theme.textVariants.button, color: theme.colors.accent },
+
     chipRowWrap: { position: 'relative' },
     chipFadeLeft:  { position: 'absolute', left: 0,  top: 0, bottom: 0, width: 20 },
     chipFadeRight: { position: 'absolute', right: 0, top: 0, bottom: 0, width: 20 },
@@ -910,9 +1001,9 @@ export default function MapScreen() {
     <View style={s.root}>
 
       {/* ── FULL-SCREEN MAP ─────────────────────────────────────────────── */}
-      <MapView
+      <ClusteredMapView
         key={mapStyleId}
-        ref={mapRef}
+        ref={mapRef as any}
         style={StyleSheet.absoluteFillObject}
         provider={PROVIDER_GOOGLE}
         mapType={activeMapStyle.mapType}
@@ -921,8 +1012,11 @@ export default function MapScreen() {
         showsMyLocationButton={false}
         showsCompass={false}
         toolbarEnabled={false}
-        initialRegion={{ latitude: 34.18, longitude: -118.33, latitudeDelta: 0.12, longitudeDelta: 0.12 }}
+        initialRegion={INITIAL_REGION}
         onPress={handleMapPress}
+        onRegionChangeComplete={handleRegionChangeComplete}
+        clusteringEnabled={browseMode}
+        renderCluster={renderCluster}
       >
         {/* Alternative routes — dimmed dashes */}
         {routes
@@ -949,27 +1043,33 @@ export default function MapScreen() {
           />
         )}
 
-        {/* Destination marker */}
+        {/* Destination marker — never clustered. */}
         {selectedRoute && (
           <Marker
             coordinate={{ latitude: selectedRoute.destLat, longitude: selectedRoute.destLng }}
             anchor={{ x: 0.5, y: 1 }}
+            {...({ cluster: false } as any)}
           >
             <View style={s.destPin}><View style={s.destPinDot} /></View>
           </Marker>
         )}
 
-        {/* Manual origin marker (only shown when GPS overridden) */}
+        {/* Manual origin marker — never clustered. */}
         {originMode === 'manual' && originCoords && (
-          <Marker coordinate={originCoords} anchor={{ x: 0.5, y: 0.5 }} tracksViewChanges={false}>
+          <Marker
+            coordinate={originCoords}
+            anchor={{ x: 0.5, y: 0.5 }}
+            tracksViewChanges={false}
+            {...({ cluster: false } as any)}
+          >
             <View style={s.originPin}><View style={s.originPinDot} /></View>
           </Marker>
         )}
 
-        {/* POI dots — amber, capped at 40 */}
-        {filteredRoutePOIs.slice(0, 40).map(poi => (
+        {/* Browse-mode POI dots — clustered. */}
+        {browseMode && browsePOIs.map(poi => (
           <Marker
-            key={poi.id}
+            key={`browse-${poi.id}`}
             coordinate={{ latitude: poi.lat, longitude: poi.lng }}
             anchor={{ x: 0.5, y: 0.5 }}
             tracksViewChanges={false}
@@ -978,7 +1078,20 @@ export default function MapScreen() {
           </Marker>
         ))}
 
-        {/* Stop dots — teal, tappable to remove */}
+        {/* Post-route POI dots — capped at 40 (Stage 3 will lift). Never clustered. */}
+        {!browseMode && filteredRoutePOIs.slice(0, 40).map(poi => (
+          <Marker
+            key={poi.id}
+            coordinate={{ latitude: poi.lat, longitude: poi.lng }}
+            anchor={{ x: 0.5, y: 0.5 }}
+            tracksViewChanges={false}
+            {...({ cluster: false } as any)}
+          >
+            <View style={s.poiDot} />
+          </Marker>
+        ))}
+
+        {/* Stop dots — teal, tappable to remove. Never clustered. */}
         {waypoints.map((wp, i) => wp.coords && (
           <Marker
             key={`stop-${i}`}
@@ -986,21 +1099,26 @@ export default function MapScreen() {
             anchor={{ x: 0.5, y: 0.5 }}
             tracksViewChanges={false}
             onPress={() => setPressedStopIdx(i === pressedStopIdx ? null : i)}
+            {...({ cluster: false } as any)}
           >
             <View style={[s.stopDot, pressedStopIdx === i && s.stopDotActive]} />
           </Marker>
         ))}
 
-        {/* Pending pin — dropped by tapping the map */}
+        {/* Pending pin — dropped by tapping the map. Never clustered. */}
         {pendingPin && (
-          <Marker coordinate={pendingPin} anchor={{ x: 0.5, y: 1 }}>
+          <Marker
+            coordinate={pendingPin}
+            anchor={{ x: 0.5, y: 1 }}
+            {...({ cluster: false } as any)}
+          >
             <View style={s.pendingPinWrap}>
               <View style={s.pendingPinDot} />
               <View style={s.pendingPinStem} />
             </View>
           </Marker>
         )}
-      </MapView>
+      </ClusteredMapView>
 
       {/* ── BOTTOM SHEET — route picker (mobile only) ───────────────────── */}
       {!isDesktop && <Animated.View style={[s.sheet, { height: sheetAnim, paddingBottom: insets.bottom }]}>
