@@ -420,6 +420,12 @@ Do not implement any of these yet; confirm with user first. When touching the ro
 - **Most accurate:** `npx expo start` → scan QR with Expo Go on physical device.
 - **Android native:** Android Studio emulator (Pixel 6, 412×915) → `npx expo start --android`.
 
+### Running the dev server from Claude Code (non-interactive shell)
+
+- **Always pass `--port <n>` explicitly.** When 8081 is occupied, `expo start` prompts "Use port 8084 instead?" — in non-interactive mode it errors with `Input is required, but 'npx expo' is in non-interactive mode` and prints `› Skipping dev server`, exit 1. The `npm start` script (`expo start`, no port) is fine in a real terminal but unusable from a background task.
+- **No QR code prints** in non-interactive mode — only `Waiting on http://localhost:<port>`. Connect from Expo Go via "Enter URL manually" → `exp://<LAN-ip>:<port>`.
+- **Stale Metro bundlers accumulate.** Each abandoned `expo start` keeps its port held until the node process is killed. Check with `netstat -ano | findstr :808` (lists 8081–8089 listeners + PIDs). Kill via Git Bash: `taskkill //PID <pid> //F` — **double-slash** on the flags so MSYS doesn't path-mangle them into `/PID` / `/F`.
+
 ## Narrative extraction pipeline (`scripts/narrative-extraction/`)
 
 Ingests historical text corpora into `narrative_documents` for future RAG / semantic search.

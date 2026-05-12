@@ -536,6 +536,48 @@ needed.
 
 ---
 
+### 5.39 — Design system ships AudienceMark; spec calls for NarratorMark (deferred to Prompt 10)
+
+**Status:** `noted` — drift observed; tracked for the record.
+
+**Surface:** Prompt 03 of the XRoad UI/UX design handoff specifies a component named `NarratorMark` with the narrator-taxonomy values `professor / local / kid / trucker`. The Field Notes Phase 1 implementation ships `AudienceMark` (`src/components/AudienceMark.tsx`) with the audience-taxonomy values `family / kids / unfiltered / local`, aligned to `voice_configs.mode` (see CLAUDE.md "Dimensional model" — audience_mode is the column-level enum). The engraved-glyph style is shared: book+spectacles / cottage / magnifier+leaf / road-at-sunset; only the surface-level taxonomy differs.
+
+**Success state:** Both `AudienceMark` (audience picker — present today) and `NarratorMark` (narrator picker — to be added in Prompt 10) exist as separate components sharing the engraved-glyph style and visual treatment. Prompt 10's narrator-picker UI imports `NarratorMark` without colliding with the existing `AudienceMark`.
+
+**Test:** When Prompt 10 lands, the import `import { NarratorMark } from '../src/components';` resolves to a distinct component, and both components render side-by-side in `ComponentsDemoScreen.tsx` without name conflict.
+
+**Decided by:** user direction, Field Notes Phase 1 decision pass (this session).
+
+---
+
+### 5.40 — PrimaryButton sublabel at 9px instead of spec's 8px
+
+**Status:** `noted` — drift observed; tracked for the record.
+
+**Surface:** Prompt 03 specifies the `PrimaryButton` sublabel at JetBrains Mono 8px. The repo uses `theme.textVariants.metaSmall` (mono 9px), which is the smallest size in the canonical type ramp (`src/design/tokens.ts`). The decision pass declined to add a one-off 8px variant for a single component.
+
+**Success state:** Sublabel reads legibly at 9px on the smallest supported device width (320pt); the spec's 8px is deemed below the readability threshold for road-trip / driving use cases where the user may glance briefly while in motion.
+
+**Test:** Open `/components-demo` on a 320pt-wide viewport, hold the device at arm's length, and read the `PrimaryButton` "Pacific Coast Highway · 6h 12m" sublabel without leaning in.
+
+**Decided by:** user direction, Field Notes Phase 1 decision pass (this session).
+
+---
+
+### 5.41 — Repo-wide `tsc --noEmit` has 29 pre-existing errors across 5 files / subprojects
+
+**Status:** `open` — deferred to a dedicated cleanup arc; not blocking Phase 1.
+
+**Surface:** Repo-wide `npx tsc --noEmit` reports 29 pre-existing type errors across 5 files / subprojects, all dating from before this session. Files affected: `admin/app/admin/poi-review/{actions.ts, EditModal.tsx, page.tsx, ReviewCard.tsx}`, `admin/app/login/page.tsx` (Next.js path-alias resolution into `admin/` from root `tsc` — 15 errors); `app/drive.tsx:335` (removed `setStoryCount` call site — 2 errors); `lib/__tests__/routeBadges.test.ts` (`BadgeRoute` type widened, tests not updated — 9 errors); `scripts/poi-import/lib/category-map.ts:27` (typo — 1 error); `scripts/precache-popular-routes.ts:434` (`string` → union narrowing — 1 error).
+
+**Success state:** Repo-wide `npx tsc --noEmit` returns 0 errors. `admin/` either gets its own type-check scope or the root `tsconfig` excludes it. `app/drive.tsx` and the `routeBadges` test are updated to match current types. The two script-side errors are fixed inline.
+
+**Test:** Run `npx tsc --noEmit` from repo root → exit 0, zero errors.
+
+**Decided by:** user direction this session — surfaced while gating the Phase 1 design-system commit; deferred to a dedicated cleanup arc rather than blocking Phase 1.
+
+---
+
 ## Cross-cutting observation
 
 Five entries (5.18, 5.19, 5.24, 5.25, 5.26) shared the same root: out-of-band

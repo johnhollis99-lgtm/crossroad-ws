@@ -760,6 +760,22 @@ export default function MapScreen() {
       {/* ── SEARCH PILL + CHIPS — mobile ────────────────────────────────── */}
       {!isDesktop && (
         <SafeAreaView style={[s.topSafe, { pointerEvents: 'box-none' }]}>
+          {__DEV__ && (
+            <View style={s.devNavRow}>
+              <TouchableOpacity
+                onPress={() => navigation.navigate('design-system')}
+                hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+              >
+                <Text style={s.devNavLabel}>[DS]</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                onPress={() => navigation.navigate('components-demo')}
+                hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+              >
+                <Text style={s.devNavLabel}>[CD]</Text>
+              </TouchableOpacity>
+            </View>
+          )}
           <View style={s.logoWrap} pointerEvents="none">
             <XRoadLogo size="sm" />
           </View>
@@ -1256,6 +1272,15 @@ const s = StyleSheet.create({
   // Top safe area + search
   topSafe:  { position: 'absolute', top: 0, left: 0, right: 0 },
   logoWrap: { alignItems: 'center', paddingVertical: 4 },
+  devNavRow: {
+    position: 'absolute', top: 4, right: 16,
+    flexDirection: 'row', gap: 8, zIndex: 100,
+  },
+  devNavLabel: {
+    fontFamily: Platform.select({ ios: 'Menlo', android: 'monospace', default: 'monospace' }),
+    fontSize: 10,
+    color: C.TEXT_TERTIARY,
+  },
   topBar: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
     paddingHorizontal: 16, paddingTop: 6, paddingBottom: 8,
