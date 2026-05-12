@@ -639,6 +639,65 @@ needed.
 
 ---
 
+### 5.46 — Android system nav bar overlapped app content; bottom safe-area insets not consumed
+
+**Status:** `resolved` (fixed in this commit)
+
+**Surface:** Visible on user's Android hardware screenshots — the "Customize trip" CTA inside the home-screen mobile bottom sheet sat flush against the Android back-gesture / 3-button overlay, and users were accidentally hitting system nav while reaching for app controls. Root cause was two-layered: (a) `App.tsx` never wrapped the navigator tree with `SafeAreaProvider`, so the context-based machinery in `react-native-safe-area-context` couldn't deliver insets to any consumer; (b) `app/index.tsx` mobile sheet (`Animated.View`, position absolute, bottom 0) and `app/customize.tsx` ScrollView footer had no bottom-inset awareness at all (only a fixed-pt trailing spacer / static `paddingBottom`). Additionally `app/driving.tsx`, `app/hiking.tsx`, `app/trail.tsx`, and `app/filters.tsx` imported `SafeAreaView` from `'react-native'`, which is iOS-only — on Android it falls through to a no-op `View` and provides zero inset compensation. Only `app/drive.tsx` had ever imported from `react-native-safe-area-context`.
+
+**Success state:** App tree wrapped by `SafeAreaProvider` at the root. Home screen's bottom-sheet trailing spacer absorbs `insets.bottom`; customize screen's ScrollView trailing spacer absorbs `insets.bottom`. The four secondary screens import `SafeAreaView` from `react-native-safe-area-context` and gate edges explicitly (`edges={['bottom']}` for bottom button bars / sheets; `edges={['top']}` for top headers) so the library applies real insets instead of the hand-rolled Platform.OS Android paddings. `hiking.tsx`'s `s.headerRow` hand-rolled `paddingTop: Platform.OS === 'android' ? 40 : 0` deleted since the SafeAreaView now provides the real top inset.
+
+**Test:** Build to Android hardware (or Expo Go on a Pixel/Android emulator), open home screen — "Customize trip" CTA bottom edge sits at `12pt + insets.bottom` above the Android system nav, not flush against it. Same check on customize.tsx (Start trip CTA), driving/hiking/trail (bottom action bars), filters (Confirm bar).
+
+**Decided by:** User-filed regression this session, with Android hardware screenshots; minimal-scope fix per session direction (single coherent commit, no broader refactor).
+
+---
+
+### 5.47 — Route-card desaturation for non-selected routes is intentional
+
+**Status:** `noted` — drift observed; behavior confirmed.
+
+**Surface:** In the home-screen route-picker, the non-selected route cards render with desaturated colors relative to the selected card. The visual differentiation may read as "broken" on first inspection, especially against the Field Notes editorial palette where the rest of the screen leans warm.
+
+**Success state:** Desaturation stays. It's the primary signal that disambiguates the selected route from alternatives at a glance, which matters more than chromatic harmony on a screen where the user's job is to make a choice.
+
+**Test:** Visual — on the home screen with multiple routes loaded, the selected card is chromatically distinct from the alternatives without requiring a focused read.
+
+**Decided by:** User direction this session, confirming current behavior is intentional UX.
+
+---
+
+### 5.48 — Route polyline uses bright Google Maps blue, clashes with Field Notes palette
+
+**Status:** `open`
+
+**Surface:** Route polylines on the home-screen and drive-screen maps render in `rgba(56,139,253,0.92)` (dark map style) / `rgba(20,90,210,0.92)` (light) — a bright Google-Maps blue that reads as a foreign chrome element against the warm Field Notes editorial palette. The colors come from the `ROUTE_COLOR` / `ROUTE_ALT_COLOR` maps in `app/index.tsx:45-56` and the hardcoded `#4A90D9` polyline color in `app/drive.tsx` (per CLAUDE.md "drive.tsx UI details").
+
+**Success state:** Polyline colors derive from Field Notes tokens (`theme.colors.accent` or a new map-line token if needed) and harmonize with the editorial palette across all four map styles (dark / satellite / topo / standard). Visual decision lands together with the broader Layer 2 map-style work (Prompt 07 / map-styling arc).
+
+**Test:** After Layer 2 map work, `grep -n "rgba(56,139,253\|rgba(20,90,210\|#4A90D9" app/` returns zero hits; polylines render with palette-derived color across all four map styles.
+
+**Decided by:** User flagged during the Layer 1.5 Android-insets pass; deferred to Layer 2 / Prompt 07 to keep this commit narrow.
+
+---
+
+### 5.49 — POI clustering: pre-route browse vs. post-route fixed-narratable modes
+
+**Status:** `open`
+
+**Surface:** Currently every fetched POI renders as an individual marker on the map. At wide zoom in pre-route browse mode, this produces marker pile-ups that obscure the map and degrade tap accuracy. There's no per-region density clustering and no zoom-aware break-apart behavior. Once a route is selected and POIs become "fixed narratable" stops along the corridor, the rendering needs change again — every selected POI should be persistently visible on every screen that shows the map (home/customize/drive), not clustered or hidden, since they're committed narration targets.
+
+**Success state:** Two distinct rendering modes implemented in the POI map layer:
+- **Pre-route browse:** regional density clusters that expand into individual markers as the user zooms in. Cluster bubbles show count and dominant category color.
+- **Post-route fixed:** all narratable POIs along the selected corridor render as individual markers at every zoom level on every screen that surfaces them, no clustering applied.
+Both modes derive POI sets from the existing `get_corridor_pois` / `get_nearby_pois` RPCs (no schema work needed).
+
+**Test:** Pre-route — load the home map at LA-area zoom with no destination; POIs cluster into density bubbles, expand on zoom-in. Post-route — pick a route; all corridor POIs render individually on home, customize map preview, and drive map regardless of zoom.
+
+**Decided by:** User flagged during the Layer 1.5 Android-insets pass; belongs to the POI pipeline arc, rendering phase.
+
+---
+
 ## Cross-cutting observation
 
 Five entries (5.18, 5.19, 5.24, 5.25, 5.26) shared the same root: out-of-band

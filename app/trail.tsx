@@ -14,9 +14,10 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import {
   View, Text, TouchableOpacity, StyleSheet, Animated,
-  Platform, Alert, StatusBar, SafeAreaView,
+  Platform, Alert, StatusBar,
   TextInput, KeyboardAvoidingView,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from 'react-native-maps';
 import { useNavigation, useRoute } from '@react-navigation/native';
 import { getPOIsAlongRoute, saveRoute } from '../lib/supabase';
@@ -316,7 +317,7 @@ export default function Trail() {
         </View>
       )}
 
-      <SafeAreaView style={s.btnSafe}>
+      <SafeAreaView style={s.btnSafe} edges={['bottom']}>
         <View style={s.trailLogoRow}>
           <XRoadLogo size="sm" style={{ opacity: 0.6 }} />
         </View>

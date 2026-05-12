@@ -28,6 +28,7 @@ import {
 } from 'react-native';
 import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from 'react-native-maps';
 import { useNavigation, useRoute } from '@react-navigation/native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { countPOIsAlongRoute, getAvailableNarrators, saveTrip } from '../lib/supabase';
 import type { NarratorRecord } from '../lib/supabase';
 import { C } from '../lib/theme';
@@ -356,6 +357,7 @@ const md = StyleSheet.create({
 export default function CustomizeScreen() {
   const navigation = useNavigation<any>();
   const route      = useRoute<any>();
+  const insets     = useSafeAreaInsets();
   const params     = route.params ?? {};
 
   const routeInfo: RouteInfo = params.route
@@ -732,7 +734,8 @@ export default function CustomizeScreen() {
           <Text style={s.startBtnText}>{saving ? 'Starting…' : 'Start trip'}</Text>
         </TouchableOpacity>
 
-        <View style={{ height: 40 }} />
+        {/* Absorbs Android system-nav inset so the CTA clears the back-gesture / 3-button bar. */}
+        <View style={{ height: 40 + insets.bottom }} />
       </ScrollView>
 
       <CreateNarratorModal

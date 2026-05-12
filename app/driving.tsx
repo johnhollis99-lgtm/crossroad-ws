@@ -12,9 +12,10 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import {
   View, Text, TouchableOpacity, StyleSheet, Animated,
-  Platform, Alert, StatusBar, Dimensions, SafeAreaView,
+  Platform, Alert, StatusBar, Dimensions,
   TextInput, KeyboardAvoidingView,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from 'react-native-maps';
 import { useNavigation, useRoute } from '@react-navigation/native';
 import { getPOIsAlongRoute, saveRoute } from '../lib/supabase';
@@ -288,7 +289,7 @@ export default function Driving() {
         </View>
       )}
 
-      <SafeAreaView style={s.btnSafe}>
+      <SafeAreaView style={s.btnSafe} edges={['bottom']}>
         <View style={s.btnBar}>
           <TouchableOpacity style={[s.btn, s.btnGreen]} onPress={() => { openMicWindow(); setQaMode(true); }} activeOpacity={0.75}>
             <Text style={s.btnIcon}>🎙</Text>

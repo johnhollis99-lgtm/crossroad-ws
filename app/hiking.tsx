@@ -14,8 +14,8 @@ import React, { useEffect, useRef, useState, useCallback } from 'react';
 import {
   View, Text, TextInput, TouchableOpacity, StyleSheet,
   FlatList, Keyboard, Platform, ActivityIndicator,
-  SafeAreaView,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from 'react-native-maps';
 import * as Location from 'expo-location';
 import { useNavigation } from '@react-navigation/native';
@@ -251,7 +251,7 @@ export default function Hiking() {
       </MapView>
 
       {/* Header */}
-      <SafeAreaView style={s.header}>
+      <SafeAreaView style={s.header} edges={['top']}>
         <View style={s.headerRow}>
           <TouchableOpacity style={s.backBtn} onPress={() => navigation.goBack()}>
             <Text style={s.backText}>←</Text>
@@ -273,7 +273,7 @@ export default function Hiking() {
       )}
 
       {/* Bottom sheet */}
-      <SafeAreaView style={s.sheet}>
+      <SafeAreaView style={s.sheet} edges={['bottom']}>
         <View style={s.dragHandle} />
 
         <View style={[s.inputRow, trailPreview && s.inputRowActive]}>
@@ -349,7 +349,7 @@ const s = StyleSheet.create({
   header: { position: 'absolute', top: 0, left: 0, right: 0, zIndex: 10 },
   headerRow: {
     flexDirection: 'row', alignItems: 'center', gap: 10,
-    paddingHorizontal: 16, paddingTop: Platform.OS === 'android' ? 40 : 0, paddingBottom: 8,
+    paddingHorizontal: 16, paddingTop: 8, paddingBottom: 8,
     backgroundColor: 'rgba(10,26,10,0.88)',
   },
   backBtn: {

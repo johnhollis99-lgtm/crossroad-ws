@@ -23,7 +23,7 @@ import {
   useWindowDimensions,
   View,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from 'react-native-maps';
 import * as Location from 'expo-location';
 import { useNavigation } from '@react-navigation/native';
@@ -142,6 +142,7 @@ async function geocodePlaceId(placeId: string): Promise<{ latitude: number; long
 export default function MapScreen() {
   const { theme }   = useTheme();
   const navigation  = useNavigation<any>();
+  const insets      = useSafeAreaInsets();
   const mapRef      = useRef<MapView>(null);
   const locTimer    = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -1106,7 +1107,8 @@ export default function MapScreen() {
             </Text>
           </TouchableOpacity>
 
-          <View style={{ height: 12 }} />
+          {/* Absorbs Android system-nav inset so the CTA clears the back-gesture / 3-button bar. */}
+          <View style={{ height: 12 + insets.bottom }} />
         </ScrollView>
       </Animated.View>}
 
