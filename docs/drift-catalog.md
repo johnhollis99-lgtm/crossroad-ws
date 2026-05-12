@@ -608,6 +608,37 @@ needed.
 
 ---
 
+### 5.44 — Brand mark color duplicates in `app/index.tsx`
+
+**Status:** `open`
+
+**Surface:** Three references to the brand teal `#2EC4B6` (and the legacy `BG_BASE` mirror `#1a1208`) exist inside MapScreen's StyleSheet at the entries `logoPinOuter`, `logoPinInner`, and `brandX`, duplicating the canonical brand color that lives in `src/components/Wordmark.tsx` and the legacy `XRoadLogo` component. These are not Field Notes tokens and were intentionally left unmigrated in the Layer 1 home screen migration (commit-tbd).
+
+**Success state:** The brand mark inside `app/index.tsx` is replaced by importing and rendering the canonical `Wordmark` component from `src/components/Wordmark.tsx`, eliminating the duplicates. Probably belongs to Layer 2 (component replacement) rather than Layer 1 (token migration).
+
+**Test:** After fix, `grep -n "#2EC4B6\|#1a1208" app/index.tsx` returns zero hits.
+
+**Decided by:** Surfaced during the Layer 1 home screen migration inventory; deferred to Layer 2 to keep Layer 1 surgical.
+
+---
+
+### 5.45 — Color-distinction collapses from legacy → Field Notes migration
+
+**Status:** `open`
+
+**Surface:** Layer 1 home-screen migration (this commit) maps the legacy 15-color palette to Field Notes' 9-token palette. Three distinctions collapse:
+- `C.STOP` and `C.ACCENT_TEXT` both → `theme.colors.accent2`. At `app/index.tsx` the origin-search-dot ternary (`originMode === 'gps' ? STOP : ACCENT_TEXT`) now returns the same color on both branches; GPS vs manual mode is no longer distinguished by dot color.
+- `C.WARNING`, `C.WARNING_BRIGHT`, `C.DANGER` all → `theme.colors.accent`. POI dots, route-loading spinners, and the destination pin previously used three subtly different hot-color hues; now share one accent.
+- `C.BORDER_STRONG` and `C.BG_ELEVATED` both → `theme.colors.cardEdge`. Border-vs-elevation-fill distinction merges in dark mode; in light mode the elevation fill renders heavier than original intent.
+
+**Success state:** Where state distinction matters (GPS-vs-manual being the most user-visible), use a non-color signal (shape, icon, label, border treatment) rather than re-introducing a per-state color. This is part of Layer 2 component replacement on the home screen, not a Layer 1 rollback.
+
+**Test:** After Layer 2, the origin-search-dot is visually distinct between GPS and manual modes without relying on color alone.
+
+**Decided by:** Surfaced during Layer 1 home-screen migration; accepted the collapses to keep Layer 1 surgical (color-and-font only) and flagged for Layer 2 attention.
+
+---
+
 ## Cross-cutting observation
 
 Five entries (5.18, 5.19, 5.24, 5.25, 5.26) shared the same root: out-of-band

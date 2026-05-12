@@ -7,7 +7,7 @@
  * Nav params are JSON strings; no native modules beyond react-native-maps + expo-location.
  */
 
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Animated,
@@ -34,7 +34,7 @@ import {
   saveRecentLocation,
 } from '../lib/supabase';
 import type { POI, RecentLocation } from '../lib/supabase';
-import { C } from '../lib/theme';
+import { useTheme } from '../src/design/theme';
 import { computeBadges, computeRouteTags } from '../lib/routeBadges';
 import { useSheetSnap } from '../hooks/useSheetSnap';
 import { MapStyleId, MAP_STYLES, loadMapStyle, saveMapStyle } from '../lib/mapStyle';
@@ -125,12 +125,6 @@ function formatDuration(min: number): string {
 }
 
 
-function badgeStyle(badge: 'Fastest' | 'Scenic' | 'Shortest') {
-  if (badge === 'Fastest')  return { bg: 'rgba(99,153,34,0.20)',  fg: C.ACCENT_TEXT };
-  if (badge === 'Shortest') return { bg: 'rgba(186,117,23,0.20)', fg: C.WARNING_BRIGHT };
-  return { bg: 'rgba(216,90,48,0.20)', fg: '#F0A07A' };
-}
-
 async function geocodePlaceId(placeId: string): Promise<{ latitude: number; longitude: number } | undefined> {
   try {
     const res  = await fetch(
@@ -146,9 +140,16 @@ async function geocodePlaceId(placeId: string): Promise<{ latitude: number; long
 // ── Component ─────────────────────────────────────────────────────────────────
 
 export default function MapScreen() {
+  const { theme }   = useTheme();
   const navigation  = useNavigation<any>();
   const mapRef      = useRef<MapView>(null);
   const locTimer    = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const badgeStyle = useCallback((badge: 'Fastest' | 'Scenic' | 'Shortest') => {
+    if (badge === 'Fastest')  return { bg: 'rgba(99,153,34,0.20)',  fg: theme.colors.accent2 };
+    if (badge === 'Shortest') return { bg: 'rgba(186,117,23,0.20)', fg: theme.colors.accent  };
+    return { bg: 'rgba(216,90,48,0.20)', fg: theme.colors.accent };
+  }, [theme]);
 
   // GPS position
   const [userLocation,    setUserLocation]    = useState<{ latitude: number; longitude: number } | null>(null);
@@ -546,6 +547,358 @@ export default function MapScreen() {
     });
   };
 
+  // ── Styles (theme-aware; rebuilt when color scheme changes) ──────────────
+  const s = useMemo(() => StyleSheet.create({
+    root: { flex: 1, backgroundColor: theme.colors.paper },
+    desktopSidebar: {
+      position: 'absolute', left: 0, top: 0, bottom: 0, width: 320,
+      backgroundColor: theme.colors.paperDeep,
+      borderRightWidth: 1, borderColor: theme.colors.rule,
+    },
+
+    // Map markers
+    destPin: {
+      width: 22, height: 22, borderRadius: 11,
+      backgroundColor: `${theme.colors.accent}44`, alignItems: 'center', justifyContent: 'center',
+    },
+    destPinDot: {
+      width: 11, height: 11, borderRadius: 6,
+      backgroundColor: theme.colors.accent, borderWidth: 2, borderColor: theme.colors.paper,
+    },
+    originPin: {
+      width: 22, height: 22, borderRadius: 11,
+      backgroundColor: `${theme.colors.accent2}44`, alignItems: 'center', justifyContent: 'center',
+    },
+    originPinDot: {
+      width: 11, height: 11, borderRadius: 6,
+      backgroundColor: theme.colors.accent2, borderWidth: 2, borderColor: theme.colors.paper,
+    },
+    poiDot:        { width: 10, height: 10, borderRadius: 5, backgroundColor: theme.colors.accent,  borderWidth: 1.5, borderColor: theme.colors.paper },
+    stopDot:       { width: 10, height: 10, borderRadius: 5, backgroundColor: theme.colors.accent2, borderWidth: 1.5, borderColor: theme.colors.paper },
+    stopDotActive: { width: 14, height: 14, borderRadius: 7, backgroundColor: theme.colors.accent2, borderWidth: 2.5, borderColor: theme.colors.paper },
+
+    // Top gradient overlay (translucent fade — kept rgba, not a panel)
+    topGradient: {
+      position: 'absolute', top: 0, left: 0, right: 0, height: 200,
+      backgroundColor: 'rgba(26,18,8,0.72)',
+    },
+
+    // Bottom sheet
+    sheet: {
+      position: 'absolute', bottom: 0, left: 0, right: 0,
+      backgroundColor: theme.colors.paperDeep,
+      borderTopLeftRadius: 20, borderTopRightRadius: 20,
+      borderTopWidth: 1, borderColor: theme.colors.rule,
+      overflow: 'hidden',
+    },
+    dragHandleWrap: {
+      width: '100%', alignItems: 'center', paddingVertical: 10,
+    },
+    dragHandle: {
+      width: 36, height: 4, backgroundColor: theme.colors.cardEdge,
+      borderRadius: 2,
+    },
+    sheetContent: { paddingHorizontal: 16, paddingTop: 4, paddingBottom: 28, gap: 10 },
+
+    // Top safe area + search
+    topSafe:  { position: 'absolute', top: 0, left: 0, right: 0 },
+    logoWrap: { alignItems: 'center', paddingVertical: 4 },
+    devNavRow: {
+      position: 'absolute', top: 4, right: 20,
+      flexDirection: 'row', gap: 8, zIndex: 100,
+    },
+    // Dev-only nav buttons — deliberately NOT migrated to Field Notes per CLAUDE.md.
+    devNavLabel: {
+      fontFamily: Platform.select({ ios: 'Menlo', android: 'monospace', default: 'monospace' }),
+      fontSize: 16,
+      color: theme.colors.inkSoft,
+    },
+    topBar: {
+      flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+      paddingHorizontal: 16, paddingTop: 6, paddingBottom: 8,
+    },
+    logoRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+    logoIconWrap: { width: 28, height: 28, alignItems: 'center', justifyContent: 'center' },
+    logoX: { position: 'absolute', width: 22, height: 22, alignItems: 'center', justifyContent: 'center' },
+    logoXBar1: {
+      position: 'absolute', width: 20, height: 5, borderRadius: 2,
+      backgroundColor: theme.colors.ink, transform: [{ rotate: '45deg' }],
+    },
+    logoXBar2: {
+      position: 'absolute', width: 20, height: 5, borderRadius: 2,
+      backgroundColor: theme.colors.ink, transform: [{ rotate: '-45deg' }],
+    },
+    // Brand-teal + legacy-base literals kept per drift catalog 5.44 (replaced wholesale in Layer 2).
+    logoPinOuter: {
+      width: 12, height: 12, borderRadius: 6, backgroundColor: '#2EC4B6',
+      alignItems: 'center', justifyContent: 'center',
+    },
+    logoPinInner: { width: 4, height: 4, borderRadius: 2, backgroundColor: '#1a1208' },
+    brand:  { ...theme.textVariants.h3, color: theme.colors.ink },
+    brandX: { ...theme.textVariants.h3, color: '#2EC4B6' },
+    settingsBtn: {
+      width: 36, height: 36, borderRadius: 10,
+      backgroundColor: theme.colors.cardEdge, borderWidth: 1, borderColor: theme.colors.rule,
+      alignItems: 'center', justifyContent: 'center',
+    },
+    settingsIcon: { fontSize: 16 },
+
+    // Search card (floating pill)
+    searchCard: {
+      marginHorizontal: 16,
+      backgroundColor: theme.colors.paperDeep,
+      borderRadius: 14,
+      borderWidth: 1, borderColor: theme.colors.rule,
+      overflow: 'visible',
+    },
+    searchRow: {
+      flexDirection: 'row', alignItems: 'center', gap: 10,
+      paddingHorizontal: 14, paddingVertical: 11,
+    },
+    searchDot:     { width: 8, height: 8, borderRadius: 4, flexShrink: 0 },
+    searchDivider: { height: 1, backgroundColor: theme.colors.rule, marginLeft: 32 },
+    originText:    { ...theme.textVariants.ui, color: theme.colors.inkSoft, flex: 1 },
+    destText:      { ...theme.textVariants.ui, color: theme.colors.ink,     flex: 1 },
+    destPlaceholder: { color: theme.colors.inkSoft },
+    gpsPill: {
+      ...theme.textVariants.metaSmall,
+      color: theme.colors.accent2,
+      borderWidth: 1, borderColor: theme.colors.accent2, borderRadius: 4,
+      paddingHorizontal: 4, paddingVertical: 1,
+    },
+    clearBtn: { ...theme.textVariants.uiSmall, color: theme.colors.inkSoft, paddingHorizontal: 4 },
+
+    // Shared suggestion items
+    suggIcon: { fontSize: 12 },
+    suggText: { ...theme.textVariants.ui, color: theme.colors.inkSoft, flex: 1 },
+
+    // Routes header
+    routesHeader: {
+      flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+      paddingTop: 4,
+    },
+    routesLabel: { ...theme.textVariants.meta, color: theme.colors.ink },
+    addStopText: { ...theme.textVariants.ui, color: theme.colors.accent2 },
+
+    // Route cards
+    routeCard: {
+      backgroundColor: theme.colors.cardEdge,
+      borderRadius: 12,
+      borderWidth: 1.5, borderColor: theme.colors.rule,
+      padding: 14, gap: 8,
+    },
+    routeCardSel: { borderColor: theme.colors.accent2, backgroundColor: `${theme.colors.accent2}26` },
+    routeCardTop: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+    routeCardTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 8, flex: 1 },
+    routeCardName:    { ...theme.textVariants.ui, color: theme.colors.inkSoft },
+    routeCardNameSel: { color: theme.colors.accent2 },
+    badge:     { borderRadius: 4, paddingHorizontal: 6, paddingVertical: 2 },
+    badgeText: { ...theme.textVariants.meta },
+    routeDuration:    { ...theme.textVariants.h2, color: theme.colors.inkSoft },
+    routeDurationSel: { color: theme.colors.ink },
+    routeCardBottom:  { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+    routeMeta:        { ...theme.textVariants.uiSmall, color: theme.colors.inkSoft, flex: 1 },
+    storiesText:      { ...theme.textVariants.uiSmall, color: theme.colors.accent },
+    storiesTextSel:   { color: theme.colors.accent },
+
+    emptyState: { paddingVertical: 20, alignItems: 'center' },
+    emptyText:  { ...theme.textVariants.ui, color: theme.colors.inkSoft },
+
+    // Legend row
+    legendRow: {
+      flexDirection: 'row', alignItems: 'center', gap: 6,
+      paddingHorizontal: 4, paddingVertical: 4,
+    },
+    legendDot:  { width: 8, height: 8, borderRadius: 4 },
+    legendText: { ...theme.textVariants.meta, color: theme.colors.inkSoft, marginRight: 8 },
+
+    // Customize CTA
+    customizeBtn: {
+      backgroundColor: theme.colors.paperDeep,
+      borderRadius: 12,
+      paddingVertical: 16, alignItems: 'center',
+      borderWidth: 1, borderColor: theme.colors.cardEdge,
+    },
+    customizeBtnDisabled: { opacity: 0.4 },
+    customizeBtnText: { ...theme.textVariants.buttonStrong, color: theme.colors.ink },
+
+    // Location search overlay (modal scrim kept as opaque-black dim)
+    locOverlay: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0,0,0,0.6)' },
+    locSheet: {
+      backgroundColor: theme.colors.paperDeep,
+      borderTopLeftRadius: 20, borderTopRightRadius: 20,
+      borderTopWidth: 1, borderColor: theme.colors.rule,
+      paddingHorizontal: 16, paddingBottom: 44, paddingTop: 8,
+      maxHeight: '85%',
+    },
+    locHeader: {
+      flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+      marginBottom: 12,
+    },
+    locTitle:  { ...theme.textVariants.h3, color: theme.colors.ink },
+    locCancel: { ...theme.textVariants.ui, color: theme.colors.accent2 },
+    locInputRow: {
+      flexDirection: 'row', alignItems: 'center', gap: 8,
+      backgroundColor: theme.colors.cardEdge,
+      borderRadius: 10, borderWidth: 1, borderColor: theme.colors.rule,
+      paddingHorizontal: 12, paddingVertical: 10, marginBottom: 8,
+    },
+    locInputIcon: { fontSize: 14 },
+    locInput:     { ...theme.textVariants.ui, color: theme.colors.ink, flex: 1 },
+    locGpsRow: {
+      flexDirection: 'row', alignItems: 'center', gap: 12,
+      paddingVertical: 14,
+      borderBottomWidth: 1, borderColor: theme.colors.rule,
+    },
+    locGpsIconWrap: {
+      width: 32, height: 32, borderRadius: 16,
+      backgroundColor: `${theme.colors.accent2}22`,
+      alignItems: 'center', justifyContent: 'center',
+    },
+    locGpsLabel:    { ...theme.textVariants.ui, color: theme.colors.ink },
+    locGpsSub:      { ...theme.textVariants.uiSmall, color: theme.colors.inkSoft, marginTop: 1 },
+    locActiveCheck: { ...theme.textVariants.ui, color: theme.colors.accent2 },
+    locDivider:     { height: 1, backgroundColor: theme.colors.rule, marginVertical: 6 },
+    locSectionLabel: { ...theme.textVariants.meta, color: theme.colors.inkSoft, marginBottom: 4 },
+    locResultRow:    { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 13, paddingHorizontal: 2 },
+    locResultBorder: { borderTopWidth: 1, borderColor: theme.colors.rule },
+    locEmptyState:   { paddingVertical: 20, alignItems: 'center' },
+
+    // Add stop modal (modal scrim kept as opaque-black dim)
+    modalOverlay: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0,0,0,0.6)' },
+    modalSheet: {
+      backgroundColor: theme.colors.paperDeep,
+      borderTopLeftRadius: 20, borderTopRightRadius: 20,
+      borderTopWidth: 1, borderColor: theme.colors.rule,
+      paddingHorizontal: 16, paddingBottom: 44, paddingTop: 8,
+      zIndex: 1,
+    },
+    modalHandle: {
+      width: 36, height: 4, backgroundColor: theme.colors.cardEdge,
+      borderRadius: 2, alignSelf: 'center', marginBottom: 16,
+    },
+    modalTitle: { ...theme.textVariants.h3, color: theme.colors.ink, marginBottom: 12 },
+    modalInputRow: {
+      flexDirection: 'row', alignItems: 'center',
+      backgroundColor: theme.colors.cardEdge,
+      borderRadius: 10, borderWidth: 1, borderColor: theme.colors.rule,
+      paddingHorizontal: 12, paddingVertical: 10, marginBottom: 8,
+    },
+    modalInput:   { ...theme.textVariants.ui, color: theme.colors.ink, flex: 1 },
+    modalSuggRow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 13, paddingHorizontal: 2 },
+
+    // Pending pin (map-tap to drop a stop)
+    pendingPinWrap: { alignItems: 'center' },
+    pendingPinDot: {
+      width: 14, height: 14, borderRadius: 7,
+      backgroundColor: theme.colors.accent2, borderWidth: 2.5, borderColor: theme.colors.paper,
+    },
+    pendingPinStem: { width: 2.5, height: 10, backgroundColor: theme.colors.accent2, borderRadius: 1.5 },
+    pendingPinCallout: {
+      position: 'absolute',
+      backgroundColor: theme.colors.paperDeep,
+      borderRadius: 12, borderWidth: 1, borderColor: theme.colors.rule,
+      flexDirection: 'row', alignItems: 'center', gap: 10,
+      paddingHorizontal: 14, paddingVertical: 12,
+      zIndex: 30,
+    },
+    pendingPinIcon: {
+      width: 30, height: 30, borderRadius: 15,
+      backgroundColor: `${theme.colors.accent2}22`,
+      alignItems: 'center', justifyContent: 'center',
+    },
+    pendingPinAddr: { ...theme.textVariants.ui, color: theme.colors.ink },
+    pendingPinAddBtn: {
+      backgroundColor: `${theme.colors.accent2}26`, borderRadius: 8,
+      borderWidth: 1, borderColor: theme.colors.accent2,
+      paddingHorizontal: 12, paddingVertical: 7,
+    },
+    pendingPinAddText: { ...theme.textVariants.uiSmall, color: theme.colors.accent2 },
+    removeStopBtn: {
+      backgroundColor: `${theme.colors.accent}26`, borderRadius: 8,
+      borderWidth: 1, borderColor: theme.colors.accent,
+      paddingHorizontal: 12, paddingVertical: 7,
+    },
+    removeStopText: { ...theme.textVariants.uiSmall, color: theme.colors.accent },
+
+    // Route attribute tags
+    tagRow:         { flexDirection: 'row', flexWrap: 'wrap', gap: 5, marginTop: 4 },
+    tagChip:        { borderRadius: 5, borderWidth: 1, paddingHorizontal: 6, paddingVertical: 2 },
+    tagChipPro:     { borderColor: theme.colors.accent2, backgroundColor: `${theme.colors.accent2}1f` },
+    tagChipCon:     { borderColor: theme.colors.accent,  backgroundColor: `${theme.colors.accent}1f`  },
+    tagChipNeutral: { borderColor: theme.colors.cardEdge, backgroundColor: `${theme.colors.ink}0a`    },
+    tagTextPro:     { ...theme.textVariants.meta, color: theme.colors.accent2 },
+    tagTextCon:     { ...theme.textVariants.meta, color: theme.colors.accent  },
+    tagTextNeutral: { ...theme.textVariants.meta, color: theme.colors.inkSoft },
+
+    // North button pill
+    northBtn: {
+      position: 'absolute',
+      flexDirection: 'row', alignItems: 'center', gap: 5,
+      paddingHorizontal: 13, height: 36, borderRadius: 10,
+      backgroundColor: theme.colors.paperDeep,
+      borderWidth: 1.5, borderColor: theme.colors.cardEdge,
+      shadowColor: theme.colors.ink,
+      shadowOffset: { width: 0, height: 2 },
+      shadowOpacity: 0.35,
+      shadowRadius: 5,
+      elevation: 5,
+    },
+    northBtnArrow: { ...theme.textVariants.ui,      color: theme.colors.inkSoft },
+    northBtnLabel: { ...theme.textVariants.uiSmall, color: theme.colors.inkSoft },
+
+    // Add stop inline panel
+    addStopPanel: {
+      position: 'absolute',
+      backgroundColor: theme.colors.paperDeep,
+      borderRadius: 12, borderWidth: 1, borderColor: theme.colors.rule,
+      overflow: 'hidden', zIndex: 25,
+    },
+    addStopRow: {
+      flexDirection: 'row', alignItems: 'center', gap: 8,
+      paddingHorizontal: 12, paddingVertical: 10,
+    },
+    addStopIcon:    { fontSize: 13, color: theme.colors.inkSoft },
+    addStopInput:   { ...theme.textVariants.ui, color: theme.colors.ink, flex: 1 },
+    addStopSuggs:   { maxHeight: 180, borderTopWidth: 1, borderColor: theme.colors.rule },
+    addStopSuggRow: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 12, paddingVertical: 10 },
+
+    // Search pill + chips
+    desktopPillWrap: {
+      position: 'absolute', top: 12, left: 332, right: 72,
+      gap: 8, pointerEvents: 'box-none',
+    } as any,
+    searchPill: {
+      flexDirection: 'row', alignItems: 'center', gap: 10,
+      height: 40, borderRadius: 20,
+      backgroundColor: theme.colors.paperDeep,
+      borderWidth: 1, borderColor: theme.colors.rule,
+      paddingHorizontal: 14,
+      marginHorizontal: 12,
+      shadowColor: theme.colors.ink, shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.3, shadowRadius: 4,
+      elevation: 4,
+    },
+    searchPillIcon:        { fontSize: 14 },
+    searchPillText:        { ...theme.textVariants.ui, color: theme.colors.ink, flex: 1 },
+    searchPillPlaceholder: { color: theme.colors.inkSoft },
+    searchPillAvatar: {
+      width: 28, height: 28, borderRadius: 14,
+      backgroundColor: theme.colors.cardEdge,
+      borderWidth: 1, borderColor: theme.colors.cardEdge,
+      alignItems: 'center', justifyContent: 'center',
+    },
+    chipRow: { paddingHorizontal: 12, paddingVertical: 2, gap: 8, flexDirection: 'row' },
+    chip: {
+      height: 30, borderRadius: 15,
+      paddingHorizontal: 12, justifyContent: 'center',
+      backgroundColor: theme.colors.paperDeep,
+      borderWidth: 1, borderColor: theme.colors.cardEdge,
+    },
+    chipActive:     { backgroundColor: `${theme.colors.accent2}26`, borderColor: theme.colors.accent2 },
+    chipText:       { ...theme.textVariants.uiSmall, color: theme.colors.inkSoft },
+    chipTextActive: { color: theme.colors.accent2 },
+  }), [theme]);
+
   // ── Render ─────────────────────────────────────────────────────────────────
   return (
     <View style={s.root}>
@@ -699,7 +1052,7 @@ export default function MapScreen() {
                     {r.distanceMi} mi{r.summary ? ` · ${r.summary}` : ''}
                   </Text>
                   {r.poiCount === null
-                    ? <ActivityIndicator size="small" color={C.WARNING} />
+                    ? <ActivityIndicator size="small" color={theme.colors.accent} />
                     : <Text style={[s.storiesText, isSelected && s.storiesTextSel]}>
                         {r.poiCount} {r.poiCount === 1 ? 'story' : 'stories'}
                       </Text>
@@ -735,9 +1088,9 @@ export default function MapScreen() {
 
           {/* Legend */}
           <View style={s.legendRow}>
-            <View style={[s.legendDot, { backgroundColor: C.WARNING_BRIGHT }]} />
+            <View style={[s.legendDot, { backgroundColor: theme.colors.accent }]} />
             <Text style={s.legendText}>POIs</Text>
-            <View style={[s.legendDot, { backgroundColor: C.STOP }]} />
+            <View style={[s.legendDot, { backgroundColor: theme.colors.accent2 }]} />
             <Text style={s.legendText}>Stops</Text>
           </View>
 
@@ -791,7 +1144,7 @@ export default function MapScreen() {
               {destination || 'Where to?'}
             </Text>
             {loadingRoute
-              ? <ActivityIndicator size="small" color={C.ACCENT_TEXT} style={{ marginRight: 4 }} />
+              ? <ActivityIndicator size="small" color={theme.colors.accent2} style={{ marginRight: 4 }} />
               : destination.length > 0 && (
                 <TouchableOpacity
                   onPress={() => { setDestination(''); setDestCoords(null); clearRoutes(); }}
@@ -858,7 +1211,7 @@ export default function MapScreen() {
             {/* Search card */}
             <View style={[s.searchCard, { marginBottom: 12 }]}>
               <TouchableOpacity style={s.searchRow} onPress={() => openLocOverlay('origin')} activeOpacity={0.7}>
-                <View style={[s.searchDot, { backgroundColor: originMode === 'gps' ? C.STOP : C.ACCENT_TEXT }]} />
+                <View style={[s.searchDot, { backgroundColor: originMode === 'gps' ? theme.colors.accent2 : theme.colors.accent2 }]} />
                 <Text style={s.originText} numberOfLines={1}>{originName}</Text>
                 {originMode === 'gps'
                   ? <Text style={s.gpsPill}>GPS</Text>
@@ -871,7 +1224,7 @@ export default function MapScreen() {
                 <View key={`swp-${i}`}>
                   <View style={s.searchDivider} />
                   <View style={s.searchRow}>
-                    <View style={[s.searchDot, { backgroundColor: C.STOP }]} />
+                    <View style={[s.searchDot, { backgroundColor: theme.colors.accent2 }]} />
                     <Text style={s.originText} numberOfLines={1}>{wp.text}</Text>
                     <TouchableOpacity onPress={() => removeWaypoint(i)} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
                       <Text style={s.clearBtn}>✕</Text>
@@ -881,12 +1234,12 @@ export default function MapScreen() {
               ))}
               <View style={s.searchDivider} />
               <TouchableOpacity style={s.searchRow} onPress={() => openLocOverlay('dest')} activeOpacity={0.7}>
-                <View style={[s.searchDot, { backgroundColor: C.DANGER }]} />
+                <View style={[s.searchDot, { backgroundColor: theme.colors.accent }]} />
                 <Text style={[s.destText, !destination && s.destPlaceholder]} numberOfLines={1}>
                   {destination || 'Where to?'}
                 </Text>
                 {loadingRoute
-                  ? <ActivityIndicator size="small" color={C.ACCENT_TEXT} />
+                  ? <ActivityIndicator size="small" color={theme.colors.accent2} />
                   : destination.length > 0 && (
                     <TouchableOpacity onPress={() => { setDestination(''); setDestCoords(null); clearRoutes(); }} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
                       <Text style={s.clearBtn}>✕</Text>
@@ -919,7 +1272,7 @@ export default function MapScreen() {
                     </View>
                     <View style={s.routeCardBottom}>
                       <Text style={s.routeMeta}>{r.distanceMi} mi{r.summary ? ` · ${r.summary}` : ''}</Text>
-                      {r.poiCount === null ? <ActivityIndicator size="small" color={C.WARNING} /> : <Text style={[s.storiesText, isSelected && s.storiesTextSel]}>{r.poiCount} {r.poiCount === 1 ? 'story' : 'stories'}</Text>}
+                      {r.poiCount === null ? <ActivityIndicator size="small" color={theme.colors.accent} /> : <Text style={[s.storiesText, isSelected && s.storiesTextSel]}>{r.poiCount} {r.poiCount === 1 ? 'story' : 'stories'}</Text>}
                     </View>
                     {tags.length > 0 && (
                       <View style={s.tagRow}>
@@ -945,9 +1298,9 @@ export default function MapScreen() {
                 <View style={s.emptyState}><Text style={s.emptyText}>No routes found. Try a different destination.</Text></View>
               )}
               <View style={s.legendRow}>
-                <View style={[s.legendDot, { backgroundColor: C.WARNING_BRIGHT }]} />
+                <View style={[s.legendDot, { backgroundColor: theme.colors.accent }]} />
                 <Text style={s.legendText}>POIs</Text>
-                <View style={[s.legendDot, { backgroundColor: C.STOP }]} />
+                <View style={[s.legendDot, { backgroundColor: theme.colors.accent2 }]} />
                 <Text style={s.legendText}>Stops</Text>
               </View>
               <TouchableOpacity style={[s.customizeBtn, !selectedRoute && s.customizeBtnDisabled]} onPress={handleCustomizeTrip} disabled={!selectedRoute} activeOpacity={0.85}>
@@ -972,7 +1325,7 @@ export default function MapScreen() {
               {destination || 'Where to?'}
             </Text>
             {loadingRoute
-              ? <ActivityIndicator size="small" color={C.ACCENT_TEXT} style={{ marginRight: 4 }} />
+              ? <ActivityIndicator size="small" color={theme.colors.accent2} style={{ marginRight: 4 }} />
               : destination.length > 0 && (
                 <TouchableOpacity
                   onPress={() => { setDestination(''); setDestCoords(null); clearRoutes(); }}
@@ -1113,7 +1466,7 @@ export default function MapScreen() {
               <TextInput
                 style={s.locInput}
                 placeholder={locTarget === 'origin' ? 'Search starting location…' : 'Search destination…'}
-                placeholderTextColor={C.TEXT_TERTIARY}
+                placeholderTextColor={theme.colors.inkSoft}
                 value={locQuery}
                 onChangeText={handleLocQueryChange}
                 autoFocus
@@ -1199,7 +1552,7 @@ export default function MapScreen() {
               {/* Loading state */}
               {locLoading && (
                 <View style={s.locEmptyState}>
-                  <ActivityIndicator size="small" color={C.ACCENT_TEXT} />
+                  <ActivityIndicator size="small" color={theme.colors.accent2} />
                 </View>
               )}
 
@@ -1217,356 +1570,3 @@ export default function MapScreen() {
     </View>
   );
 }
-
-// ── Styles ────────────────────────────────────────────────────────────────────
-const s = StyleSheet.create({
-  root: { flex: 1, backgroundColor: C.BG_BASE },
-  desktopSidebar: {
-    position: 'absolute', left: 0, top: 0, bottom: 0, width: 320,
-    backgroundColor: 'rgba(38,26,12,0.97)',
-    borderRightWidth: 1, borderColor: C.BORDER_SUBTLE,
-  },
-
-  // Map markers
-  destPin: {
-    width: 22, height: 22, borderRadius: 11,
-    backgroundColor: `${C.DANGER}44`, alignItems: 'center', justifyContent: 'center',
-  },
-  destPinDot: {
-    width: 11, height: 11, borderRadius: 6,
-    backgroundColor: C.DANGER, borderWidth: 2, borderColor: C.BG_BASE,
-  },
-  originPin: {
-    width: 22, height: 22, borderRadius: 11,
-    backgroundColor: `${C.STOP}44`, alignItems: 'center', justifyContent: 'center',
-  },
-  originPinDot: {
-    width: 11, height: 11, borderRadius: 6,
-    backgroundColor: C.STOP, borderWidth: 2, borderColor: C.BG_BASE,
-  },
-  poiDot:  { width: 10, height: 10, borderRadius: 5, backgroundColor: C.WARNING_BRIGHT, borderWidth: 1.5, borderColor: C.BG_BASE },
-  stopDot:       { width: 10, height: 10, borderRadius: 5, backgroundColor: C.STOP, borderWidth: 1.5, borderColor: C.BG_BASE },
-  stopDotActive: { width: 14, height: 14, borderRadius: 7, backgroundColor: C.STOP, borderWidth: 2.5, borderColor: '#fff' },
-
-  // Top gradient overlay
-  topGradient: {
-    position: 'absolute', top: 0, left: 0, right: 0, height: 200,
-    backgroundColor: 'rgba(26,18,8,0.72)',
-  },
-
-  // Bottom sheet
-  sheet: {
-    position: 'absolute', bottom: 0, left: 0, right: 0,
-    backgroundColor: 'rgba(38,26,12,0.97)',
-    borderTopLeftRadius: 20, borderTopRightRadius: 20,
-    borderTopWidth: 1, borderColor: C.BORDER_SUBTLE,
-    overflow: 'hidden',
-  },
-  dragHandleWrap: {
-    width: '100%', alignItems: 'center', paddingVertical: 10,
-  },
-  dragHandle: {
-    width: 36, height: 4, backgroundColor: C.BORDER_STRONG,
-    borderRadius: 2,
-  },
-  sheetContent: { paddingHorizontal: 16, paddingTop: 4, paddingBottom: 28, gap: 10 },
-
-  // Top safe area + search
-  topSafe:  { position: 'absolute', top: 0, left: 0, right: 0 },
-  logoWrap: { alignItems: 'center', paddingVertical: 4 },
-  devNavRow: {
-    position: 'absolute', top: 4, right: 20,
-    flexDirection: 'row', gap: 8, zIndex: 100,
-  },
-  devNavLabel: {
-    fontFamily: Platform.select({ ios: 'Menlo', android: 'monospace', default: 'monospace' }),
-    fontSize: 16,
-    color: C.TEXT_TERTIARY,
-  },
-  topBar: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    paddingHorizontal: 16, paddingTop: 6, paddingBottom: 8,
-  },
-  logoRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  logoIconWrap: { width: 28, height: 28, alignItems: 'center', justifyContent: 'center' },
-  logoX: { position: 'absolute', width: 22, height: 22, alignItems: 'center', justifyContent: 'center' },
-  logoXBar1: {
-    position: 'absolute', width: 20, height: 5, borderRadius: 2,
-    backgroundColor: C.TEXT_PRIMARY, transform: [{ rotate: '45deg' }],
-  },
-  logoXBar2: {
-    position: 'absolute', width: 20, height: 5, borderRadius: 2,
-    backgroundColor: C.TEXT_PRIMARY, transform: [{ rotate: '-45deg' }],
-  },
-  logoPinOuter: {
-    width: 12, height: 12, borderRadius: 6, backgroundColor: '#2EC4B6',
-    alignItems: 'center', justifyContent: 'center',
-  },
-  logoPinInner: { width: 4, height: 4, borderRadius: 2, backgroundColor: '#1a1208' },
-  brand: { fontSize: 18, fontWeight: '800', color: C.TEXT_PRIMARY, letterSpacing: -0.3 },
-  brandX: { fontSize: 18, fontWeight: '800', color: '#2EC4B6', letterSpacing: -0.3 },
-  settingsBtn: {
-    width: 36, height: 36, borderRadius: 10,
-    backgroundColor: C.BG_ELEVATED, borderWidth: 1, borderColor: C.BORDER_SUBTLE,
-    alignItems: 'center', justifyContent: 'center',
-  },
-  settingsIcon: { fontSize: 16 },
-
-  // Search card (floating pill)
-  searchCard: {
-    marginHorizontal: 16,
-    backgroundColor: 'rgba(38,26,12,0.94)',
-    borderRadius: 14,
-    borderWidth: 1, borderColor: C.BORDER_SUBTLE,
-    overflow: 'visible',
-  },
-  searchRow: {
-    flexDirection: 'row', alignItems: 'center', gap: 10,
-    paddingHorizontal: 14, paddingVertical: 11,
-  },
-  searchDot:    { width: 8, height: 8, borderRadius: 4, flexShrink: 0 },
-  searchDivider: { height: 1, backgroundColor: C.BORDER_SUBTLE, marginLeft: 32 },
-  originText:   { fontSize: 14, color: C.TEXT_SECONDARY, flex: 1 },
-  destText:     { fontSize: 14, color: C.TEXT_PRIMARY,   flex: 1 },
-  destPlaceholder: { color: C.TEXT_TERTIARY },
-  gpsPill: {
-    fontSize: 9, fontWeight: '700', color: C.STOP, letterSpacing: 0.5,
-    borderWidth: 1, borderColor: C.STOP, borderRadius: 4,
-    paddingHorizontal: 4, paddingVertical: 1,
-  },
-  clearBtn: { fontSize: 12, color: C.TEXT_TERTIARY, paddingHorizontal: 4 },
-
-  // Shared suggestion items
-  suggIcon: { fontSize: 12 },
-  suggText: { fontSize: 13, color: C.TEXT_SECONDARY, flex: 1 },
-
-  // Routes header
-  routesHeader: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    paddingTop: 4,
-  },
-  routesLabel: { fontSize: 13, fontWeight: '600', color: C.TEXT_PRIMARY, textTransform: 'uppercase', letterSpacing: 0.8 },
-  addStopText: { fontSize: 13, color: C.ACCENT_TEXT, fontWeight: '600' },
-
-  // Route cards
-  routeCard: {
-    backgroundColor: C.BG_ELEVATED,
-    borderRadius: 12,
-    borderWidth: 1.5, borderColor: C.BORDER_SUBTLE,
-    padding: 14, gap: 8,
-  },
-  routeCardSel: { borderColor: C.ACCENT_BORDER, backgroundColor: C.ACCENT_LIGHT },
-  routeCardTop: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  routeCardTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 8, flex: 1 },
-  routeCardName:    { fontSize: 14, fontWeight: '600', color: C.TEXT_SECONDARY },
-  routeCardNameSel: { color: C.ACCENT_TEXT },
-  badge:     { borderRadius: 4, paddingHorizontal: 6, paddingVertical: 2 },
-  badgeText: { fontSize: 10, fontWeight: '700', letterSpacing: 0.2 },
-  routeDuration:    { fontSize: 18, fontWeight: '700', color: C.TEXT_TERTIARY },
-  routeDurationSel: { color: C.TEXT_PRIMARY },
-  routeCardBottom:  { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  routeMeta:        { fontSize: 12, color: C.TEXT_TERTIARY, flex: 1 },
-  storiesText:      { fontSize: 12, color: C.WARNING, fontWeight: '500' },
-  storiesTextSel:   { color: C.WARNING_BRIGHT },
-
-  emptyState: { paddingVertical: 20, alignItems: 'center' },
-  emptyText:  { fontSize: 13, color: C.TEXT_TERTIARY },
-
-
-  // Legend row
-  legendRow: {
-    flexDirection: 'row', alignItems: 'center', gap: 6,
-    paddingHorizontal: 4, paddingVertical: 4,
-  },
-  legendDot:  { width: 8, height: 8, borderRadius: 4 },
-  legendText: { fontSize: 10, color: C.TEXT_TERTIARY, fontWeight: '500', marginRight: 8 },
-
-  // Customize CTA
-  customizeBtn: {
-    backgroundColor: C.BG_SURFACE,
-    borderRadius: 12,
-    paddingVertical: 16, alignItems: 'center',
-    borderWidth: 1, borderColor: C.BORDER_STRONG,
-  },
-  customizeBtnDisabled: { opacity: 0.4 },
-  customizeBtnText: { fontSize: 15, fontWeight: '700', color: C.TEXT_PRIMARY },
-
-  // Location search overlay
-  locOverlay: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0,0,0,0.6)' },
-  locSheet: {
-    backgroundColor: C.BG_SURFACE,
-    borderTopLeftRadius: 20, borderTopRightRadius: 20,
-    borderTopWidth: 1, borderColor: C.BORDER_SUBTLE,
-    paddingHorizontal: 16, paddingBottom: 44, paddingTop: 8,
-    maxHeight: '85%',
-  },
-  locHeader: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    marginBottom: 12,
-  },
-  locTitle:  { fontSize: 16, fontWeight: '700', color: C.TEXT_PRIMARY },
-  locCancel: { fontSize: 14, color: C.ACCENT_TEXT },
-  locInputRow: {
-    flexDirection: 'row', alignItems: 'center', gap: 8,
-    backgroundColor: C.BG_ELEVATED,
-    borderRadius: 10, borderWidth: 1, borderColor: C.BORDER_SUBTLE,
-    paddingHorizontal: 12, paddingVertical: 10, marginBottom: 8,
-  },
-  locInputIcon: { fontSize: 14 },
-  locInput:     { flex: 1, fontSize: 14, color: C.TEXT_PRIMARY },
-  locGpsRow: {
-    flexDirection: 'row', alignItems: 'center', gap: 12,
-    paddingVertical: 14,
-    borderBottomWidth: 1, borderColor: C.BORDER_SUBTLE,
-  },
-  locGpsIconWrap: {
-    width: 32, height: 32, borderRadius: 16,
-    backgroundColor: `${C.STOP}22`,
-    alignItems: 'center', justifyContent: 'center',
-  },
-  locGpsLabel:   { fontSize: 14, fontWeight: '600', color: C.TEXT_PRIMARY },
-  locGpsSub:     { fontSize: 11, color: C.TEXT_TERTIARY, marginTop: 1 },
-  locActiveCheck: { fontSize: 14, color: C.ACCENT_TEXT, fontWeight: '700' },
-  locDivider:    { height: 1, backgroundColor: C.BORDER_SUBTLE, marginVertical: 6 },
-  locSectionLabel: {
-    fontSize: 10, fontWeight: '700', color: C.TEXT_TERTIARY,
-    textTransform: 'uppercase', letterSpacing: 0.8, marginBottom: 4,
-  },
-  locResultRow:   { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 13, paddingHorizontal: 2 },
-  locResultBorder: { borderTopWidth: 1, borderColor: C.BORDER_SUBTLE },
-  locEmptyState:  { paddingVertical: 20, alignItems: 'center' },
-
-  // Add stop modal
-  modalOverlay: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0,0,0,0.6)' },
-  modalSheet: {
-    backgroundColor: C.BG_SURFACE,
-    borderTopLeftRadius: 20, borderTopRightRadius: 20,
-    borderTopWidth: 1, borderColor: C.BORDER_SUBTLE,
-    paddingHorizontal: 16, paddingBottom: 44, paddingTop: 8,
-    zIndex: 1,
-  },
-  modalHandle: {
-    width: 36, height: 4, backgroundColor: C.BORDER_STRONG,
-    borderRadius: 2, alignSelf: 'center', marginBottom: 16,
-  },
-  modalTitle: { fontSize: 16, fontWeight: '700', color: C.TEXT_PRIMARY, marginBottom: 12 },
-  modalInputRow: {
-    flexDirection: 'row', alignItems: 'center',
-    backgroundColor: C.BG_ELEVATED,
-    borderRadius: 10, borderWidth: 1, borderColor: C.BORDER_SUBTLE,
-    paddingHorizontal: 12, paddingVertical: 10, marginBottom: 8,
-  },
-  modalInput:   { flex: 1, fontSize: 14, color: C.TEXT_PRIMARY },
-  modalSuggRow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 13, paddingHorizontal: 2 },
-
-  // Pending pin (map-tap to drop a stop)
-  pendingPinWrap: { alignItems: 'center' },
-  pendingPinDot: {
-    width: 14, height: 14, borderRadius: 7,
-    backgroundColor: C.STOP, borderWidth: 2.5, borderColor: C.BG_BASE,
-  },
-  pendingPinStem: { width: 2.5, height: 10, backgroundColor: C.STOP, borderRadius: 1.5 },
-  pendingPinCallout: {
-    position: 'absolute',
-    backgroundColor: 'rgba(38,26,12,0.97)',
-    borderRadius: 12, borderWidth: 1, borderColor: C.BORDER_SUBTLE,
-    flexDirection: 'row', alignItems: 'center', gap: 10,
-    paddingHorizontal: 14, paddingVertical: 12,
-    zIndex: 30,
-  },
-  pendingPinIcon: {
-    width: 30, height: 30, borderRadius: 15,
-    backgroundColor: `${C.STOP}22`,
-    alignItems: 'center', justifyContent: 'center',
-  },
-  pendingPinAddr: { fontSize: 13, color: C.TEXT_PRIMARY, fontWeight: '500' },
-  pendingPinAddBtn: {
-    backgroundColor: C.ACCENT_LIGHT, borderRadius: 8,
-    borderWidth: 1, borderColor: C.ACCENT_BORDER,
-    paddingHorizontal: 12, paddingVertical: 7,
-  },
-  pendingPinAddText: { fontSize: 12, color: C.ACCENT_TEXT, fontWeight: '600' },
-  removeStopBtn: {
-    backgroundColor: 'rgba(216,90,48,0.15)', borderRadius: 8,
-    borderWidth: 1, borderColor: C.DANGER,
-    paddingHorizontal: 12, paddingVertical: 7,
-  },
-  removeStopText: { fontSize: 12, color: C.DANGER, fontWeight: '600' },
-
-  // Route attribute tags
-  tagRow:         { flexDirection: 'row', flexWrap: 'wrap', gap: 5, marginTop: 4 },
-  tagChip:        { borderRadius: 5, borderWidth: 1, paddingHorizontal: 6, paddingVertical: 2 },
-  tagChipPro:     { borderColor: C.ACCENT_BORDER,  backgroundColor: 'rgba(99,153,34,0.12)' },
-  tagChipCon:     { borderColor: C.WARNING,         backgroundColor: 'rgba(186,117,23,0.12)' },
-  tagChipNeutral: { borderColor: C.BORDER_STRONG,   backgroundColor: 'rgba(255,255,255,0.04)' },
-  tagTextPro:     { fontSize: 10, fontWeight: '600', color: C.ACCENT_TEXT,    letterSpacing: 0.2 },
-  tagTextCon:     { fontSize: 10, fontWeight: '600', color: C.WARNING_BRIGHT, letterSpacing: 0.2 },
-  tagTextNeutral: { fontSize: 10, fontWeight: '600', color: C.TEXT_TERTIARY,  letterSpacing: 0.2 },
-
-  // North button pill
-  northBtn: {
-    position: 'absolute',
-    flexDirection: 'row', alignItems: 'center', gap: 5,
-    paddingHorizontal: 13, height: 36, borderRadius: 10,
-    backgroundColor: 'rgba(38,26,12,0.97)',
-    borderWidth: 1.5, borderColor: C.BORDER_STRONG,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.35,
-    shadowRadius: 5,
-    elevation: 5,
-  },
-  northBtnArrow: { fontSize: 13, color: C.TEXT_SECONDARY, fontWeight: '700' },
-  northBtnLabel: { fontSize: 12, color: C.TEXT_SECONDARY, fontWeight: '700', letterSpacing: 0.2 },
-
-  // Add stop inline panel
-  addStopPanel: {
-    position: 'absolute',
-    backgroundColor: 'rgba(38,26,12,0.97)',
-    borderRadius: 12, borderWidth: 1, borderColor: C.BORDER_SUBTLE,
-    overflow: 'hidden', zIndex: 25,
-  },
-  addStopRow: {
-    flexDirection: 'row', alignItems: 'center', gap: 8,
-    paddingHorizontal: 12, paddingVertical: 10,
-  },
-  addStopIcon: { fontSize: 13, color: C.TEXT_TERTIARY },
-  addStopInput: { flex: 1, fontSize: 14, color: C.TEXT_PRIMARY },
-  addStopSuggs: { maxHeight: 180, borderTopWidth: 1, borderColor: C.BORDER_SUBTLE },
-  addStopSuggRow: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 12, paddingVertical: 10 },
-
-  // Search pill + chips
-  desktopPillWrap: {
-    position: 'absolute', top: 12, left: 332, right: 72,
-    gap: 8, pointerEvents: 'box-none',
-  } as any,
-  searchPill: {
-    flexDirection: 'row', alignItems: 'center', gap: 10,
-    height: 40, borderRadius: 20,
-    backgroundColor: 'rgba(38,26,12,0.97)',
-    borderWidth: 1, borderColor: C.BORDER_SUBTLE,
-    paddingHorizontal: 14,
-    marginHorizontal: 12,
-    shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.3, shadowRadius: 4,
-    elevation: 4,
-  },
-  searchPillIcon:        { fontSize: 14 },
-  searchPillText:        { flex: 1, fontSize: 14, color: C.TEXT_PRIMARY },
-  searchPillPlaceholder: { color: C.TEXT_TERTIARY },
-  searchPillAvatar: {
-    width: 28, height: 28, borderRadius: 14,
-    backgroundColor: C.BG_ELEVATED,
-    borderWidth: 1, borderColor: C.BORDER_STRONG,
-    alignItems: 'center', justifyContent: 'center',
-  },
-  chipRow: { paddingHorizontal: 12, paddingVertical: 2, gap: 8, flexDirection: 'row' },
-  chip: {
-    height: 30, borderRadius: 15,
-    paddingHorizontal: 12, justifyContent: 'center',
-    backgroundColor: 'rgba(38,26,12,0.92)',
-    borderWidth: 1, borderColor: C.BORDER_STRONG,
-  },
-  chipActive:     { backgroundColor: C.ACCENT_LIGHT, borderColor: C.ACCENT_BORDER },
-  chipText:       { fontSize: 12, fontWeight: '600', color: C.TEXT_SECONDARY },
-  chipTextActive: { color: C.ACCENT_TEXT },
-});
