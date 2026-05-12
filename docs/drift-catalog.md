@@ -700,7 +700,7 @@ Both modes derive POI sets from the existing `get_corridor_pois` / `get_nearby_p
 
 ### 5.50 — Filter chips are visual-only; not wired to route generation or POI filtering
 
-**Status:** `open`
+**Status:** `open` — visual half (chip selected-state styling + fade-edge gradient) reached parity across home (`app/index.tsx`) and customize (`app/customize.tsx`) in commit-tbd. Wiring half (chip taps → corridor / route-generation filter param) still deferred per POI pipeline arc.
 
 **Surface:** The home-screen chip row (`activeCatChips` state in `app/index.tsx`) and the customize-screen category pills (`selectedCats` state in `app/customize.tsx`) both toggle local state on tap but neither feeds into the underlying data fetch. Home-screen chips don't constrain route POI counts (`getPOIsAlongRoute` is called without a category filter on the home screen). Customize chips DO get serialized into the trip's `category_filter` array, but only at trip-save time — there's no live-filtered POI count or preview while toggling, and the corridor RPC's `category_filter` param is the only path that uses them.
 
@@ -725,6 +725,56 @@ Both modes derive POI sets from the existing `get_corridor_pois` / `get_nearby_p
 **Trigger:** Defer until category count justifies it — likely once the POI pipeline imports broader taxonomy and the home screen needs more than ~10 filter options. Premature now; the fade-edge scroll handles today's count cleanly.
 
 **Decided by:** User flagged after the Layer 1 home-screen migration (commit `a965214`); belongs to the home-screen rendering arc.
+
+---
+
+### 5.52 — Bottom-sheet inner content still rendered behind Android system nav bar after 26d4ece
+
+**Status:** `resolved` (fixed in this commit)
+
+**Surface:** Commit `26d4ece` consumed `insets.bottom` only via the ScrollView's trailing spacer inside the home-screen bottom sheet. That fix protects the scroll-bottom case (CTA visible when scrolled all the way down) but not the intermediate scroll case: the sheet itself sits at `position: 'absolute', bottom: 0`, so its full height extends behind the Android system nav. At mid-scroll positions through a long route list, the bottom rows render *behind* the nav band and become un-tappable.
+
+**Resolution:** Pad the `Animated.View` (the sheet container) itself with `paddingBottom: insets.bottom` inline. The sheet's paper-deep background still extends edge-to-edge under the nav (preserves the aesthetic), but the inner ScrollView's available height shrinks by `insets.bottom`, so the scrollable content never overlaps the nav band regardless of scroll position. The trailing spacer is reduced back to `height: 12` since the outer padding handles the inset.
+
+**Test:** On Android with the home screen's bottom sheet at expanded state and 8+ routes loaded, scroll the route list to a mid position; the bottom-most visible route card sits fully above the system nav band — its tap target lives entirely in interactive space.
+
+**Decided by:** User-filed regression after commit `26d4ece` landed; diagnosed during the Layer 1.5 closing pass.
+
+---
+
+### 5.53 — Bottom-sheet text variants below Android body-readability threshold
+
+**Status:** `resolved` (fixed in this commit)
+
+**Surface:** External feedback that bottom-sheet text was hard to read on Android. Audit identified three consumer-side variant misuses:
+- `routeMeta` ("62 mi · I-5") used `uiSmall` (sans 12px) for body-content metadata that the user needs to read at a glance.
+- `storiesText` ("143 stories") same: `uiSmall` for content.
+- `tagText*` (route-card descriptor pills like "more stops", "longer", etc.) used `meta` (mono 10px uppercase). Mono uppercase at 10px renders fuzzy on lower-DPI Android and reads as a label, but the content is descriptive, not labelling.
+
+**Resolution:** Variant swaps at the consumer site only — the Field Notes type ramp tokens themselves were not modified.
+- `routeMeta`: `uiSmall` → `ui` (sans 14px).
+- `storiesText`: `uiSmall` → `ui` (sans 14px).
+- `tagTextPro` / `tagTextCon` / `tagTextNeutral`: `meta` (mono 10px uppercase) → `uiSmall` (sans 12px). Loses the stamped feel but gains legibility.
+
+Label-style variants (`routesLabel`, `legendText`, `badgeText`) intentionally kept on `meta` — they are labels, not content, and the stamped feel is part of their semantic.
+
+**Test:** On Android hardware at arm's length, the route-card metadata strings ("62 mi · I-5", "143 stories") and tag-pill descriptors render legibly without leaning in. Badge text ("FASTEST", "MOST STORIES") stays mono-uppercase stamped.
+
+**Decided by:** External feedback on bottom-sheet readability; minimum-scope audit applied per Layer 1.5 closing pass.
+
+---
+
+### 5.54 — Chip selected-state visual contrast insufficient
+
+**Status:** `resolved` (fixed in this commit)
+
+**Surface:** After commit `37cf72a` tokenized the chip selected state (filled `accent2` forest vs outlined cream), user reported still being unable to tell on vs off at a glance. Diagnosis confirmed React state was toggling correctly; the issue was visual contrast — the unselected pill's 1px `rule` border (18% alpha ink) was barely visible against the map backdrop, and `chipActive` didn't explicitly zero out the borderWidth so the "outlined vs filled" delta was not maximized.
+
+**Resolution:** Bump unselected chip border from 1px `rule` to 2px `ink` (full alpha) so the outline reads as a decisive dark stamp against any map terrain. Explicitly set `chipActive.borderWidth: 0` so the selected pill is a clean fill with no edge competing with the bg color. Same treatment applied in parallel to `app/customize.tsx`'s category pills within the legacy `C` palette: 2px `BORDER_STRONG` outline for off, `borderWidth: 0` on `pillOn`, pill text bumped to `TEXT_PRIMARY` (cream) + weight 600 for off and weight 700 for on. The "subtle inner stroke on selected" idea from the spec was skipped — would need a nested-View workaround in RN, and the 2px-outline-vs-zero-border delta turned out to be sufficient on hardware.
+
+**Test:** On Android, toggle a chip — the visual delta between off (cream pill with thick dark outline) and on (solid forest pill, no outline) is unambiguous against any map background (light terrain, dark water, topo green).
+
+**Decided by:** User-filed regression after commit `37cf72a` landed (chip selected state still unclear); Layer 1.5 closing pass.
 
 ---
 

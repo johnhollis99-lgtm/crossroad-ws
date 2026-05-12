@@ -700,8 +700,8 @@ export default function MapScreen() {
     routeDuration:    { ...theme.textVariants.h2, color: theme.colors.inkSoft },
     routeDurationSel: { color: theme.colors.ink },
     routeCardBottom:  { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-    routeMeta:        { ...theme.textVariants.uiSmall, color: theme.colors.inkSoft, flex: 1 },
-    storiesText:      { ...theme.textVariants.uiSmall, color: theme.colors.accent },
+    routeMeta:        { ...theme.textVariants.ui, color: theme.colors.inkSoft, flex: 1 },
+    storiesText:      { ...theme.textVariants.ui, color: theme.colors.accent },
     storiesTextSel:   { color: theme.colors.accent },
 
     emptyState: { paddingVertical: 20, alignItems: 'center' },
@@ -830,9 +830,9 @@ export default function MapScreen() {
     tagChipPro:     { borderColor: theme.colors.accent2, backgroundColor: `${theme.colors.accent2}1f` },
     tagChipCon:     { borderColor: theme.colors.accent,  backgroundColor: `${theme.colors.accent}1f`  },
     tagChipNeutral: { borderColor: theme.colors.cardEdge, backgroundColor: `${theme.colors.ink}0a`    },
-    tagTextPro:     { ...theme.textVariants.meta, color: theme.colors.accent2 },
-    tagTextCon:     { ...theme.textVariants.meta, color: theme.colors.accent  },
-    tagTextNeutral: { ...theme.textVariants.meta, color: theme.colors.inkSoft },
+    tagTextPro:     { ...theme.textVariants.uiSmall, color: theme.colors.accent2 },
+    tagTextCon:     { ...theme.textVariants.uiSmall, color: theme.colors.accent  },
+    tagTextNeutral: { ...theme.textVariants.uiSmall, color: theme.colors.inkSoft },
 
     // North button pill
     northBtn: {
@@ -898,9 +898,9 @@ export default function MapScreen() {
       height: 30, borderRadius: 15,
       paddingHorizontal: 12, justifyContent: 'center',
       backgroundColor: theme.colors.paper,
-      borderWidth: 1, borderColor: theme.colors.rule,
+      borderWidth: 2, borderColor: theme.colors.ink,
     },
-    chipActive:     { backgroundColor: theme.colors.accent2, borderColor: theme.colors.accent2 },
+    chipActive:     { backgroundColor: theme.colors.accent2, borderColor: theme.colors.accent2, borderWidth: 0 },
     chipText:       { ...theme.textVariants.uiSmall, color: theme.colors.ink },
     chipTextActive: { color: theme.colors.paper },
   }), [theme]);
@@ -1003,7 +1003,7 @@ export default function MapScreen() {
       </MapView>
 
       {/* ── BOTTOM SHEET — route picker (mobile only) ───────────────────── */}
-      {!isDesktop && <Animated.View style={[s.sheet, { height: sheetAnim }]}>
+      {!isDesktop && <Animated.View style={[s.sheet, { height: sheetAnim, paddingBottom: insets.bottom }]}>
         <View {...sheetPan} style={s.dragHandleWrap}>
           <View style={s.dragHandle} />
         </View>
@@ -1112,8 +1112,7 @@ export default function MapScreen() {
             </Text>
           </TouchableOpacity>
 
-          {/* Absorbs Android system-nav inset so the CTA clears the back-gesture / 3-button bar. */}
-          <View style={{ height: 12 + insets.bottom }} />
+          <View style={{ height: 12 }} />
         </ScrollView>
       </Animated.View>}
 

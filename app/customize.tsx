@@ -29,6 +29,7 @@ import {
 import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from 'react-native-maps';
 import { useNavigation, useRoute } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { LinearGradient } from 'expo-linear-gradient';
 import { countPOIsAlongRoute, getAvailableNarrators, saveTrip } from '../lib/supabase';
 import type { NarratorRecord } from '../lib/supabase';
 import { C } from '../lib/theme';
@@ -378,6 +379,7 @@ export default function CustomizeScreen() {
   const [selectedNarrator, setSelectedNarrator] = useState<NarratorRecord | null>(null);
   const [selectedDepth,    setSelectedDepth]    = useState<Depth>('ride_along');
   const [selectedCats,     setSelectedCats]     = useState<string[]>(DEFAULT_CATEGORIES);
+  const [catsScrolled,     setCatsScrolled]     = useState(false);
   const [poiDist,          setPoiDist]          = useState(POI_DEFAULT);
   const [rollingDice,      setRollingDice]      = useState(false);
   const [showCreate,       setShowCreate]       = useState(false);
@@ -697,21 +699,48 @@ export default function CustomizeScreen() {
 
         {/* ── Categories ───────────────────────────────────────────────────── */}
         <Text style={s.sectionLabel}>Categories</Text>
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.pillScroll}>
-          {ALL_CATEGORIES.map(cat => {
-            const on = selectedCats.includes(cat);
-            return (
-              <TouchableOpacity
-                key={cat}
-                style={[s.pill, on && s.pillOn]}
-                onPress={() => toggleCat(cat)}
-                activeOpacity={0.8}
-              >
-                <Text style={[s.pillText, on && s.pillTextOn]}>{cat}</Text>
-              </TouchableOpacity>
-            );
-          })}
-        </ScrollView>
+        <View style={s.pillRowWrap}>
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={s.pillScroll}
+            scrollEventThrottle={60}
+            onScroll={e => {
+              const scrolled = e.nativeEvent.contentOffset.x > 0;
+              if (scrolled !== catsScrolled) setCatsScrolled(scrolled);
+            }}
+          >
+            {ALL_CATEGORIES.map(cat => {
+              const on = selectedCats.includes(cat);
+              return (
+                <TouchableOpacity
+                  key={cat}
+                  style={[s.pill, on && s.pillOn]}
+                  onPress={() => toggleCat(cat)}
+                  activeOpacity={0.8}
+                >
+                  <Text style={[s.pillText, on && s.pillTextOn]}>{cat}</Text>
+                </TouchableOpacity>
+              );
+            })}
+          </ScrollView>
+          {catsScrolled && (
+            <LinearGradient
+              pointerEvents="none"
+              colors={[C.BG_SURFACE, 'transparent']}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 0 }}
+              style={s.pillFadeLeft}
+            />
+          )}
+          <LinearGradient
+            pointerEvents="none"
+            colors={['transparent', C.BG_SURFACE]}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 0 }}
+            style={s.pillFadeRight}
+          />
+        </View>
 
         {/* ── POI distance slider ───────────────────────────────────────────── */}
         <View style={s.sliderLabelRow}>
@@ -813,12 +842,15 @@ const s = StyleSheet.create({
   ratingNote: { fontSize: 12, color: C.TEXT_TERTIARY, textAlign: 'center', marginTop: 10, lineHeight: 18 },
 
   // Categories
+  pillRowWrap:   { position: 'relative' },
+  pillFadeLeft:  { position: 'absolute', left: 0,  top: 0, bottom: 0, width: 20 },
+  pillFadeRight: { position: 'absolute', right: 0, top: 0, bottom: 0, width: 20 },
   pillWrap:   { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
   pillScroll: { gap: 8, flexDirection: 'row', paddingRight: 20 },
-  pill:       { paddingHorizontal: 12, paddingVertical: 7, borderRadius: 20, borderWidth: 1.5, borderColor: C.BORDER_SUBTLE, backgroundColor: C.BG_ELEVATED, minHeight: 38, alignItems: 'center', justifyContent: 'center' },
-  pillOn:     { backgroundColor: C.ACCENT, borderColor: C.ACCENT },
-  pillText:   { fontSize: 12, color: C.TEXT_SECONDARY, fontWeight: '500' },
-  pillTextOn: { color: C.WHITE, fontWeight: '600' },
+  pill:       { paddingHorizontal: 12, paddingVertical: 7, borderRadius: 20, borderWidth: 2, borderColor: C.BORDER_STRONG, backgroundColor: C.BG_ELEVATED, minHeight: 38, alignItems: 'center', justifyContent: 'center' },
+  pillOn:     { backgroundColor: C.ACCENT, borderColor: C.ACCENT, borderWidth: 0 },
+  pillText:   { fontSize: 13, color: C.TEXT_PRIMARY, fontWeight: '600' },
+  pillTextOn: { color: C.WHITE, fontWeight: '700' },
 
   // POI slider
   sliderLabelRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'baseline', marginTop: 16, marginBottom: 10 },
