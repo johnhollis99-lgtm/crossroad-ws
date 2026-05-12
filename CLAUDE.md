@@ -665,7 +665,7 @@ pnpm html            # rebuild index.html only
 
 ### Migration backlog status (updated 2026-05-11)
 
-**DB watermark: `20260511000001`** — all migrations through 20260511000001 applied. No migration files currently staged-but-not-applied.
+**DB watermark: `20260511000004`** — all migrations through 20260511000004 applied. No migration files currently staged-but-not-applied.
 Verification scripts: `scripts/verify-migrations.mjs` (66/66 checks passed on 000014; listed in `.gitignore`). Post-0016 schema verification lives in `scripts/admin/verify-venue-schema.ts`. Phase 2 migrations were applied chunked (pre-snapshot → body → post-snapshot+diff in a `_verify` schema, then `DROP SCHEMA _verify CASCADE`); this catches accidental drift and is the recommended pattern for live-DB migrations going forward. Live schema can be dumped on demand via `node scripts/admin/dump-schema-snapshot.mjs > docs/db-snapshot-YYYY-MM-DD.md`.
 
 **Applied (confirmed live):**
@@ -701,6 +701,11 @@ Verification scripts: `scripts/verify-migrations.mjs` (66/66 checks passed on 00
 - 20260510000005 `na_unique_add_mode` — adds `mode` to the unique constraint on `narration_audio` (now `(poi_id, narrator_slug, depth, mode)`). Resolves drift 5.26. The migration was corrected during Prompt 07 to use `ALTER TABLE DROP CONSTRAINT IF EXISTS na_unique` + `ALTER TABLE ADD CONSTRAINT na_unique UNIQUE (…)` because the live shape is constraint-backed (not a bare unique index — see drift 5.33). Coordinated code changes: `onConflict` clauses in [server/routes/narration.js:196](server/routes/narration.js#L196) and [scripts/precache-popular-routes.ts:244](scripts/precache-popular-routes.ts#L244) widened to `'poi_id,narrator_slug,depth,mode'`. Applier: `scripts/poi-import/apply-na-unique-add-mode.mjs`.
 - 20260510000006 `remove_unused_poi_categories` — drops `alpine` and `wind_solar` rows from `poi_categories` (both had zero active references). Resolves drift 5.23. Defensive `RAISE EXCEPTION` body refuses to delete if any POI still references either slug; pre-flight confirmed 0 references. Companion code changes done in Prompt 06 already (category-map.ts, wikidata-types.ts, types.ts); Prompt 07 widened the OSM Overpass query in [scripts/poi-import/sources/osm.ts](scripts/poi-import/sources/osm.ts) to fetch `man_made=bridge`, `man_made=dam`, `waterway=dam`, `landuse=quarry` (`historic=mine` is already captured by the existing `[historic][historic!=yes]` line). Backfill reclassified 24 `architecture` → `bridges` and 1,642 `architecture` → `dams` (Wikidata-imported rows). `hot_springs`/`volcanic` backfill returned 0 rows because pre-Prompt-06 imports didn't produce the matching tag values — ~150+ Wikidata volcanoes remain in `nature` with `'summit'` tag and can only be reclassified via re-import. Applier: `scripts/poi-import/apply-remove-unused-poi-categories.mjs`. Backfill: `scripts/poi-import/backfill-category-reclassify.mjs`.
 
+**Applied 2026-05-11 (Bucket-H reconciliation — see drift catalog 5.16, 5.30, 5.35):**
+- 20260511000002 `corridors_enum_checks` — adds two CHECK constraints to `corridors`: `region_type` locked to `('geological','desert','suburban','alpine','mountain_pass','rural')`, `editorial_status` locked to `('draft','verified')`. Resolves drift 5.30. Single atomic BEGIN/COMMIT migration. Precedent for `_enum_checks.sql` suffix (multi-column constraint add on one table).
+- 20260511000003 `pois_source_drop` — drops `pois.source` (legacy `text NOT NULL DEFAULT 'curated'`). All 23,922 rows carried the default, zero readers, fully displaced by `source_type` (added 20260504000005). Resolves drift 5.16. DROP RESTRICT (no CASCADE) per the convention codified the same day. Precedent for `_drop.sql` suffix.
+- 20260511000004 `get_corridor_pois_comment` — attaches `COMMENT ON FUNCTION get_corridor_pois` clarifying that the RPC does not consume `public.corridors` despite the name overlap (function takes a WKT/EWKT LineString in `route_geom` and buffers it by `corridor_width_miles`). Resolves drift 5.35. Precedent for `_comment.sql` suffix (function-level metadata).
+
 **Out-of-band live patches (no migration file — applied directly via pg):**
 - `get_corridor_pois` + `get_nearby_pois` RPCs patched (2026-05-06): live DB had diverged to reference a nonexistent `categories` table instead of `poi_categories`. Re-applied both `CREATE OR REPLACE FUNCTION` bodies from `20250503000001_trip_mode.sql` directly. Root cause unknown (likely a hand-edit in the Supabase SQL editor at some point). If you ever reset or re-apply migrations from scratch, these functions will be correct — the migration files were already right.
 
@@ -718,18 +723,22 @@ Verification scripts: `scripts/verify-migrations.mjs` (66/66 checks passed on 00
 
 - **Repo:** `https://github.com/johnhollis99-lgtm/crossroad-ws.git` — main branch on origin/main.
 - Git binary (not on PATH): `C:\Users\johnh\AppData\Local\GitHubDesktop\app-3.5.8\resources\app\git\cmd\git.exe`
-- **`.gitignore`** — covers: `node_modules/` (all sub-packages), `.env` + `server/.env` (secrets), `.expo/`, `dist/`, `admin/.next/`, `scripts/*/cache/`, `scripts/audition-output/`, `*.opus`, `*.tsbuildinfo`, OS files, `.claude/scheduled_tasks.lock`, `.claude/settings.local.json`, `supabase/.temp/`.
-- **Recent commit history (2026-05-07):**
-  - `7a6648d` Carry-forward fixes: scale bug, classifier guardrail, manual Q-numbers
-  - `ab53132` Three carry-forward fixes (mission Q-fix, classify-poi.ts theme_park, additional_sources dedup)
-  - `26cc416` Wikidata class extension: marquee theme parks now visible
-  - `bc9dadb` docs: sync CLAUDE.md with post-V1 reality
-  - `4e166c0` chore: gitignore local config and Supabase CLI temp files
-  - `56cd80f` chore: remove one-off diagnostic scripts
-  - `2007210` docs: add data-quality-issues.md tracking manual-review cases
-  - `8ed7318` feat(venues): V1 venue tour parent-child hierarchy
-  - `b4047b5` chore: bundle uncommitted importer + dedup + lib work documented in CLAUDE.md
-  - `d1b5c30` Initial commit - xroad project state at migration 000014
+- **`.gitignore`** — covers: `node_modules/` (all sub-packages), `.env` + `server/.env` (secrets), `.expo/`, `dist/`, `admin/.next/`, `scripts/*/cache/`, `scripts/audition-output/`, `*.opus`, `*.tsbuildinfo`, OS files, `.claude/scheduled_tasks.lock`, `.claude/settings.local.json`, `supabase/.temp/`, plus session-scoped pre-handoff working notes (`docs/alignment-plan.md`, `docs/codebase-audit.md` — added 2026-05-11 per chore(gitignore) commit, files retained locally for historical context).
+- **Recent commit history (top of `main`, 2026-05-11):**
+  - `70fbd68` docs(db): snapshot 2026-05-10 — post-watermark 20260511000001 baseline
+  - `3f7db05` chore(gitignore): exclude session-scoped pre-handoff working notes
+  - `3ec69ba` feat(diag): add diag-tts-readiness POI-pipeline pre-flight script
+  - `ec9d6d9` chore(claude-code): broaden command allowlist to category wildcards
+  - `8b2a678` docs(CLAUDE.md): schema-prefix convention + migration conventions consolidation
+  - `2752ad2` docs(catalog): 5.28 — corridors table is editorial seed data, orphaned from request graph
+  - `4ee3b23` docs(catalog): 5.27 reframe — Path 3 (trips.route_id drop) recommended
+  - `8001054` migrate+docs(5.35): get_corridor_pois COMMENT + catalog status
+  - `a1c4c4b` migrate+docs(5.16): drop pois.source legacy column + catalog status
+  - `0a7d516` migrate+docs(5.30): corridors enum_checks + catalog status
+  - `cc9732c` docs(catalog): introduce drift-catalog covering sessions Prompt 06 through Prompt 08
+- **Deferred arcs awaiting follow-up prompts (2026-05-11 EOD):**
+  - **5.27 Path 3 implementation** — drop `trips.route_id` column + remove three write sites (`app/index.tsx:528` route object literal `id: ''`, `app/customize.tsx:477` saveTrip payload `routeId:`, `lib/supabase.ts:217+236` SaveTripParams type + INSERT). Add migration `<today-prefix>000NNN_trips_route_id_drop.sql` (date prefix MUST match local-clock creation day per L652 convention). Edit CLAUDE.md L141 trips bullet to drop the `route_id` clause. Update drift catalog 5.27 status to `Resolved`, attaching the rationale-correction note that customize.tsx was clean (not dirty as the original entry claimed). `app/drive.tsx`'s 5 `routeId` references are socket-room naming — out of scope.
+  - **Design-system integration commit** — five entries as one atomic change: `App.tsx` (ThemeProvider wrap + fonts gate + 2 demo screens registered), `app.json` (expo-font plugin), `package.json` + `package-lock.json` (deps: react-native-svg, expo-blur, expo-font, async-storage), and untracked `src/` (4 design files + 14 components, Field Notes editorial aesthetic). Pre-rollout state: demo screens registered but not navigable from production flows; zero production screens consume `useTheme()` or `src/components/*`; font assets not yet shipped (empty FONT_MAP). Open coordination concerns before the commit: two design-token sources (`lib/theme.ts` `C` vs `src/design/tokens.ts` Field Notes), three component homes (`components/` vs `app/` vs `src/components/`), `src/` naming, `xroad.colorScheme` AsyncStorage key vs `user_preferences` table boundary.
 
 ## scripts/seed-db.mjs
 
