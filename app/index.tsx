@@ -44,6 +44,7 @@ import { MapStyleId, MAP_STYLES, loadMapStyle, saveMapStyle } from '../lib/mapSt
 import { MapStylePicker } from '../components/MapStylePicker';
 import {
   CategoryChip,
+  CoordinatesPill,
   ModePillRow,
   PoiCallout,
   PoiMarkerX,
@@ -289,6 +290,11 @@ export default function MapScreen() {
   const [pendingPin,        setPendingPin]        = useState<{ latitude: number; longitude: number } | null>(null);
   const [pendingPinName,    setPendingPinName]    = useState('');
   const [pendingPinLoading, setPendingPinLoading] = useState(false);
+  // Screen-space anchor for the floating CoordinatesPill (drift 5.99).
+  // Resolved via mapRef.pointForCoordinate after the pin is dropped, then
+  // refreshed inside onRegionChangeComplete so the pill stays glued to the
+  // pin as the user pans / zooms.
+  const [pendingPinScreenPos, setPendingPinScreenPos] = useState<{ x: number; y: number } | null>(null);
 
   // Tapped existing stop marker — shows remove callout
   const [pressedStopIdx, setPressedStopIdx] = useState<number | null>(null);
@@ -496,12 +502,23 @@ export default function MapScreen() {
         // swallow — the callout will redraw on the next region change.
       }
     }
+    // Same reposition pass for the pending-pin CoordinatesPill (drift 5.99) —
+    // keeps the floating coordinate readout glued to the dropped pin.
+    if (pendingPin) {
+      try {
+        const screenPos = await (mapRef.current as any)?.pointForCoordinate?.({
+          latitude:  pendingPin.latitude,
+          longitude: pendingPin.longitude,
+        });
+        if (screenPos) setPendingPinScreenPos(screenPos);
+      } catch { /* same swallow as above */ }
+    }
     if (!browseMode) return;
     if (browseFetchTimer.current) clearTimeout(browseFetchTimer.current);
     browseFetchTimer.current = setTimeout(() => {
       fetchBrowsePOIs(region);
     }, BROWSE_FETCH_DEBOUNCE_MS);
-  }, [browseMode, fetchBrowsePOIs, selectedPoi]);
+  }, [browseMode, fetchBrowsePOIs, selectedPoi, pendingPin]);
 
   const clearRoutes = () => { setRoutes([]); setSelectedRouteIdx(0); setRoutePOIs([]); };
 
@@ -883,6 +900,14 @@ export default function MapScreen() {
     setPendingPin(coord);
     setPendingPinName('');
     setPendingPinLoading(true);
+    // Resolve the floating CoordinatesPill anchor (drift 5.99). Fire-and-
+    // forget; on failure the pill simply won't render until the next pan.
+    (mapRef.current as any)?.pointForCoordinate?.({
+      latitude:  coord.latitude,
+      longitude: coord.longitude,
+    }).then((pt: { x: number; y: number }) => {
+      if (pt) setPendingPinScreenPos(pt);
+    }).catch(() => { /* swallow — repositioned on next region change */ });
     try {
       if (Platform.OS === 'web') {
         const res  = await fetch(
@@ -911,6 +936,7 @@ export default function MapScreen() {
     setWaypoints(updated);
     setPendingPin(null);
     setPendingPinName('');
+    setPendingPinScreenPos(null);
     if (destination) fetchRoute(destination, destCoords ?? undefined, updated);
   }, [pendingPin, pendingPinName, waypoints, destination, destCoords]);
 
@@ -1198,6 +1224,20 @@ export default function MapScreen() {
       flexDirection: 'row', alignItems: 'center', gap: 10,
       paddingHorizontal: 14, paddingVertical: 12,
       zIndex: 30,
+    },
+    // Pin-drop action row (drift 5.99) — compact variant of pendingPinCallout
+    // without the coords text slot (coords moved to the floating
+    // CoordinatesPill above the pin). Used only by the pin-drop flow; the
+    // stop-remove callout below continues to use the full pendingPinCallout
+    // since its label IS the stop name, not a redundant coord string.
+    pendingPinActionRow: {
+      position: 'absolute',
+      backgroundColor: theme.colors.paperDeep,
+      borderRadius: 12, borderWidth: 1, borderColor: theme.colors.rule,
+      flexDirection: 'row', alignItems: 'center', gap: 10,
+      paddingHorizontal: 14, paddingVertical: 10,
+      zIndex: 30,
+      justifyContent: 'flex-end',
     },
     pendingPinIcon: {
       width: 30, height: 30, borderRadius: 15,
@@ -1866,26 +1906,44 @@ export default function MapScreen() {
         buttonRight={12}
       />
 
-      {/* ── PENDING PIN CALLOUT ──────────────────────────────────────────── */}
+      {/* ── PENDING PIN COORDINATES PILL (drift 5.99) ───────────────────── */}
+      {/* Floating cream pill anchored above the dropped pin. Replaces the
+          coords-text-line that used to live inside the bottom action row
+          (which overlapped with the route list + POI legend in the bottom
+          sheet at expanded snap state). Same posture as PoiCallout. */}
+      {pendingPin && pendingPinScreenPos && (
+        <CoordinatesPill
+          coordinate={pendingPin}
+          screenPosition={pendingPinScreenPos}
+          sublabel={
+            pendingPinLoading
+              ? 'Finding address…'
+              : (pendingPinName && !/^-?\d/.test(pendingPinName.trim())
+                  ? pendingPinName       // geocoded address (web)
+                  : undefined)          // native fallback is raw coords; coords are already in the primary line, suppress
+          }
+        />
+      )}
+
+      {/* ── PENDING PIN ACTION ROW (drift 5.99) ──────────────────────────── */}
+      {/* Compact: just 📍 + Add stop + ✕. Coordinates moved to the floating
+          CoordinatesPill above the pin so the bottom row no longer carries
+          the redundant lat/lng text. The row is narrower and the existing
+          bottom position remains; the route legend below the route list is
+          now reachable past the action row. */}
       {pendingPin && (
         <View style={[
-          s.pendingPinCallout,
+          s.pendingPinActionRow,
           isDesktop ? { left: 332, right: 12, bottom: 20 } : { left: 12, right: 12, bottom: 110 },
         ]}>
           <View style={s.pendingPinIcon}>
             <Text style={{ fontSize: 14 }}>📍</Text>
           </View>
-          <View style={{ flex: 1 }}>
-            {pendingPinLoading
-              ? <Text style={s.pendingPinAddr}>Finding address…</Text>
-              : <Text style={s.pendingPinAddr} numberOfLines={2}>{pendingPinName}</Text>
-            }
-          </View>
           <TouchableOpacity style={s.pendingPinAddBtn} onPress={confirmPinAsStop}>
             <Text style={s.pendingPinAddText}>Add stop</Text>
           </TouchableOpacity>
           <TouchableOpacity
-            onPress={() => { setPendingPin(null); setPendingPinName(''); }}
+            onPress={() => { setPendingPin(null); setPendingPinName(''); setPendingPinScreenPos(null); }}
             hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
           >
             <Text style={s.clearBtn}>✕</Text>

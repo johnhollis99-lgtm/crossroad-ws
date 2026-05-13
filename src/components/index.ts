@@ -17,6 +17,9 @@ export type { CardProps, CardVariant, CardRadius } from './Card';
 export { CategoryChip }       from './CategoryChip';
 export type { CategoryChipProps } from './CategoryChip';
 
+export { CoordinatesPill }    from './CoordinatesPill';
+export type { CoordinatesPillProps } from './CoordinatesPill';
+
 export { DangerButton }       from './DangerButton';
 export type { DangerButtonProps } from './DangerButton';
 
