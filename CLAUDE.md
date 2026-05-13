@@ -14,7 +14,7 @@ Package/slug names still say "roadstory" internally; all user-facing strings say
 - **Backend:** Supabase + PostGIS, Node.js + Express + Socket.io on :3001
 - **Maps:** Google Maps / Directions / Elevation (native); Mapbox shim for web
 - **LLM:** xAI/Grok; TTS is provider-abstracted via `scripts/lib/tts/`. Primary provider is Google Cloud TTS. ElevenLabs, OpenAI, Polly, and self-hosted are pluggable but inactive.
-- **Design tokens:** Two palettes coexist during the migration. (a) `src/design/tokens.ts` → Field Notes (Phase 1, landed 2026-05-12 in commit `98d8243`) — light/dark palette, type ramp, spacing, radii. Consumed by `src/components/**` and any newly-migrated screen. Sole source of truth for new color / type values. (b) Legacy `lib/theme.ts` → `C` object (dark earthy palette) — still consumed by every screen in `app/**` and by `components/{MapStylePicker, XRoadLogo}.tsx`. `lib/mapStyle.ts` → `MAP_STYLES` (untouched by the design system).
+- **Design tokens:** Two palettes coexist during the migration. (a) `src/design/tokens.ts` → Field Notes (Phase 1, landed 2026-05-12 in commit `98d8243`) — light/dark palette, type ramp, spacing, radii. Consumed by `src/components/**`, `components/MapStylePicker.tsx` (post drift 5.98), and any newly-migrated screen. Sole source of truth for new color / type values. See "Field Notes brand chip family + map integration" section below for the cream-chip-on-map posture that anchors most home-screen branded surfaces. (b) Legacy `lib/theme.ts` → `C` object (dark earthy palette) — still consumed by every screen in `app/**` and by `components/XRoadLogo.tsx` (legacy, unused after drift 5.92 — kept on disk pending an explicit delete). `lib/mapStyle.ts` → `MAP_STYLES` (untouched by the design system).
 
 ## Screen flows
 
@@ -99,7 +99,7 @@ User mental model / naming convention used in conversation:
 
 | File | Purpose |
 |------|---------|
-| `app/index.tsx` | Map screen — route search, POI display. Sheet starts at `peek`, auto-snaps to 85% when routes load. No trail mode state here — always fetches in `'driving'` mode. |
+| `app/index.tsx` | Map screen — route search, POI display. Sheet starts at `peek`, auto-snaps to 85% when routes load. No trail mode state here — always fetches in `'driving'` mode. **Field Notes Layer 1 migrated 2026-05-12 (commit `a965214`):** consumes `useTheme()` from `src/design/theme`; StyleSheet lifted into `useMemo` inside MapScreen with `[theme]` dep; `badgeStyle` helper inlined as a `useCallback` closure; zero `C.*` hits. Three brand-mark color literals (`#2EC4B6`, `#1a1208`) deferred for Layer 2 Wordmark swap (drift 5.44). |
 | `app/customize.tsx` | Narrator + filter selection; saves trip; live story count |
 | `app/drive.tsx` | Full-screen map + draggable sheet; socket narration; GPS. Route polyline: `#4A90D9` blue, strokeWidth 5, rounded. `fitToCoordinates` on mount (400ms delay). Contains `trailMode` state. |
 | `app/driving.tsx` | Legacy driving screen |
@@ -113,8 +113,14 @@ User mental model / naming convention used in conversation:
 | `hooks/useTTS.ts` | Cache-first narration hook — voice_configs lookup → pois.narration_cache → narration_audio table → server generation |
 | `scripts/precache-popular-routes.ts` | CLI: pre-generates narration for POIs along a named route or GeoJSON file |
 | `scripts/sweep-orphaned-narration.ts` | Sweeper: deletes stale pending rows (> 1 h) and old failed rows (> 24 h) from narration_audio + tries Storage cleanup. Run hourly. |
-| `components/MapStylePicker.tsx` | Floating map style selector. Button shows 22×22 thumbnail of active style (not a bars icon). Trail mode toggle prop still exists but is not wired from any screen. |
-| `components/XRoadLogo.tsx` | Brand wordmark — "X" teal #2EC4B6 + "Road" cream; sizes `sm`/`md`; road-intersection icon. Legacy; superseded for new screens by `src/components/Wordmark.tsx`. |
+| `components/MapStylePicker.tsx` | Floating map style picker (drift 5.98). Trigger = cream pill + Layers SVG + `MAP` mono label; panel = theme-aware paper with Fraunces-italic row names + mono uppercase descriptor sublabels + ink-red active dot. No thumbnails. Prop signature retained verbatim — `mapboxToken` / `trailMode` / `onTrailToggle` accepted but inert. |
+| `components/XRoadLogo.tsx` | Legacy brand wordmark — teal "X" + cream "Road" + road-intersection icon. **Unused after drift 5.92** (all six call sites migrated to `<Wordmark size="m" />` or `<Wordmark size="m" background="pill" />`). Kept on disk pending explicit delete. |
+| `src/components/Wordmark.tsx` | Canonical brand wordmark. Reads "XRoad" (cap X + cap R, italic "oad") with bicolor X (`accent` ink-red) + Road (`ink`/`paper`). Sizes m/l/xl with proportional 4-hump horizon SVG. `background="pill"` variant adds a cream paper backing (light-theme constants, e2 shadow) for map-overlay screens. |
+| `src/components/ModePillRow.tsx` | Drive ↔ Hike-or-Walk selector (drift 5.93). Cream chip with ink-red active fill; car / mountain / walker SVG icons; underlying state stays `'driving'` / `'hiking'` (visible Hike label reads "Hike / Walk"). |
+| `src/components/CategoryChip.tsx` | Single category-filter chip primitive (drift 5.95). Active = ink-red fill + cream text; inactive = paperDeep (taupe) fill + ink border + ink text. Fraunces italic 14px. No shadow. |
+| `src/components/PoiMarkerX.tsx` | X-shaped POI marker visual (drift 5.94). 32×32 invisible hitbox wrapper around ink-red X glyph. Sizes `curated` (18px stroke 2.5) and `reveal` (12px stroke 1.8). Exports `usePoiMarkerTracking()` for the tracksViewChanges discipline. **Must be the child of a `<Marker>` inlined directly under `<ClusteredMapView>`** — see chip-family section's clusterer integration rule. |
+| `src/components/PoiCallout.tsx` | Floating POI callout overlay (drift 5.97). Sibling of MapView (NOT a child Marker). Anchored via `pointForCoordinate`; sticky selection (tap-same toggles, pan repositions). |
+| `src/components/CoordinatesPill.tsx` | Floating coords readout above dropped pin (drift 5.99). Mono uppercase coord text + optional Fraunces-italic sublabel (geocoded address on web). |
 | `src/design/tokens.ts` | Field Notes design tokens — sole source of color / type / spacing / radius / elevation. No hardcoded hex anywhere else in `src/`. |
 | `src/design/theme.ts` | `lightTheme` / `darkTheme` + `ThemeProvider` + `useTheme()`. AsyncStorage key `xroad.colorScheme`. Wrap the app root before `NavigationContainer`. |
 | `src/design/fonts.ts` | `useAppFonts()` → `useFonts(FONT_MAP)` over `@expo-google-fonts/{fraunces,inter-tight,jetbrains-mono}`. App.tsx fail-fast gates the navigator until fonts resolve. |
@@ -136,7 +142,7 @@ User mental model / naming convention used in conversation:
 - **Trip-mode segmented control** — `[🚗 Driving | 🥾 Hiking]` pinned above action row, outside the ScrollView. Active side fills with `ACCENT_LIGHT`. Toggling hiking re-fetches POIs in `'hiking'` mode and auto-switches map to Topo. Switching back restores the previous map style (`prevStyleRef`).
 - **Recenter button** — `CompassIcon` component (teal north triangle + muted south triangle + "N" label). Positioned at `bottom: DRIVE_SNAPS.peek + 64` (above the MapStylePicker pill at `+16`) to avoid overlap.
 - **MapStylePicker** — `buttonBottom: DRIVE_SNAPS.peek + 16`, `buttonRight: 12`.
-- **POI callout card** — tapping any POI marker shows a floating overlay card at `bottom: DRIVE_SNAPS.peek + 20`. Displays POI name, category (teal uppercase), and tags as chips (underscores → spaces, up to 5). Tapping the same marker again or pressing `×` dismisses it. State: `selectedPoi: POI | null`. Markers use `tracksViewChanges={false}` for performance.
+- **POI callout card** — tapping any POI marker shows a floating overlay card at `bottom: DRIVE_SNAPS.peek + 20`. Displays POI name, category (teal uppercase), and tags as chips (underscores → spaces, up to 5). Tapping the same marker again or pressing `×` dismisses it. State: `selectedPoi: POI | null`. **Inactive POI markers render via `<PoiMarkerX size="curated" />`** (drift 5.94) inside a `DrivePoiMarker` wrapper that uses `usePoiMarkerTracking()` (start true → flip false at 1s); active = now-narrating POI keeps the legacy halo + inner-dot visual as a distinct now-playing signifier. Drive uses plain `MapView` (no clusterer) so the wrapper-component pattern is safe here — the clusterer's `isMarker` traversal that bit home does NOT apply on drive.
 
 ## customize.tsx UI details
 
@@ -187,15 +193,231 @@ Two `__DEV__`-gated buttons sit at the top-right of `app/index.tsx`'s mobile lay
 
 Render only when `__DEV__ && !isDesktop`. Production builds elide them.
 
-Implementation lives at [app/index.tsx](app/index.tsx#L763) inside the `<SafeAreaView style={s.topSafe} pointerEvents="box-none">` block. Styled via `s.devNavRow` (absolute top:4 right:16, zIndex 100) and `s.devNavLabel` (legacy `Platform.select` monospace 10pt — these two dev-only buttons are deliberately NOT migrated to the new design system).
+Implementation lives at [app/index.tsx](app/index.tsx#L1115) inside the `<SafeAreaView style={s.topSafe} pointerEvents="box-none">` block. Styled via `s.devNavRow` (absolute top:4 right:20, zIndex 100) and `s.devNavLabel` (legacy `Platform.select` monospace 16pt — these two dev-only buttons are deliberately NOT migrated to the new design system; only their color migrated to `theme.colors.inkSoft`). Each `TouchableOpacity` also carries inline `paddingHorizontal: 8 / paddingVertical: 4` for a reliable tap target (Phase-1 visual-verification fix, commit `1d40cb7`).
 
-**`pointerEvents` posture on `SafeAreaView`:** must be a top-level prop, not inside the `style` array. The library (`react-native-safe-area-context` 5.6.2) accepts both forms in newer RN, but only the top-level form works reliably for `box-none`. See drift catalog 5.42 (proposed) for two remaining in-style hits in the same file (lines 810 and 1539) that are deferred for a follow-up cleanup.
+**`pointerEvents` posture on `SafeAreaView`:** must be a top-level prop, not inside the `style` array. The library (`react-native-safe-area-context` 5.6.2) accepts both forms in newer RN, but only the top-level form works reliably for `box-none`. See drift catalog 5.42 for two remaining in-style hits in the same file — post-Layer-1 line numbers are 869 (`s.desktopPillWrap` StyleSheet entry, with `as any` cast; consumer at 1317 redundantly passes a top-level prop) and 1165 (chip-row `<ScrollView style={{ pointerEvents: 'box-none' } as any}>` — actually-buggy: ScrollView absorbs taps).
 
-### Decisions logged in drift catalog
+## Field Notes brand chip family + map integration (drifts 5.92 – 5.99, landed 2026-05-13/14)
+
+### Branded chip family — shared posture
+
+Six surfaces compose the "cream chip on map" family. All share the same
+discipline:
+
+- **Colors locked to `lightTheme.colors.*` constants** (NOT `theme.colors.*`)
+  so the chip stays cream-on-map regardless of system scheme. Import
+  `lightTheme` from `src/design/theme` alongside `useTheme` when both are
+  needed. Active fills that should track the scheme (ink-red light vs dark
+  variant) use `theme.colors.accent` — only the chip *background* is locked.
+- **`e2` drop shadow, Platform-split**: iOS pulls `lightTheme.elevation.e2`;
+  Android uses `elevation: 4` (the token's 8 over-darkens chip-sized
+  surfaces). Extract `PILL_SHADOW` as a module-scope const when reused.
+- **`borderRadius: 999`** for the canonical pill shape.
+- **No `useTheme()` for fonts** — `fontFamilies` are identical across
+  both schemes, so `lightTheme.fontFamilies.*` resolves the same value as
+  `theme.fontFamilies.*` but signals "constant" semantically.
+
+Surfaces:
+| Component | Drift | Pattern |
+|---|---|---|
+| `<Wordmark background="pill">` | 5.92 | cream pill, bicolor `X` (accent) + `Road` (ink) |
+| `<ModePillRow>` | 5.93 | two equal-flex pills, ink-red active fill |
+| `<PoiCallout>` | 5.97 | floating above tapped X marker, mono coords + optional sublabel |
+| `<CoordinatesPill>` | 5.99 | floating above dropped pin, mono uppercase coord readout |
+| `MapStylePicker` trigger | 5.98 | layers icon + `MAP` mono label |
+| `ClusterMarker` bubble | 5.94 polish | circular paper-cream count on accent fill |
+
+**One exception — interactive picker panel** (MapStylePicker's expanded
+panel, not its trigger): theme-aware paper surface that flips dark in
+dark mode. Triggers are chips; expanded panels are interactive UI.
+
+### Wordmark variants (drift 5.92, [src/components/Wordmark.tsx](src/components/Wordmark.tsx))
+
+- Reads **"XRoad"** (capital X + capital R; "oad" lowercase italic).
+  Bicolor: `X` is `accent` (ink-red), `Road` is `ink` (or `paper` for
+  `tone="paper"`).
+- Sizes `m` / `l` / `xl` → cap heights 22 / 32 / 56px with proportional
+  horizon SVG (4-hump wave, viewBox W×12, baseline y=6).
+- `background="pill"` variant adds the cream paper-pill backing with
+  locked light-theme constants — used on map-overlay screens (home,
+  hiking). Paper screens (customize, drive, trail, filters) use
+  `background="none"` (default).
+
+### Mode pill (drift 5.93, [src/components/ModePillRow.tsx](src/components/ModePillRow.tsx))
+
+- Drive | Hike-or-Walk selector. **Visible** Hike label reads `Hike /
+  Walk`; **underlying state** stays `'driving' | 'hiking'`
+  (`TripMode` in [src/store/tripStore.ts](src/store/tripStore.ts)).
+- Inline-SVG icons: car (Drive, left only), mountain + walker (Hike,
+  flanking the label). Stroke 1.8, linecap/join round, color inherits
+  from text color.
+- Active = `lightTheme.colors.accent` fill + cream label/icons.
+  Inactive = `lightTheme.colors.paper` fill + 1px ink border + ink
+  label/icons. Both pills carry `PILL_SHADOW`.
+- Sole consumer: home screen (`app/index.tsx`). Customize doesn't render
+  it today but the component is shaped to accept future re-use.
+
+### Category filter chips (drift 5.95, [src/components/CategoryChip.tsx](src/components/CategoryChip.tsx))
+
+- Single-chip primitive `<CategoryChip label active onToggle>`.
+- **Active**: `theme.colors.accent` (theme-aware ink-red) fill +
+  `lightTheme.colors.paper` text. **Inactive**: `theme.colors.paperDeep`
+  (taupe) fill + 1px ink border + ink text.
+- Fraunces italic 14px, weight 600 active / 500 inactive.
+- No shadow (chips live on paper surfaces, not over the map). No
+  margins — caller's row supplies the gap.
+- Consumed by customize CATEGORIES section and home chip rows (mobile +
+  desktop). Existing horizontal ScrollView row layout + fade gradients
+  preserved — drift 5.95 was visual treatment only.
+
+### POI marker + clusterer integration (drift 5.94 — multi-commit)
+
+**Visual primitive:** [src/components/PoiMarkerX.tsx](src/components/PoiMarkerX.tsx).
+Ink-red X glyph centered inside a 32×32 invisible wrapper for a
+comfortable hitbox. `curated` = 18px stroke 2.5; `reveal` = 12px stroke
+1.8. Color locked to `lightTheme.colors.accent`. **This is the visual
+ONLY** — NOT a Marker, must be the child of a Marker rendered in the
+parent screen.
+
+**Critical clusterer rule (drift 5.94 root-cause):**
+react-native-map-clustering's [helpers.js:6](node_modules/react-native-map-clustering/lib/helpers.js#L6)
+`isMarker(child)` reads `child.props.coordinate` *directly on the JSX
+element passed to `<ClusteredMapView>`*. **Function-component wrappers
+around `<Marker>` hide the `coordinate` prop** from
+`React.Children.toArray(children)` and the clusterer silently drops
+them; React still renders them as plain Markers but they never
+aggregate. **POI markers MUST be inlined** as `<Marker>` elements
+directly under `<ClusteredMapView>`; `<PoiMarkerX>` is the child of
+each. A single screen-scoped `initialTracking` state drives
+`tracksViewChanges` for all POI markers at once — one timer, not
+per-marker hooks (which would require wrapper components and
+re-introduce the bug).
+
+`usePoiMarkerTracking()` is still exported from `PoiMarkerX.tsx` for
+**drive** — drive uses plain `MapView` (no clusterer), so its
+`DrivePoiMarker` wrapper is safe.
+
+**ClusteredMapView props on home:**
+- `clusteringEnabled` (unconditional true — clustering is standard map
+  behavior in both browse and post-route modes)
+- `minPoints={5}` (1–4 markers stay individual; 5+ aggregate)
+- `radius={80}` (bumped from library default 60; more aggressive
+  condensing at low zoom, still resolves to individuals at high zoom)
+- `renderCluster={renderCluster}` (custom bubble renderer)
+
+**Singleton markers** (destination, manual origin, stop dots, pending
+pin) carry `{...({ cluster: false } as any)}` to opt out of clustering.
+With `clusteringEnabled` now unconditional, these flags are
+load-bearing in both modes.
+
+**Cluster bubble visual (drift 5.94 polish):**
+- Size steps 40 / 48 / 56 (thresholds at 50 / 500 counts).
+- Count text: JetBrains Mono 600 14px paper-cream. Italic serif looks
+  off-center in tight circles; tabular mono digits align cleanly.
+- Android centering: `includeFontPadding: false` +
+  `textAlignVertical: 'center'`.
+- Drop shadow + no border — separates adjacent bubbles against dense
+  map content.
+
+### POI callout overlay (drift 5.97 + follow-up, [src/components/PoiCallout.tsx](src/components/PoiCallout.tsx))
+
+**Architecture:** `<PoiCallout>` is rendered as a **sibling of
+`<ClusteredMapView>`**, not as a child Marker or built-in `<Callout>`.
+react-native-map-clustering 4.0.0 silently drops the built-in Callout
+tap flow even with explicit `markerRef.current?.showCallout?.()` (the
+e038f43 workaround did not take); home abandons it entirely.
+
+**Behavior (sticky selection):**
+- Tap an X → callout shows above the pin. Parent resolves screen
+  position via `mapRef.current.pointForCoordinate(...)`.
+- Tap the **same** X again → callout dismisses (reason `'tap-same'`).
+- Tap a **different** X → callout switches POI.
+- Tap the map background → does **NOT** dismiss (sticky).
+- Pan / zoom → callout **repositions** to stay glued to its POI
+  (re-resolved screen position in `onRegionChangeComplete`).
+
+**Diagnostic logs (still in place pending hardware verification):**
+- `[home] marker:tap { poi, id, screen }`
+- `[home] callout:show { poi, screen, screenPos }`
+- `[home] callout:dismiss { reason: 'tap-same' | 'unmount', poi }`
+
+**Drive's `selectedPoi` overlay** is a separate, richer overlay
+(category + tag chips) in `app/drive.tsx`. Untouched by drift 5.97;
+shared-primitive consolidation deferred (5.73 follow-up arc).
+
+### Pin-drop coordinates pill (drift 5.99, [src/components/CoordinatesPill.tsx](src/components/CoordinatesPill.tsx))
+
+When user taps the map to drop a stop candidate:
+- `<CoordinatesPill>` renders above the pin (sibling of MapView,
+  anchored via `pointForCoordinate`). Primary text: JetBrains Mono 11px
+  uppercase, formatted `35.564°N · 121.094°W` via local `formatCoord`
+  helper (picks hemisphere from sign).
+- Optional sublabel: Fraunces italic 12px. On web, carries the
+  geocoded address. On native, suppressed when `pendingPinName` is raw
+  coords (regex `/^-?\d/` on leading char — geocoded addresses start
+  with a letter; raw coords start with a digit or minus).
+- Repositions on `onRegionChangeComplete` alongside the POI callout.
+- The **bottom pin-drop action row** is now compact: `[📍 Add stop]
+  [✕]` (style `s.pendingPinActionRow`). The address-text slot was
+  removed since coords live in the floating pill. The stop-remove
+  callout (`s.pendingPinCallout` for `pressedStopIdx`) is **untouched**
+  — different flow.
+
+### Map style picker (drift 5.98, [components/MapStylePicker.tsx](components/MapStylePicker.tsx))
+
+- **Trigger**: cream pill (light-theme constants) + 18px Layers SVG icon
+  + `MAP` mono label.
+- **Panel**: theme-aware paper (flips dark in dark mode) + `MAP STYLE`
+  mono kicker + 1px rule divider + vertical row list.
+- **Each row**: Fraunces italic 500 17px name + mono uppercase
+  descriptor sublabel + 8px ink-red active dot on the right.
+- **Display mapping** (in-file `STYLE_DISPLAY` const; `MAP_STYLES`
+  catalog in `lib/mapStyle.ts` + `MapStyleId` enum untouched):
+  - `standard` → `Default / STREETS`
+  - `dark` → `Dark / NIGHT MODE`
+  - `satellite` → `Satellite / AERIAL`
+  - `topo` → `Outdoors / TERRAIN`
+- **Prop signature retained verbatim** for backward compat —
+  `mapboxToken`, `trailMode`, `onTrailToggle` accepted but inert. Mapbox
+  thumbnails removed.
+
+### Filter wiring chain (drift 5.96)
+
+Customize screen filter chain (chip toggle / density / relevance → POI
+count). Wiring was already structurally correct on inspection; three
+real-world failures patched:
+
+1. **Silent RPC errors** — both `countPOIsAlongRoute` and
+   `getPOIsAlongRoute` `.then` chains were missing `.catch`. Now emit
+   `[customize] filter:rpc-error { fn, err }`.
+2. **Race condition** — rapidly toggling chips could let a slow earlier
+   RPC overwrite a fresh response. New `filterRequestVersion` ref in
+   [app/customize.tsx](app/customize.tsx); each effect captures its
+   version, `.then` callbacks bail on mismatch.
+3. **`countPOIsAlongRoute` didn't forward `min_significance`** — so the
+   header live-story count didn't track the relevance slider. Added
+   optional `options.minSignificance` argument in
+   [lib/supabase.ts](lib/supabase.ts), wired from customize.
+
+**Diagnostic chain logs (`__DEV__` only, still in place):**
+- `[customize] filter:chip-toggle { id, nextActive, allActive }`
+- `[customize] filter:slider-change { which: 'density' | 'relevance' | 'poiDist', value }`
+- `[customize] filter:rpc-call { corridorMi, mode, categories, minSignificance, density, version }`
+- `[customize] filter:rpc-return { fn, count, sample?, version }`
+- `[customize] filter:rpc-error { fn, err }`
+- `[customize] filter:stats-render { count, avgPaceMin }`
+
+Existing `curation:top10` / `bottom5` / `stats` logs preserved alongside.
+
+### Phase 1 Design-system decisions logged in drift catalog
 
 - **5.39** (`noted`): `AudienceMark` over Prompt 03's `NarratorMark`. Audience-taxonomy alignment with `voice_configs.mode`. `NarratorMark` deferred to Prompt 10.
 - **5.40** (`noted`): PrimaryButton sublabel uses `metaSmall` (mono 9px) rather than spec's 8px. 9px is the smallest in the canonical ramp; 8px deemed below readability threshold.
 - **5.41** (`open`): repo-wide `npx tsc --noEmit` has 29 pre-existing type errors across 5 files / subprojects (admin/, app/drive.tsx:335, lib/__tests__/routeBadges.test.ts, scripts/poi-import/lib/category-map.ts:27, scripts/precache-popular-routes.ts:434). Deferred to a dedicated cleanup arc — does not block Phase 1. Phase 1's own files (App.tsx, app/index.tsx, src/**) have **zero** tsc errors.
+- **5.42** (`open`): two remaining `pointerEvents` in-style hits in `app/index.tsx` (post-Layer-1 lines 869 and 1165). Cleanup deferred. Filed in commit `bf3617f`.
+- **5.43** (`resolved`): Fraunces descender clipping on `display` / `h1` variants — line-height multipliers loosened (display 1.0→1.15, h1 1.05→1.19) in commit `1d40cb7`.
+- **5.44** (`open`): three brand-mark color literals (`#2EC4B6` ×2, `#1a1208`) remain in `app/index.tsx`'s **desktop sidebar** StyleSheet (`logoX` / `logoPinOuter` / `logoPinInner` / `brandX` entries at lines 1029/1039/1043/1045, consumed by the desktop top-bar block ~line 1771). Mobile path was already migrated to `<Wordmark size="m" background="pill" />` via drift 5.92. Desktop sidebar swap deferred — separate code path, separate visual context.
+- **5.45** (`open`): three color-distinction collapses from the 15-token → 9-token mapping (GPS-vs-manual origin dot, hot-color hue family, border-vs-elevation). Address in Layer 2 with non-color signals. Filed in commit `a965214`.
 
 ## Supabase schema (key tables)
 
@@ -460,18 +682,21 @@ Do not implement any of these yet; confirm with user first. When touching the ro
 - **Steep grades:** Google Elevation API or Open-Elevation; flag segments > ~6% grade for trailer brake risk
 - **Weather:** Open-Meteo (free, no key); sample 3–5 points along route; append to `fetchRoute` after routes load
 
-## XRoadLogo placement (all screens)
+## Wordmark placement (all screens) — post-drift 5.92
 
-`<XRoadLogo size="sm" />` — import from `../components/XRoadLogo`.
+Canonical mark is `<Wordmark size="m" />` (or `background="pill"` on
+map-overlay surfaces). Import from `../src/components`. Legacy
+`<XRoadLogo>` is unused; all six call sites below were migrated in
+commits `6adecc9` and `47103a0`.
 
-| Screen | Position |
-|--------|----------|
-| index.tsx | Centered above search pill (mobile SafeAreaView) |
-| customize.tsx | Center of map header row (replaces "Customize trip" title text) |
-| hiking.tsx | Center of top header bar (replaces "Trail Mode" text) |
-| filters.tsx | Right side of header row |
-| trail.tsx | Centered above bottom button bar, opacity 0.6 |
-| drive.tsx | Below drag handle in bottom sheet, opacity 0.5 |
+| Screen | Variant | Position |
+|--------|---------|----------|
+| index.tsx | `size="m" background="pill"` | Centered above search pill (mobile SafeAreaView), `s.logoWrap` |
+| customize.tsx | `size="m"` (no pill) | Center of map header row (replaces "Customize trip" title text) |
+| hiking.tsx | `size="m" background="pill"` | Center of top header bar (over MapView) |
+| filters.tsx | `size="m"` (no pill) | Right side of header row (paper SafeAreaView) |
+| trail.tsx | `size="m"` wrapped in `<View style={{ opacity: 0.6 }}>` | Centered above bottom button bar |
+| drive.tsx | `size="m"` wrapped in `<View style={s.driveLogoWrap}>` | Below drag handle in bottom sheet, opacity 0.5 via wrapper |
 
 ## Automation hooks (.claude/settings.json)
 
@@ -734,6 +959,42 @@ pnpm html            # rebuild index.html only
   - Column-level COMMENT, if ever needed: `<table>_<column>_comment.sql`
 - **Destructive-op posture.** DROP statements use default RESTRICT (no CASCADE) so unexpected dependencies fail loudly at migration time rather than silently nuking dependents (precedent: 5.16).
 - **Migration body shape.** See recent resolved catalog entries (5.17, 5.30, 5.16, 5.35) for the canonical body: drift-catalog ref + rationale header, inline pre-flight summary, `BEGIN` / `COMMIT` wrapper, trailing verification query.
+- **Function-signature changes: drop-loop then bare CREATE, NOT `CREATE OR REPLACE`.** PostgreSQL's `CREATE OR REPLACE FUNCTION` only REPLACEs when the argument list matches **exactly**. If the new signature adds, removes, or reorders params, REPLACE silently CREATEs an additional overload and the old overload stays live. PostgREST then sees both overloads when called by name and returns `PGRST203` — `Could not choose the best candidate function`. Drift catalog 5.90 burned a half-day chasing this.
+
+  Canonical pattern for any migration that touches a function signature:
+
+  ```sql
+  BEGIN;
+
+  -- Drop every overload of public.<func> regardless of current signature(s).
+  -- pg_proc loop is defensive against unknown / drifted / future overloads
+  -- that a static signature inventory might miss.
+  DO $$
+  DECLARE func_sig text;
+  BEGIN
+    FOR func_sig IN
+      SELECT pg_get_function_identity_arguments(oid)
+      FROM pg_proc
+      WHERE proname = '<func>'
+        AND pronamespace = 'public'::regnamespace
+    LOOP
+      EXECUTE 'DROP FUNCTION public.<func>(' || func_sig || ')';
+    END LOOP;
+  END $$;
+
+  CREATE FUNCTION public.<func>(...) ... ;  -- not REPLACE — bare CREATE
+                                            -- errors loudly if any overload
+                                            -- somehow survived the loop
+  GRANT EXECUTE ...;
+  COMMENT ON FUNCTION ... ;
+
+  COMMIT;
+  ```
+
+  - `BEGIN`/`COMMIT` is mandatory: partial apply (drop succeeds, create fails) must roll back to the prior shape — not zero overloads, which hardens the outage.
+  - Use bare `CREATE FUNCTION`, not `CREATE OR REPLACE`. After the loop the function is gone, REPLACE would silently no-op the "would-create" case; CREATE makes the intent explicit and fails loudly if cleanup defensively missed an overload.
+  - Precedents: `20260513000001_get_corridor_pois_overload_cleanup.sql` (rescue migration for drift 5.90); `20260512000003_get_nearby_pois_significance.sql` (gets it right on first try — never tripped 5.90 because of the drop loop).
+  - Naming when this pattern stands alone as a cleanup: `<function_name>_overload_cleanup.sql` (precedent 5.90 above). When it's the canonical install of a new signature: `<function_name>_<purpose>.sql` is fine — the drop loop is just inside the body.
 
 ### Migration backlog status (updated 2026-05-11)
 
@@ -796,25 +1057,33 @@ Verification scripts: `scripts/verify-migrations.mjs` (66/66 checks passed on 00
 - **Repo:** `https://github.com/johnhollis99-lgtm/crossroad-ws.git` — main branch on origin/main.
 - Git binary (not on PATH): `C:\Users\johnh\AppData\Local\GitHubDesktop\app-3.5.8\resources\app\git\cmd\git.exe`
 - **`.gitignore`** — covers: `node_modules/` (all sub-packages), `.env` + `server/.env` (secrets), `.expo/`, `dist/`, `admin/.next/`, `scripts/*/cache/`, `scripts/audition-output/`, `*.opus`, `*.tsbuildinfo`, OS files, `.claude/scheduled_tasks.lock`, `.claude/settings.local.json`, `supabase/.temp/`, plus session-scoped pre-handoff working notes (`docs/alignment-plan.md`, `docs/codebase-audit.md` — added 2026-05-11 per chore(gitignore) commit, files retained locally for historical context).
-- **Recent commit history (top of `main`, 2026-05-12):**
-  - `bf3617f` fix(dev-nav): pointerEvents prop placement on top SafeAreaView (2026-05-12; +34 ahead of origin/main)
-  - `98d8243` feat(design-system): ship Phase 1 — Field Notes tokens + components (2026-05-12; +33 ahead of origin/main)
-  - `70fbd68` docs(db): snapshot 2026-05-10 — post-watermark 20260511000001 baseline
-  - `3f7db05` chore(gitignore): exclude session-scoped pre-handoff working notes
-  - `3ec69ba` feat(diag): add diag-tts-readiness POI-pipeline pre-flight script
-  - `ec9d6d9` chore(claude-code): broaden command allowlist to category wildcards
-  - `8b2a678` docs(CLAUDE.md): schema-prefix convention + migration conventions consolidation
-  - `2752ad2` docs(catalog): 5.28 — corridors table is editorial seed data, orphaned from request graph
-  - `4ee3b23` docs(catalog): 5.27 reframe — Path 3 (trips.route_id drop) recommended
-  - `8001054` migrate+docs(5.35): get_corridor_pois COMMENT + catalog status
-  - `a1c4c4b` migrate+docs(5.16): drop pois.source legacy column + catalog status
-  - `0a7d516` migrate+docs(5.30): corridors enum_checks + catalog status
-  - `cc9732c` docs(catalog): introduce drift-catalog covering sessions Prompt 06 through Prompt 08
+- **Recent commit history (top of `main`, 2026-05-14):**
+  - `8da6778` fix(map): more aggressive cluster condensing at low zoom — radius 60 → 80 (drift 5.94)
+  - `8a958e4` feat(brand): map style picker palette match (drift 5.98)
+  - `42dac68` fix(map): cleaner cluster bubble — tabular mono count + lift shadow (drift 5.94)
+  - `f8fcca4` fix(map): inline POI Markers under ClusteredMapView so clusterer detects them (drift 5.94)
+  - `3cc7953` feat(map): enable clustering post-route with minPoints=5 density threshold (drift 5.94)
+  - `c046f5e` fix(map): restore cluster condensing after X-marker integration (drift 5.94)
+  - `64be41f` fix(map): pin-drop coordinates float above pin instead of overlapping add-stop menu (drift 5.99)
+  - `589a799` fix(filter): wire chip + slider toggles to RPC + stats (drift 5.96)
+  - `0b78e99` fix(map): callout dwells + tap-to-toggle on home (drift 5.97)
+  - `f6f5073` feat(map): X-shaped POI markers + working callout overlay on home (drift 5.94 + 5.97)
+  - `1b8e7c8` fix(brand): chip active = accent (ink-red), inactive = paperDeep (drift 5.95)
+  - `8adb0ab` feat(brand): filter chip on/off contrast matching mode pill (drift 5.95)
+  - `55ab707` fix(brand): mode pill paper backing + shadow on map overlays (drift 5.93)
+  - `bbef865` feat(brand): mode pill contrast + Hike/Walk label + flanking icons (drift 5.93)
+  - `47103a0` fix(brand): wordmark capital R + paper pill on map overlays (drift 5.92)
+  - `6adecc9` feat(brand): wordmark B swap — bicolor X, canonical horizon (drift 5.92)
+  - `a965214` feat(home): migrate app/index.tsx to Field Notes design tokens (Layer 1) (2026-05-12)
+  - `98d8243` feat(design-system): ship Phase 1 — Field Notes tokens + components (2026-05-12)
 - **Deferred arcs awaiting follow-up prompts (2026-05-12 EOD):**
   - **5.27 Path 3 implementation** — drop `trips.route_id` column + remove three write sites (`app/index.tsx:528` route object literal `id: ''`, `app/customize.tsx:477` saveTrip payload `routeId:`, `lib/supabase.ts:217+236` SaveTripParams type + INSERT). Add migration `<today-prefix>000NNN_trips_route_id_drop.sql` (date prefix MUST match local-clock creation day per L652 convention). Edit CLAUDE.md trips bullet to drop the `route_id` clause. Update drift catalog 5.27 status to `Resolved`, attaching the rationale-correction note that customize.tsx was clean (not dirty as the original entry claimed). `app/drive.tsx`'s 5 `routeId` references are socket-room naming — out of scope.
   - **Design-system integration commit** — ✅ **RESOLVED** 2026-05-12 via commit `98d8243` (`feat(design-system): ship Phase 1 — Field Notes tokens + components`). 25 files / 2,201 insertions. See "Design system" section above.
-  - **Drift 5.42 (open) — `pointerEvents` buried in style in two more spots in `app/index.tsx`.** Catalog entry LANDED in commit `bf3617f` (2026-05-12) alongside the SafeAreaView fix at line 762. Two further occurrences remain unfixed: line 810 on the chip-row `<ScrollView style={{ pointerEvents: 'box-none' } as any}>` (the `as any` cast suppresses the TS error — actually-buggy: ScrollView absorbs taps instead of forwarding to chip TouchableOpacity rows), and line 1539 inside the `s.desktopPillWrap` StyleSheet entry (its consumer at line 962 redundantly passes a top-level `pointerEvents="box-none"` prop, so runtime is fine but the dead style entry reinforces the wrong pattern for the next reader). Apply the fix in a dedicated small commit; do not touch unrelated lines. See `docs/drift-catalog.md#5.42` for the full entry.
+  - **Drift 5.42 (open) — `pointerEvents` buried in style in two more spots in `app/index.tsx`.** Catalog entry LANDED in commit `bf3617f` (2026-05-12) alongside the SafeAreaView fix. Post-Layer-1 line numbers: 869 inside the `s.desktopPillWrap` StyleSheet entry (with `as any` cast; its consumer at line 1317 redundantly passes a top-level `pointerEvents="box-none"` prop, so runtime is fine but the dead style entry reinforces the wrong pattern), and 1165 on the chip-row `<ScrollView style={{ pointerEvents: 'box-none' } as any}>` (actually-buggy: ScrollView absorbs taps instead of forwarding to chip TouchableOpacity rows). Apply the fix in a dedicated small commit; do not touch unrelated lines.
   - **Drift 5.41 (open) — 29 pre-existing tsc errors.** Repo-wide `npx tsc --noEmit` fails with 29 errors across `admin/` (15, Next.js path-alias resolution), `app/drive.tsx:335` (2, removed `setStoryCount` call site), `lib/__tests__/routeBadges.test.ts` (9, `BadgeRoute` widened), `scripts/poi-import/lib/category-map.ts:27` (1, typo), `scripts/precache-popular-routes.ts:434` (1, type narrowing). Cleanup arc on hold until a future session — does not block ongoing work but tooling like pre-commit type-gates can't run repo-wide until resolved.
+  - **Drift 5.44 (open) — brand-mark color literals in `app/index.tsx`.** Three references to `#2EC4B6` (×2) and `#1a1208` remain in MapScreen's StyleSheet (`logoPinOuter` / `logoPinInner` / `brandX` entries) — deferred to Layer 2 when these get replaced wholesale by importing the canonical `src/components/Wordmark.tsx`. Filed in commit `a965214`.
+  - **Drift 5.45 (open) — color-distinction collapses from Layer 1 home-screen migration.** The 15→9 token collapse merged `STOP+ACCENT_TEXT → accent2`, `WARNING+WARNING_BRIGHT+DANGER → accent`, and `BORDER_STRONG+BG_ELEVATED → cardEdge`. Most user-visible regression: the origin-search-dot ternary at the search card no longer distinguishes GPS vs manual mode by color (both branches now resolve to `accent2`). Address in Layer 2 with non-color signals (icon / border treatment / label) rather than re-introducing a per-state color. Filed in commit `a965214`.
+  - **Layer 2 home-screen migration** — follow-up to commit `a965214`. In scope: (1) resolve drift 5.44 by replacing the inline brand-mark assembly (`logoX` / `logoXBar1/2` / `logoPinOuter` / `logoPinInner` / `brand` / `brandX`) with `<Wordmark/>`; (2) resolve drift 5.45's GPS-vs-manual dot regression; (3) replace hand-rolled search-card / customize-CTA / route-card patterns with Field Notes components (`Card`, `PrimaryButton`, `Kicker`). Likely also a candidate moment to swap modal scrim `rgba(0,0,0,0.6)` for a themed dim if a primitive emerges. Token-only Layer 1 is the foundation; Layer 2 is component replacement.
 
 ## scripts/seed-db.mjs
 
