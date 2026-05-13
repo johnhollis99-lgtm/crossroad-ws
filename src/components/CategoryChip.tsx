@@ -3,9 +3,11 @@
  * (horizontal scroll, flex-wrap, etc.) is the caller's responsibility.
  *
  * Active chip fills with theme-aware ink-red and shows always-cream italic
- * text. Inactive chip is transparent with a theme-aware ink outline and ink
- * label. Active text uses lightTheme.colors.paper directly so it stays
- * legible on the accent fill regardless of system theme.
+ * text. Inactive chip is a theme-aware taupe (paperDeep) chip with an ink
+ * outline + ink label — visibly distinct from the paper page background so
+ * the OFF state reads as a button rather than blank space. Active text uses
+ * lightTheme.colors.paper directly so it stays legible on the accent fill
+ * regardless of system theme.
  *
  * No shadow — chips sit on paper screens, not over the map.
  */
@@ -28,6 +30,7 @@ export function CategoryChip({ label, active, onToggle, testID }: CategoryChipPr
   const activeFg   = lightTheme.colors.paper;
   const activeBg   = theme.colors.accent;
   const inactiveFg = theme.colors.ink;
+  const inactiveBg = theme.colors.paperDeep;
 
   return (
     <Pressable
@@ -39,8 +42,8 @@ export function CategoryChip({ label, active, onToggle, testID }: CategoryChipPr
       style={[
         styles.chip,
         active
-          ? { backgroundColor: activeBg,        borderWidth: 0 }
-          : { backgroundColor: 'transparent',   borderWidth: 1, borderColor: inactiveFg },
+          ? { backgroundColor: activeBg,   borderWidth: 0 }
+          : { backgroundColor: inactiveBg, borderWidth: 1, borderColor: inactiveFg },
       ]}
     >
       <Text
