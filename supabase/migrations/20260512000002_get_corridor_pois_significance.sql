@@ -2,6 +2,28 @@
 --
 -- Drift catalog 5.67 (RPC exposes significance_score + min + sort).
 --
+-- ⚠️  CAUTION (drift 5.90): this migration used `CREATE OR REPLACE
+--     FUNCTION` with a new 7-arg signature against a live DB that had
+--     a 4-arg get_corridor_pois. CREATE OR REPLACE only fires REPLACE
+--     when the argument list matches exactly — with a different
+--     signature it CREATES an additional overload instead. Result:
+--     post-apply the live DB had TWO overloads of get_corridor_pois,
+--     which PostgREST cannot disambiguate (PGRST203). Every corridor
+--     RPC call from the mobile app errored silently. Filter chips +
+--     sliders on customize stopped updating the live count.
+--
+--     Cleanup: migration 20260513000001_get_corridor_pois_overload_cleanup.sql
+--     drops ALL overloads and recreates the canonical 7-arg shape with
+--     a bare CREATE FUNCTION.
+--
+--     Lesson for future migrations changing function signatures:
+--     • DROP FUNCTION (or DROP via a pg_proc loop) first, then CREATE.
+--     • The sibling `get_nearby_pois` migration 20260512000003 already
+--       does this — see its DO block.
+--
+--     This file is left as-is (applied + frozen per migration
+--     convention); the header annotation is the only post-apply edit.
+--
 -- Patches the corridor RPC to surface significance_score to the JS
 -- layer so the curation function (src/lib/curation/curateRoutePOIs.ts)
 -- can score and bin POIs without a separate fetch. Adds three optional

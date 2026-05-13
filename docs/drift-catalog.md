@@ -1359,6 +1359,99 @@ stays unchanged. The fix is purely tap-flow.
 
 ---
 
+### 5.90 — Migration 20260512000002 left `get_corridor_pois` with duplicate overloads (PGRST203)
+
+**Status:** `resolved` (filed-and-fixed this commit via migration
+20260513000001).
+
+**Surface:** Hardware logs from the post-curation-bundle test showed
+every corridor RPC call failing with:
+
+```
+[Supabase] countPOIsAlongRoute error: {
+  "code":"PGRST203",
+  "hint":"Try renaming the parameters or the function itself in the
+          database so function overloading can be resolved",
+  "message":"Could not choose the best candidate function between:
+            public.get_corridor_pois(route_geom => text, c..."
+}
+```
+
+Downstream symptoms: customize's filter chips + density slider +
+relevance slider + corridor-distance slider all stopped updating the
+live POI count badge; home post-route POI marker fetch returned empty;
+drive's curation pass had nothing to curate. The mobile app degraded
+to a no-data state on the corridor surface.
+
+**Root cause:** Migration `20260512000002_get_corridor_pois_significance.sql`
+used `CREATE OR REPLACE FUNCTION` to install the new 7-arg shape
+(adding `min_significance`, `sort_mode`, `result_limit`). PostgreSQL's
+REPLACE semantics only fire when the **argument list matches exactly**.
+With a different signature, the new function is `CREATE`d as an
+**additional overload** — the prior 4-arg `(route_geom, corridor_width_miles,
+category_filter, mode_filter)` version stays. Post-apply, the live DB had
+two overloads of `get_corridor_pois`. PostgREST's schema cache
+discovers both, can't pick one when called by name, and returns
+`PGRST203`.
+
+The sibling migration `20260512000003_get_nearby_pois_significance.sql`
+**did not** hit this trap because it opens with a `DO $$ ... LOOP DROP
+FUNCTION ...` block that wipes all overloads before the CREATE. The
+oversight was specific to the corridor migration.
+
+**Resolution:** `supabase/migrations/20260513000001_get_corridor_pois_overload_cleanup.sql`:
+
+- `BEGIN; ... COMMIT;` wrapped so a partial apply (drop succeeds, create
+  fails) rolls back to the still-broken-but-not-worse two-overload state
+  instead of hardening the outage to zero overloads.
+- `DO $$ ... LOOP` over `pg_proc` drops every overload of
+  `public.get_corridor_pois` regardless of signature shape — defensive
+  against unknown / future overloads that a pre-flight inventory might
+  miss.
+- `CREATE FUNCTION` (not `CREATE OR REPLACE`) with the canonical 7-arg
+  signature from 20260512000002. Bare CREATE makes the intent explicit
+  and fails loudly if any overload survived the DROP loop — REPLACE
+  would silently no-op that case.
+- Same body / GRANT / COMMENT as 20260512000002. No behavior change in
+  the function itself; this migration is purely cleanup.
+
+Migration `20260512000002` itself was left untouched (applied + frozen
+per migration convention); the only post-apply edit is a header
+annotation pointing at this cleanup migration so future debuggers find
+the receipt.
+
+**Lesson:** when a migration changes a function signature (adds /
+removes / reorders args), `CREATE OR REPLACE` is the wrong tool. Either:
+
+1. `DROP FUNCTION <old-signature>; CREATE FUNCTION <new-signature>;` —
+   simplest when the old signature is known and small.
+2. `DO $$ ... LOOP DROP FUNCTION ... LOOP; CREATE FUNCTION ...` — robust
+   pattern when the old signature might have drifted, or when multiple
+   overloads might exist. This is what `get_nearby_pois`'s migration
+   does, and what the cleanup migration adopts.
+
+The CLAUDE.md "Migration conventions" section could absorb this pattern
+as a sub-rule under signature-changing migrations; deferred to a
+focused docs pass.
+
+**Test:**
+
+```bash
+psql "$DATABASE_URL" -v ON_ERROR_STOP=1 \
+  -f supabase/migrations/20260513000001_get_corridor_pois_overload_cleanup.sql
+```
+
+Then in the mobile app, select a destination → routes load → the route-card
+"stories" badge populates with a real count (was stuck at `…` pre-fix).
+Customize → adjust corridor distance → live count updates instead of
+hanging.
+
+**Decided by:** User-filed hardware error (PGRST203 in `countPOIsAlongRoute`
+console.error output). Root cause statically diagnosable from the
+PostgreSQL function-overload + CREATE OR REPLACE semantics.
+
+---
+
 ### 5.89 — Default curation surfaces obscure POIs; needs diagnosis before tuning
 
 **Status:** `noted` — diagnostic-only this commit; tuning deferred to a
