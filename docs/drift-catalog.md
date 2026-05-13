@@ -1334,6 +1334,59 @@ and skip Callout entirely. Hiking screens also deferred per the spec
 
 ---
 
+### 5.86 — Migration 20260512000003 used a SELECT alias inside an ORDER BY CASE expression
+
+**Status:** `resolved` (filed-and-fixed this commit).
+
+**Surface:** `psql ... -f supabase/migrations/20260512000003_get_nearby_pois_significance.sql`
+failed at line 79 with:
+
+```
+ERROR: 42703: column "distance_m" does not exist
+LINE 79: CASE WHEN sort_mode = 'distance_asc' OR sort_mode IS NULL OR
+         sort_mode NOT IN ('significance_desc') THEN distance_m END NULLS LAST
+```
+
+**Root cause:** PostgreSQL's ORDER BY only resolves SELECT-list aliases when
+they appear as **bare** column references. Inside expressions (including
+`CASE WHEN`), identifiers fall through to the FROM clause's table columns.
+The SELECT computed `ST_Distance(...) AS distance_m`, which made `distance_m`
+visible as a bare ORDER BY target (the prior migration 20260504000017 did
+exactly that — `ORDER BY distance_m`) but **not** visible inside the new
+`CASE WHEN sort_mode = 'distance_asc' THEN distance_m END` expression. The
+corridor sibling (20260512000002) didn't hit this because it inlines
+`ST_LineLocatePoint(...)` directly in the ORDER BY CASE rather than
+aliasing it.
+
+**Live-DB state pre-fix:** the DO block at the top of the broken migration
+successfully dropped the previous `get_nearby_pois` function before the
+CREATE FUNCTION failed at parse-time validation. So between the broken
+apply and this fix, the live DB had **zero** `get_nearby_pois` overloads.
+Browse mode (`getNearbyPOIs` in `lib/supabase.ts`) and any other caller
+were temporarily broken — RPC missing.
+
+**Resolution:**
+- Inlined `ST_Distance(p.location, ST_MakePoint(user_lng, user_lat)::geography)`
+  in the ORDER BY's distance-sort branch (replacing the `distance_m` alias
+  reference). Same pattern as the corridor sibling.
+- Wrapped the whole migration in `BEGIN; … COMMIT;` so any future failure
+  rolls back the DROP, avoiding the half-applied state this fix had to
+  recover from.
+- Migration remains idempotent: the DO block drops zero overloads when
+  re-applied against a DB that already has the fixed function (the
+  `CREATE OR REPLACE` then re-creates without DROP needed). Safe to
+  re-run.
+- Inline comment in the ORDER BY block points future debuggers at this
+  drift entry so the in-CASE alias trap doesn't get re-introduced.
+
+**Test:** `psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f supabase/migrations/20260512000003_get_nearby_pois_significance.sql`
+runs cleanly. Verification queries in the migration footer return the
+expected row counts.
+
+**Decided by:** User-filed hardware error during `psql -f` apply.
+
+---
+
 ### 5.85 — Hiking duration uses flat 20 min/mi assumption
 
 **Status:** `noted` — fix deferred. Filed for visibility.
