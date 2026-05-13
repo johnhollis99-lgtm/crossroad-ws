@@ -13,10 +13,10 @@ import type { TextStyle, ViewStyle } from 'react-native';
 // ── COLORS (single dark palette) ──────────────────────────────────────────
 
 export const pineColors = {
-  paper:             '#08160F',   // primary surface — header card, sheet, FAB
-  paperSoft:         '#0F1F18',   // text color on primary-accent backgrounds
-  paperWarm:         '#142922',   // secondary surface — search field, avatar, active tab pill
-  paperEdge:         '#2A4035',   // border / divider on opaque surfaces
+  paper:             '#0A0A0A',   // primary surface — near-black canvas (header card, sheet, FAB)
+  paperSoft:         '#141414',   // text color on primary-accent backgrounds + low-elevation surfaces
+  paperWarm:         '#1E1E1E',   // secondary surface — search field, avatar, active tab pill
+  paperEdge:         '#2E2E2E',   // border / divider on opaque surfaces
 
   ink:               '#E8FAEF',   // body text, icon primary stroke
   inkSoft:           '#9ACCB0',   // secondary text, meta labels
