@@ -21,7 +21,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from 'react-native-maps';
 import { useNavigation, useRoute } from '@react-navigation/native';
 import { getPOIsAlongRoute, saveRoute } from '../lib/supabase';
-import { XRoadLogo } from '../components/XRoadLogo';
+import { Wordmark } from '../src/components';
 import type { POI } from '../lib/supabase';
 import { usePOIStream } from '../hooks/usePOIStream';
 import { useTTS } from '../hooks/useTTS';
@@ -319,7 +319,9 @@ export default function Trail() {
 
       <SafeAreaView style={s.btnSafe} edges={['bottom']}>
         <View style={s.trailLogoRow}>
-          <XRoadLogo size="sm" style={{ opacity: 0.6 }} />
+          <View style={{ opacity: 0.6 }}>
+            <Wordmark size="m" />
+          </View>
         </View>
         <View style={s.btnBar}>
           <TouchableOpacity style={[s.btn, s.btnGreen]} onPress={() => { openMicWindow(); setQaMode(true); }} activeOpacity={0.75}>

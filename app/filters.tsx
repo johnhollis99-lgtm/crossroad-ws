@@ -21,7 +21,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useNavigation, useRoute } from '@react-navigation/native';
 import { getCategories } from '../lib/supabase';
-import { XRoadLogo } from '../components/XRoadLogo';
+import { Wordmark } from '../src/components';
 import type { POICategory } from '../lib/supabase';
 import { useTTS } from '../hooks/useTTS';
 
@@ -200,7 +200,7 @@ export default function Filters() {
             <Text style={s.headerTitle} numberOfLines={1}>{destination ?? 'Your route'}</Text>
             <Text style={s.headerSub}>Story customization</Text>
           </View>
-          <XRoadLogo size="sm" />
+          <Wordmark size="m" />
         </View>
 
         <ScrollView style={{ flex: 1 }} contentContainerStyle={s.scrollContent} showsVerticalScrollIndicator={false}>

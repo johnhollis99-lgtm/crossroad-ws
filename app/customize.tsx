@@ -34,7 +34,7 @@ import type { NarratorRecord, POI } from '../lib/supabase';
 import { C } from '../lib/theme';
 import { MapStyleId, MAP_STYLES, loadMapStyle, saveMapStyle } from '../lib/mapStyle';
 import { MapStylePicker } from '../components/MapStylePicker';
-import { XRoadLogo } from '../components/XRoadLogo';
+import { Wordmark } from '../src/components';
 import { useTripStore } from '../src/store/tripStore';
 import { curateRoutePOIs, type Density } from '../src/lib/curation/curateRoutePOIs';
 
@@ -655,7 +655,7 @@ export default function CustomizeScreen() {
           <TouchableOpacity style={s.backBtn} onPress={() => navigation.goBack()} activeOpacity={0.7}>
             <Text style={s.backArrow}>←</Text>
           </TouchableOpacity>
-          <XRoadLogo size="sm" />
+          <Wordmark size="m" />
           <View style={{ width: 44 }} />
         </View>
 

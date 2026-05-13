@@ -30,7 +30,7 @@ import { C } from '../lib/theme';
 import { MapStyleId, MAP_STYLES, loadMapStyle, saveMapStyle } from '../lib/mapStyle';
 import { MapStylePicker } from '../components/MapStylePicker';
 import { useSheetSnap } from '../hooks/useSheetSnap';
-import { XRoadLogo } from '../components/XRoadLogo';
+import { Wordmark } from '../src/components';
 import { haversineM, arcLengthAlongRoute } from '../src/lib/geo';
 import { curateRoutePOIs, type Density } from '../src/lib/curation/curateRoutePOIs';
 
@@ -776,7 +776,9 @@ export default function Drive() {
         {/* Drag handle */}
         <View {...sheetPan} style={s.dragHandleWrap}>
           <View style={s.dragHandle} />
-          <XRoadLogo size="sm" style={s.driveLogoWrap} />
+          <View style={s.driveLogoWrap}>
+            <Wordmark size="m" />
+          </View>
         </View>
 
         {/* ── Stats strip (B6 / drift 5.78) — visible in peek + expanded. */}

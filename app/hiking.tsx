@@ -20,7 +20,7 @@ import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from 'react-native-maps';
 import * as Location from 'expo-location';
 import { useNavigation } from '@react-navigation/native';
 import { countPOIsAlongRoute } from '../lib/supabase';
-import { XRoadLogo } from '../components/XRoadLogo';
+import { Wordmark } from '../src/components';
 
 const MAPS_KEY     = process.env.EXPO_PUBLIC_GOOGLE_MAPS_KEY!;
 const MAPBOX_TOKEN = process.env.EXPO_PUBLIC_MAPBOX_TOKEN!;
@@ -256,7 +256,7 @@ export default function Hiking() {
           <TouchableOpacity style={s.backBtn} onPress={() => navigation.goBack()}>
             <Text style={s.backText}>←</Text>
           </TouchableOpacity>
-          <XRoadLogo size="sm" />
+          <Wordmark size="m" />
         </View>
       </SafeAreaView>
 

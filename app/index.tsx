@@ -42,7 +42,7 @@ import { computeBadges, computeRouteTags } from '../lib/routeBadges';
 import { useSheetSnap, type SnapPoints } from '../hooks/useSheetSnap';
 import { MapStyleId, MAP_STYLES, loadMapStyle, saveMapStyle } from '../lib/mapStyle';
 import { MapStylePicker } from '../components/MapStylePicker';
-import { XRoadLogo } from '../components/XRoadLogo';
+import { Wordmark } from '../src/components';
 import { useTripStore } from '../src/store/tripStore';
 import { curateRoutePOIs } from '../src/lib/curation/curateRoutePOIs';
 
@@ -1592,7 +1592,7 @@ export default function MapScreen() {
             </View>
           )}
           <View style={s.logoWrap} pointerEvents="none">
-            <XRoadLogo size="sm" />
+            <Wordmark size="m" />
           </View>
 
           {/* Drive | Hike mode selector (drift 5.82). Persists via tripStore. */}
