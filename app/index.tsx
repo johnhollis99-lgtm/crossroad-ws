@@ -1592,7 +1592,7 @@ export default function MapScreen() {
             </View>
           )}
           <View style={s.logoWrap} pointerEvents="none">
-            <Wordmark size="m" />
+            <Wordmark size="m" background="pill" />
           </View>
 
           {/* Drive | Hike mode selector (drift 5.82). Persists via tripStore. */}

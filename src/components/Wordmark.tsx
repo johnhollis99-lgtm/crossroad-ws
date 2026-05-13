@@ -1,18 +1,20 @@
 import React from 'react';
-import { StyleSheet, Text, View } from 'react-native';
+import { Platform, StyleSheet, Text, View } from 'react-native';
 import Svg, { Circle, Path } from 'react-native-svg';
-import { useTheme } from '../design/theme';
+import { lightTheme, useTheme } from '../design/theme';
 
-export type WordmarkSize = 'm' | 'l' | 'xl';
-export type WordmarkTone = 'ink' | 'paper';
+export type WordmarkSize       = 'm' | 'l' | 'xl';
+export type WordmarkTone       = 'ink' | 'paper';
+export type WordmarkBackground = 'none' | 'pill';
 
 export interface WordmarkProps {
-  size?:   WordmarkSize;
-  tone?:   WordmarkTone;
-  testID?: string;
+  size?:       WordmarkSize;
+  tone?:       WordmarkTone;
+  background?: WordmarkBackground;
+  testID?:     string;
 }
 
-// Cap height (font-size for X / road), horizon width, and center-dot radius
+// Cap height (font-size for X / Road), horizon width, and center-dot radius
 // per size step. These literals are structural brand-mark dimensions driven
 // by the `size` prop, not typographic variants — the one documented exception
 // to "no fontSize literals outside textVariants" in the component library.
@@ -23,6 +25,15 @@ const SIZE_MAP: Record<
   m:  { capPx: 22, horizonW:  80, dotR: 1.6, gap: 6 },
   l:  { capPx: 32, horizonW: 110, dotR: 2.2, gap: 7 },
   xl: { capPx: 56, horizonW: 180, dotR: 3.4, gap: 8 },
+};
+
+// Pill padding scales ~30% per step. Top/bottom asymmetric — extra bottom
+// padding visually balances the descender-light "Road" baseline against
+// the horizon above.
+const PILL_PADDING: Record<WordmarkSize, { top: number; bottom: number; h: number }> = {
+  m:  { top:  8, bottom: 10, h: 14 },
+  l:  { top: 10, bottom: 13, h: 18 },
+  xl: { top: 13, bottom: 16, h: 22 },
 };
 
 function buildWavePath(width: number): string {
@@ -39,23 +50,34 @@ function buildWavePath(width: number): string {
   );
 }
 
-export function Wordmark({ size = 'm', tone = 'ink', testID }: WordmarkProps) {
+export function Wordmark({
+  size       = 'm',
+  tone       = 'ink',
+  background = 'none',
+  testID,
+}: WordmarkProps) {
   const { theme } = useTheme();
   const { capPx, horizonW, dotR, gap } = SIZE_MAP[size];
 
-  // Bicolor: X always carries the ink-red accent; "road" + horizon stroke
-  // follow `tone` (ink on paper bg, paper on ink bg). Dot is always accent.
-  const wordColor   = tone === 'ink' ? theme.colors.ink : theme.colors.paper;
-  const accentColor = theme.colors.accent;
+  // Pill is a branded chip — colors are locked to light-mode constants
+  // regardless of system scheme, so the mark reads as XRoad-on-cream
+  // when overlaying a dark map even in dark-mode UI. Outside the pill,
+  // colors follow the active theme + `tone`.
+  const isPill = background === 'pill';
+  const wordColor = isPill
+    ? lightTheme.colors.ink
+    : (tone === 'ink' ? theme.colors.ink : theme.colors.paper);
+  const accentColor = isPill ? lightTheme.colors.accent : theme.colors.accent;
+  const strokeColor = wordColor;
 
   const wavePath = React.useMemo(() => buildWavePath(horizonW), [horizonW]);
 
-  return (
-    <View testID={testID} style={styles.wrap}>
+  const inner = (
+    <View style={styles.wrap}>
       <Svg width={horizonW} height={12} viewBox={`0 0 ${horizonW} 12`}>
         <Path
           d={wavePath}
-          stroke={wordColor}
+          stroke={strokeColor}
           strokeWidth={1}
           fill="none"
           strokeLinecap="round"
@@ -88,9 +110,38 @@ export function Wordmark({ size = 'm', tone = 'ink', testID }: WordmarkProps) {
             color:         wordColor,
           }}
         >
-          road
+          Road
         </Text>
       </View>
+    </View>
+  );
+
+  if (!isPill) {
+    return <View testID={testID}>{inner}</View>;
+  }
+
+  const pad = PILL_PADDING[size];
+  // iOS pulls shadow values from lightTheme.elevation.e2 (same source as the
+  // ink shadow token). Android gets a lighter elevation: 4 since the e2 token
+  // value (8) over-darkens this chip-sized surface.
+  return (
+    <View
+      testID={testID}
+      style={[
+        styles.pill,
+        {
+          backgroundColor: lightTheme.colors.paper,
+          paddingTop:      pad.top,
+          paddingBottom:   pad.bottom,
+          paddingLeft:     pad.h,
+          paddingRight:    pad.h,
+        },
+        Platform.OS === 'android'
+          ? { elevation: 4 }
+          : lightTheme.elevation.e2,
+      ]}
+    >
+      {inner}
     </View>
   );
 }
@@ -102,5 +153,9 @@ const styles = StyleSheet.create({
   row: {
     flexDirection: 'row',
     alignItems:    'baseline',
+  },
+  pill: {
+    borderRadius: 999,
+    alignSelf:    'flex-start',
   },
 });

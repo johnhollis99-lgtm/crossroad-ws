@@ -256,7 +256,7 @@ export default function Hiking() {
           <TouchableOpacity style={s.backBtn} onPress={() => navigation.goBack()}>
             <Text style={s.backText}>←</Text>
           </TouchableOpacity>
-          <Wordmark size="m" />
+          <Wordmark size="m" background="pill" />
         </View>
       </SafeAreaView>
 

@@ -95,6 +95,21 @@ function Panel({ theme }: { theme: Theme }) {
           >
             <Wordmark size="l" tone="paper" />
           </View>
+          {/* Paper-pill variant — branded chip for map overlays. Pill stays
+              cream + ink-red regardless of system theme so it reads against
+              any map style. */}
+          <View
+            style={{
+              marginTop: theme.spacing.m,
+              padding:   theme.spacing.m,
+              alignItems: 'center',
+              gap:        theme.spacing.l,
+            }}
+          >
+            <Wordmark size="m"  background="pill" />
+            <Wordmark size="l"  background="pill" />
+            <Wordmark size="xl" background="pill" />
+          </View>
         </Section>
 
         <Section title="Kicker" theme={theme}>
