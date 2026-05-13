@@ -34,7 +34,7 @@ import type { NarratorRecord, POI } from '../lib/supabase';
 import { C } from '../lib/theme';
 import { MapStyleId, MAP_STYLES, loadMapStyle, saveMapStyle } from '../lib/mapStyle';
 import { MapStylePicker } from '../components/MapStylePicker';
-import { Wordmark } from '../src/components';
+import { CategoryChip, Wordmark } from '../src/components';
 import { useTripStore } from '../src/store/tripStore';
 import { curateRoutePOIs, type Density } from '../src/lib/curation/curateRoutePOIs';
 
@@ -791,19 +791,14 @@ export default function CustomizeScreen() {
               if (scrolled !== catsScrolled) setCatsScrolled(scrolled);
             }}
           >
-            {ALL_CATEGORIES.map(cat => {
-              const on = selectedCats.includes(cat);
-              return (
-                <TouchableOpacity
-                  key={cat}
-                  style={[s.pill, on && s.pillOn]}
-                  onPress={() => toggleCategory(cat)}
-                  activeOpacity={0.8}
-                >
-                  <Text style={[s.pillText, on && s.pillTextOn]}>{cat}</Text>
-                </TouchableOpacity>
-              );
-            })}
+            {ALL_CATEGORIES.map(cat => (
+              <CategoryChip
+                key={cat}
+                label={cat}
+                active={selectedCats.includes(cat)}
+                onToggle={() => toggleCategory(cat)}
+              />
+            ))}
           </ScrollView>
           {catsScrolled && (
             <LinearGradient
@@ -951,10 +946,6 @@ const s = StyleSheet.create({
   pillFadeRight: { position: 'absolute', right: 0, top: 0, bottom: 0, width: 20 },
   pillWrap:   { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
   pillScroll: { gap: 8, flexDirection: 'row', paddingRight: 20 },
-  pill:       { paddingHorizontal: 12, paddingVertical: 7, borderRadius: 20, borderWidth: 2, borderColor: C.BORDER_STRONG, backgroundColor: C.BG_ELEVATED, minHeight: 38, alignItems: 'center', justifyContent: 'center' },
-  pillOn:     { backgroundColor: C.ACCENT, borderColor: C.ACCENT, borderWidth: 0 },
-  pillText:   { fontSize: 13, color: C.TEXT_PRIMARY, fontWeight: '600' },
-  pillTextOn: { color: C.WHITE, fontWeight: '700' },
 
   // POI slider
   sliderLabelRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'baseline', marginTop: 16, marginBottom: 10 },

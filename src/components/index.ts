@@ -14,6 +14,9 @@ export type { AudienceMarkProps, AudienceMarkType, AudienceMarkSize, AudienceMar
 export { Card }               from './Card';
 export type { CardProps, CardVariant, CardRadius } from './Card';
 
+export { CategoryChip }       from './CategoryChip';
+export type { CategoryChipProps } from './CategoryChip';
+
 export { DangerButton }       from './DangerButton';
 export type { DangerButtonProps } from './DangerButton';
 

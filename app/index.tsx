@@ -42,7 +42,7 @@ import { computeBadges, computeRouteTags } from '../lib/routeBadges';
 import { useSheetSnap, type SnapPoints } from '../hooks/useSheetSnap';
 import { MapStyleId, MAP_STYLES, loadMapStyle, saveMapStyle } from '../lib/mapStyle';
 import { MapStylePicker } from '../components/MapStylePicker';
-import { ModePillRow, Wordmark } from '../src/components';
+import { CategoryChip, ModePillRow, Wordmark } from '../src/components';
 import { useTripStore } from '../src/store/tripStore';
 import { curateRoutePOIs } from '../src/lib/curation/curateRoutePOIs';
 
@@ -1278,15 +1278,6 @@ export default function MapScreen() {
     chipFadeLeft:  { position: 'absolute', left: 0,  top: 0, bottom: 0, width: 20 },
     chipFadeRight: { position: 'absolute', right: 0, top: 0, bottom: 0, width: 20 },
     chipRow: { paddingHorizontal: 12, paddingVertical: 2, gap: 8, flexDirection: 'row' },
-    chip: {
-      height: 30, borderRadius: 15,
-      paddingHorizontal: 12, justifyContent: 'center',
-      backgroundColor: theme.colors.paper,
-      borderWidth: 2, borderColor: theme.colors.ink,
-    },
-    chipActive:     { backgroundColor: theme.colors.accent2, borderColor: theme.colors.accent2, borderWidth: 0 },
-    chipText:       { ...theme.textVariants.uiSmall, color: theme.colors.ink },
-    chipTextActive: { color: theme.colors.paper },
   }), [theme]);
 
   // ── Render ─────────────────────────────────────────────────────────────────
@@ -1624,19 +1615,14 @@ export default function MapScreen() {
                 if (scrolled !== chipsScrolled) setChipsScrolled(scrolled);
               }}
             >
-              {CAT_CHIPS.map(chip => {
-                const active = selectedCategories.includes(chip);
-                return (
-                  <TouchableOpacity
-                    key={chip}
-                    style={[s.chip, active && s.chipActive]}
-                    onPress={() => toggleCategory(chip)}
-                    activeOpacity={0.8}
-                  >
-                    <Text style={[s.chipText, active && s.chipTextActive]}>{chip}</Text>
-                  </TouchableOpacity>
-                );
-              })}
+              {CAT_CHIPS.map(chip => (
+                <CategoryChip
+                  key={chip}
+                  label={chip}
+                  active={selectedCategories.includes(chip)}
+                  onToggle={() => toggleCategory(chip)}
+                />
+              ))}
             </ScrollView>
             {chipsScrolled && (
               <LinearGradient
@@ -1817,19 +1803,14 @@ export default function MapScreen() {
             showsHorizontalScrollIndicator={false}
             contentContainerStyle={s.chipRow}
           >
-            {CAT_CHIPS.map(chip => {
-              const active = selectedCategories.includes(chip);
-              return (
-                <TouchableOpacity
-                  key={chip}
-                  style={[s.chip, active && s.chipActive]}
-                  onPress={() => toggleCategory(chip)}
-                  activeOpacity={0.8}
-                >
-                  <Text style={[s.chipText, active && s.chipTextActive]}>{chip}</Text>
-                </TouchableOpacity>
-              );
-            })}
+            {CAT_CHIPS.map(chip => (
+              <CategoryChip
+                key={chip}
+                label={chip}
+                active={selectedCategories.includes(chip)}
+                onToggle={() => toggleCategory(chip)}
+              />
+            ))}
           </ScrollView>
         </View>
       )}
