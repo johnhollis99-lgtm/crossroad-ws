@@ -173,9 +173,9 @@ function ClusterMarker({
     return () => clearTimeout(t);
   }, []);
   const sizeStyle =
-    count < 50  ? styles.clusterBubble36 :
-    count < 500 ? styles.clusterBubble44 :
-                  styles.clusterBubble52;
+    count < 50  ? styles.clusterBubble40 :
+    count < 500 ? styles.clusterBubble48 :
+                  styles.clusterBubble56;
   return (
     <Marker
       coordinate={coordinate}
@@ -1308,19 +1308,43 @@ export default function MapScreen() {
       borderWidth: 1, borderColor: theme.colors.cardEdge,
       alignItems: 'center', justifyContent: 'center',
     },
-    // Cluster bubble (drift 5.72 / C1, bumped 5.88) — ink-red accent fill,
-    // paper outline, Fraunces italic 600 count in paper. Diameters bumped
-    // for accessibility: 28→36, 36→44, 44→52. Steps at 50 and 500 unchanged.
-    // 'buttonStrong' = Fraunces serifItalic 600 16px (button variant is 500).
+    // Cluster bubble — ink-red accent fill, tabular mono count in paper.
+    // Drift 5.94 polish: size steps bumped 36/44/52 → 40/48/56 for extra
+    // interior room (Fraunces italic 16px in a 36px circle read as cramped
+    // and slightly off-center because the italic glyphs lean — symptoms
+    // the user described as "overlapping and incomplete"); paper border
+    // dropped in favor of a soft drop shadow that lifts the bubble off
+    // dense map content and visually separates adjacent clusters; count
+    // text switched to JetBrains Mono 600 14px (tabular figures align
+    // cleanly inside a tight circle, no italic lean). includeFontPadding +
+    // textAlignVertical handle Android's built-in font-padding so centered
+    // numerals don't sit a hair high in the bubble.
     clusterBubble: {
       alignItems: 'center', justifyContent: 'center',
       backgroundColor: theme.colors.accent,
-      borderWidth: 1, borderColor: theme.colors.paper,
+      ...Platform.select({
+        ios: {
+          shadowColor:   '#000',
+          shadowOffset:  { width: 0, height: 2 },
+          shadowOpacity: 0.18,
+          shadowRadius:  6,
+        },
+        android: { elevation: 3 },
+        default: {},
+      }),
     },
-    clusterBubble36: { width: 36, height: 36, borderRadius: 18 },
-    clusterBubble44: { width: 44, height: 44, borderRadius: 22 },
-    clusterBubble52: { width: 52, height: 52, borderRadius: 26 },
-    clusterText:     { ...theme.textVariants.buttonStrong, color: theme.colors.paper },
+    clusterBubble40: { width: 40, height: 40, borderRadius: 20 },
+    clusterBubble48: { width: 48, height: 48, borderRadius: 24 },
+    clusterBubble56: { width: 56, height: 56, borderRadius: 28 },
+    clusterText: {
+      fontFamily:         theme.fontFamilies.mono,
+      fontWeight:         '600',
+      fontSize:           14,
+      lineHeight:         14,
+      color:              theme.colors.paper,
+      includeFontPadding: false,
+      textAlignVertical:  'center',
+    },
 
     chipRowWrap: { position: 'relative' },
     chipFadeLeft:  { position: 'absolute', left: 0,  top: 0, bottom: 0, width: 20 },
