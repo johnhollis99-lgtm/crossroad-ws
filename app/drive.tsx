@@ -1,12 +1,19 @@
 /**
- * RoadStory — Drive screen
+ * XRoad — Trip / Drive screen (Pine, Phase 2).
  *
- * Full-screen map with dark earthy bottom sheet overlay.
- * Audio narration via socket.io. GPS tracking with location emit.
+ * Full-screen map with floating chrome (PersonaPill + StoriesBadge top,
+ * 3-column TripStat strip below), a recenter puck + MapStylePicker on the
+ * right rail (visible only when the sheet is peeked), and a draggable
+ * bottom sheet that toggles between retracted (watermark + minimal action
+ * row) and deployed (full media controls + Up next + corridor slider +
+ * mode toggle + footer) states.
  *
- * INSTALL: npm install socket.io-client
+ * Every existing handler / state machine / data binding from the previous
+ * earthy-palette version is preserved — Audio, Socket.io, GPS, POI load,
+ * curation, queue, skip, end-trip wiring, feedback/share handlers all
+ * untouched.
  *
- * Receives (all JSON strings):
+ * Receives (JSON strings):
  *   narrator, filters, routePreview, originLocation, destination, tripId
  */
 
@@ -14,8 +21,8 @@ import React, {
   useCallback, useEffect, useMemo, useRef, useState,
 } from 'react';
 import {
-  Alert, Animated, Dimensions, LayoutChangeEvent, PanResponder,
-  Platform, ScrollView, Share, StatusBar,
+  Alert, Animated, Dimensions, PanResponder,
+  Platform, Pressable, ScrollView, Share, StatusBar,
   StyleSheet, Text, TouchableOpacity, View,
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -24,13 +31,33 @@ import { CommonActions, useNavigation, useRoute } from '@react-navigation/native
 import { Audio, AVPlaybackStatus } from 'expo-av';
 import * as Location from 'expo-location';
 import type { LocationSubscription } from 'expo-location';
+import Svg, { Text as SvgText } from 'react-native-svg';
+
 import { getPOIsAlongRoute, submitContribution } from '../lib/supabase';
 import type { POI, NarratorRecord } from '../lib/supabase';
-import { C } from '../lib/theme';
 import { MapStyleId, MAP_STYLES, loadMapStyle, saveMapStyle } from '../lib/mapStyle';
 import { MapStylePicker } from '../components/MapStylePicker';
 import { useSheetSnap } from '../hooks/useSheetSnap';
-import { PoiMarkerX, usePoiMarkerTracking, Wordmark } from '../src/components';
+import { useTheme } from '../src/design/theme';
+import { shadows } from '../src/design/tokens';
+import { useBreath } from '../src/design/motion';
+import {
+  IconClose,
+  IconPause,
+  IconPlay,
+  IconSkipBack,
+  IconSkipFwd,
+  IconVolume,
+  IconVolumeOff,
+  LabeledSlider,
+  ModePillRow,
+  PersonaPill,
+  PoiMarkerX,
+  StoriesBadge,
+  TripStat,
+  usePoiMarkerTracking,
+  Wordmark,
+} from '../src/components';
 import { haversineM, arcLengthAlongRoute } from '../src/lib/geo';
 import { curateRoutePOIs, type Density } from '../src/lib/curation/curateRoutePOIs';
 
@@ -53,6 +80,15 @@ const POI_STEP = 0.5;
 
 const SERVER_URL   = process.env.EXPO_PUBLIC_SERVER_URL ?? 'http://localhost:3001';
 const MAPBOX_TOKEN = process.env.EXPO_PUBLIC_MAPBOX_TOKEN!;
+
+// Pine-coherent narrator avatar palette (Phase 2 spec). Reused from
+// customize.tsx; kept inline here so drive.tsx has no cross-screen import.
+const NARRATOR_AVATAR_PALETTE: Record<string, string> = {
+  'the-professor':     '#60A5FA',
+  'the-local':         '#9F7AEA',
+  'the-junior-ranger': '#10B981',
+  'the-truck-driver':  '#F59E0B',
+};
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -86,58 +122,71 @@ function fmtMiles(mi: number | undefined | null): string {
   return mi < 0.1 ? `${Math.round(mi * 5280)} ft` : `${mi.toFixed(1)} mi`;
 }
 
-// haversineM + arcLengthAlongRoute lifted to src/lib/geo so the curation
-// function (src/lib/curation/) shares the same implementation.
+function fmtRemaining(min: number): string {
+  if (min < 60) return `${min}m`;
+  return `${Math.floor(min / 60)}h ${min % 60}m`;
+}
 
-// ── POI distance slider ───────────────────────────────────────────────────────
+function avatarColorFor(narrator: NarratorRecord | null): string {
+  if (!narrator) return '#10B981';
+  const slug = narrator.slug ?? '';
+  return NARRATOR_AVATAR_PALETTE[slug] ?? narrator.avatar_color_bg ?? '#10B981';
+}
 
-function PoiSlider({ value, onChange }: { value: number; onChange: (v: number) => void }) {
-  const trackWidth = useRef(0);
-  const pct = (value - POI_MIN) / (POI_MAX - POI_MIN);
-  const pan = useRef(
-    PanResponder.create({
-      onStartShouldSetPanResponder: () => true,
-      onMoveShouldSetPanResponder:  () => true,
-      onPanResponderGrant: (e) => snap(e.nativeEvent.locationX),
-      onPanResponderMove:  (e) => snap(e.nativeEvent.locationX),
-    })
-  ).current;
-  function snap(x: number) {
-    const ratio = Math.max(0, Math.min(1, x / (trackWidth.current || 1)));
-    const raw   = POI_MIN + ratio * (POI_MAX - POI_MIN);
-    onChange(Math.round(raw / POI_STEP) * POI_STEP);
-  }
+// ── Watermark (Pine spec section 4 — breathing X + italic Road) ──────────────
+
+function TripWatermark({ compact }: { compact: boolean }) {
+  const { theme } = useTheme();
+  const xOpacity = useBreath({ min: 0.55, max: 0.95, duration: 2800 });
+  const wrapOpacity = compact ? 0.55 : 0.7;
+  const capPx = compact ? 40 : 56;
+  const roadCap = compact ? 28 : 38;
+
   return (
-    <View
-      style={sl.track}
-      onLayout={(e: LayoutChangeEvent) => { trackWidth.current = e.nativeEvent.layout.width; }}
-      {...pan.panHandlers}
-      hitSlop={{ top: 16, bottom: 16 }}
-    >
-      <View style={[sl.fill, { width: `${pct * 100}%` as any }]} />
-      <View style={[sl.thumb, { left: `${pct * 100}%` as any }]} />
+    <View style={{ alignItems: 'center', opacity: wrapOpacity, marginTop: 4, marginBottom: 6 }}>
+      <View style={{ flexDirection: 'row', alignItems: 'baseline' }}>
+        <Animated.Text
+          allowFontScaling={false}
+          style={{
+            fontFamily: theme.fontFamilies.serif,
+            fontWeight: '400',
+            fontSize:   capPx,
+            lineHeight: capPx,
+            color:      theme.colors.primary,
+            opacity:    xOpacity,
+            letterSpacing: -1,
+          }}
+        >
+          X
+        </Animated.Text>
+        <Text
+          allowFontScaling={false}
+          style={{
+            fontFamily: theme.fontFamilies.serifItalic,
+            fontWeight: '400',
+            fontStyle:  'italic',
+            fontSize:   roadCap,
+            lineHeight: roadCap,
+            color:      theme.colors.ink,
+            letterSpacing: -0.6,
+          }}
+        >
+          Road
+        </Text>
+      </View>
     </View>
   );
 }
-const sl = StyleSheet.create({
-  track: { flex: 1, height: 4, backgroundColor: C.BORDER_SUBTLE, borderRadius: 2, position: 'relative', justifyContent: 'center' },
-  fill:  { height: 4, backgroundColor: C.ACCENT, borderRadius: 2, position: 'absolute', left: 0 },
-  thumb: { width: 22, height: 22, borderRadius: 11, backgroundColor: C.BG_BASE, borderWidth: 2.5, borderColor: C.ACCENT_TEXT, position: 'absolute', marginLeft: -11, top: -9, elevation: 4, ...Platform.select({ web: { boxShadow: '0 2px 4px rgba(0,0,0,0.4)' }, default: { shadowColor: '#000', shadowOpacity: 0.4, shadowRadius: 4, shadowOffset: { width: 0, height: 2 } } }) },
-});
 
-// ── POI marker (drift 5.94) ───────────────────────────────────────────────────
-// Inactive corridor POIs render as ink-red X marks via PoiMarkerX (shared with
-// home). Active = currently-narrating POI keeps the legacy halo + inner-dot
-// visual since it functions as a now-playing indicator distinct from the
-// generic POI marker. tracksViewChanges flips true → false after 1s.
+// ── POI marker (active vs inactive) ──────────────────────────────────────────
+
 function DrivePoiMarker({
-  poi, isActive, onPress, activeStyle, activeDotStyle,
+  poi, isActive, onPress, themeColors,
 }: {
   poi: POI;
   isActive: boolean;
   onPress: () => void;
-  activeStyle: any;
-  activeDotStyle: any;
+  themeColors: { primary: string; ink: string; paperSoft: string };
 }) {
   const tracking = usePoiMarkerTracking();
   return (
@@ -148,9 +197,46 @@ function DrivePoiMarker({
       onPress={onPress}
     >
       {isActive
-        ? <View style={activeStyle}><View style={activeDotStyle} /></View>
+        ? <ActivePoiMarker themeColors={themeColors} />
         : <PoiMarkerX size="curated" />}
     </Marker>
+  );
+}
+
+// Active = larger X glyph on a paperSoft pill with a primary border ring —
+// visibly distinct from the inactive curated X without changing brand color.
+function ActivePoiMarker({
+  themeColors,
+}: {
+  themeColors: { primary: string; ink: string; paperSoft: string };
+}) {
+  return (
+    <View
+      style={{
+        width:           40,
+        height:          40,
+        borderRadius:    20,
+        backgroundColor: themeColors.paperSoft,
+        borderWidth:     2,
+        borderColor:     themeColors.primary,
+        alignItems:      'center',
+        justifyContent:  'center',
+      }}
+    >
+      <Svg width={28} height={28} viewBox="0 0 28 28">
+        <SvgText
+          x={14}
+          y={14}
+          textAnchor="middle"
+          dy={6}
+          fontSize={20}
+          fontWeight="700"
+          fill={themeColors.primary}
+        >
+          X
+        </SvgText>
+      </Svg>
+    </View>
   );
 }
 
@@ -159,13 +245,13 @@ function DrivePoiMarker({
 export default function Drive() {
   const navigation = useNavigation<any>();
   const route      = useRoute<any>();
+  const { theme }  = useTheme();
   const params     = route.params ?? {};
 
   const narrator      = parse<NarratorRecord | null>(params.narrator, null);
   const filters       = parse<Record<string, any>>(params.filters, {});
   const routePreview  = parse<Record<string, any>>(params.routePreview, {});
   const origin        = parse<Record<string, any>>(params.originLocation, {});
-  const destination   = params.destination ?? 'Destination';
   const tripId        = params.tripId ?? null;
   const totalStories  = routePreview.storyCount ?? 0;
   const routeId       = tripId ?? 'default';
@@ -202,8 +288,6 @@ export default function Drive() {
   const [ratedPois,    setRatedPois]    = useState<Set<string>>(new Set());
   const [poiDist,      setPoiDist]      = useState<number>(filters.corridorMi ?? 1);
 
-  // Peek must clear Android nav / gesture zone — base 96 + insets.bottom + 16
-  // safety buffer so the End trip button never sits inside the system overlay.
   const insets = useSafeAreaInsets();
   const driveSnaps = useMemo(() => ({
     peek:     DRIVE_SNAPS.peek + insets.bottom + 16,
@@ -217,7 +301,6 @@ export default function Drive() {
   useEffect(() => { loadMapStyle().then(setMapStyleId); }, []);
   const handleMapStyleChange = (id: MapStyleId) => { setMapStyleId(id); saveMapStyle(id); };
 
-  // Trail mode auto-switches to Topo; restores previous style when toggled off
   const prevStyleRef = useRef<MapStyleId>('dark');
   useEffect(() => {
     if (trailMode) {
@@ -229,7 +312,6 @@ export default function Drive() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [trailMode]);
 
-  // Fit map to full route on mount so the polyline is visible before GPS starts
   useEffect(() => {
     const coords = routePreview.polylineCoords;
     if (!coords?.length) return;
@@ -240,9 +322,8 @@ export default function Drive() {
       });
     }, 400);
     return () => clearTimeout(timer);
-  }, []);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Elapsed-minutes timer for ETA countdown
   useEffect(() => {
     const t = setInterval(() => setElapsedMin(m => m + 1), 60_000);
     return () => clearInterval(t);
@@ -254,7 +335,7 @@ export default function Drive() {
     longitude:     origin.longitude ?? routePreview.polylineCoords?.[0]?.longitude ?? -118.24,
     latitudeDelta: 0.05,
     longitudeDelta: 0.05,
-  }), []);
+  }), []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Audio ─────────────────────────────────────────────────────────────────
   const stopAudio = useCallback(async () => {
@@ -304,10 +385,8 @@ export default function Drive() {
     } catch {}
   }, [isPlaying]);
 
-  // Sync shadow ref so socket handler + skip controls always see current track
   useEffect(() => { nowPlayingRef.current = nowPlaying; }, [nowPlaying]);
 
-  // ── Skip back — replay from 0:00, or jump to previous if < 3s in ─────────
   const handleSkipBack = useCallback(async () => {
     if (playElapsed < 3 && playHistoryRef.current.length > 0) {
       const prev = playHistoryRef.current[playHistoryRef.current.length - 1];
@@ -322,7 +401,6 @@ export default function Drive() {
     }
   }, [playElapsed, isPlaying, playAudio]);
 
-  // ── Skip forward — stop current, emit analytics, advance queue ───────────
   const handleSkipForward = useCallback(async () => {
     const current = nowPlayingRef.current;
     if (!current) return;
@@ -337,11 +415,9 @@ export default function Drive() {
     setNowPlaying(null);
     setPlayProgress(0);
     setPlayElapsed(0);
-    setStoryCount(n => n + 1);
     setQueue(q => q.filter(item => item.id !== current.poi_id));
   }, [playElapsed, tripId, stopAudio]);
 
-  // ── Now-playing card animation ────────────────────────────────────────────
   useEffect(() => {
     if (nowPlaying) {
       setShowCard(true);
@@ -352,7 +428,6 @@ export default function Drive() {
     }
   }, [nowPlaying, cardAnim]);
 
-  // ── Narrator pulse ────────────────────────────────────────────────────────
   useEffect(() => {
     if (isPlaying) {
       pulseLoop.current = Animated.loop(
@@ -377,7 +452,6 @@ export default function Drive() {
 
     sock.on('play_narration', (data: NowPlayingData) => {
       if (quietRef.current) return;
-      // Save outgoing track to history before replacing (capped at 5)
       if (nowPlayingRef.current) {
         playHistoryRef.current = [
           ...playHistoryRef.current.slice(-4),
@@ -437,7 +511,6 @@ export default function Drive() {
       const polyline   = routePreview.polylineCoords ?? [];
       const cats: string[] | null = filters.categoryFilter?.length ? filters.categoryFilter : null;
       const mode = trailMode ? 'hiking' : 'driving';
-      // Curation params come from customize via filters (drift 5.75 / 5.77 / 5.76).
       const density:      Density = (filters.density as Density) ?? 'balanced';
       const minRelevance: number  = filters.minRelevance ?? 0;
 
@@ -452,17 +525,11 @@ export default function Drive() {
         );
       }
 
-      // Pull the corridor sorted by significance DESC so curation's per-bin
-      // pass picks the most-relevant POI in each bin. Server-side LIMIT 500
-      // bounds round-trip size; curation trims further client-side.
       const fetched = await getPOIsAlongRoute(
         polyline, poiDist, cats, mode,
         { sortMode: 'significance_desc', minSignificance: minRelevance, resultLimit: 500 },
       );
 
-      // B7 (drift 5.74 + 5.76) — curate the fetched corridor down to a
-      // right-sized set. Drive consumes the curated array directly; no
-      // separate slice cap (the 40-marker cap on home is also gone).
       const durationMin = (routePreview.durationMin as number | undefined) ?? 0;
       const tripModeForCuration = mode === 'hiking' ? 'hiking' : 'driving';
       const HIKING_PACE_MIN_PER_MI = 20;
@@ -488,10 +555,6 @@ export default function Drive() {
         );
       }
 
-      // Project each curated POI onto the route polyline to get
-      // sequential arc-distance from start (used for queue ordering,
-      // map marker draw order, and the drive stats strip's
-      // POIs-ahead computation).
       const withArc = curated.curatedPOIs.map(p => ({
         poi: p,
         arc: arcLengthAlongRoute(p.lat, p.lng, polyline),
@@ -509,24 +572,19 @@ export default function Drive() {
         distanceMi: (arcMap.get(p.id) ?? 0) / 1609,
       })));
     })();
-  }, [params.routePreview, trailMode, poiDist]);
+  }, [params.routePreview, trailMode, poiDist]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // ── Diagnostic: render-side observability for corridor POI markers ─────────
-  // Persistent observability — pois is the curated set (B7). Count here
-  // mirrors curation output for cross-check against `[drive] fetch:state-set`.
   useEffect(() => {
     if (__DEV__) {
       console.info('[drive] render:markers source=pois count=' + pois.length);
     }
   }, [pois.length]);
 
-  // ── Re-center ─────────────────────────────────────────────────────────────
   const recenter = useCallback(() => {
     const loc = locationRef.current;
     if (loc) mapRef.current?.animateCamera({ center: loc, zoom: 15 }, { duration: 500 });
   }, []);
 
-  // ── End trip ──────────────────────────────────────────────────────────────
   const doEndTrip = useCallback(() => {
     stopAudio().catch(() => {});
     socketRef.current?.disconnect();
@@ -571,17 +629,34 @@ export default function Drive() {
     );
   }, [stopAudio, navigation]);
 
+  // ── Feedback / share — handlers preserved as carriers; visual surface
+  // dropped per Pine spec section 4 (sheet contents). Re-enable from a
+  // settings sheet or a long-press affordance in a follow-up.
+  const handleFeedback = async (poiId: string, rating: 'up' | 'down') => {
+    setRatedPois(prev => new Set(prev).add(poiId));
+    await submitContribution({
+      userId: tripId ?? 'anonymous',
+      type:   'narration_rating',
+      poiId,
+      details: { rating, narrator_slug: narrator?.slug ?? '' },
+    });
+  };
+  void handleFeedback;
+
+  const handleShare = () => {
+    const msg = nowPlaying
+      ? `Just heard about "${nowPlaying.poi_name}" on my XRoad trip to ${params.destination ?? 'my destination'}!`
+      : `Exploring ${params.destination ?? 'somewhere new'} with XRoad!`;
+    Share.share({ message: msg });
+  };
+  void handleShare;
+
   // ── Render ────────────────────────────────────────────────────────────────
-  const avatarBg    = narrator?.avatar_color_bg  ?? '#1E3A5F';
-  const avatarTxt   = narrator?.avatar_color_text ?? C.WHITE;
-  const cardBg      = narratorCardBg(avatarBg);
   const activePoiId = nowPlaying?.poi_id;
 
-  const remainingMin  = Math.max(0, (routePreview.durationMin ?? 0) - elapsedMin);
-  const remainingMi   = routePreview.distanceMi ?? 0;
+  const remainingMin = Math.max(0, (routePreview.durationMin ?? 0) - elapsedMin);
+  const remainingMi  = routePreview.distanceMi ?? 0;
 
-  // Live queue — distances update from GPS position when available.
-  // Falls back to arc-length distances (from route start) before GPS is acquired.
   const liveQueue = useMemo(() => {
     if (!userLocation) return queue;
     return queue.map(item => {
@@ -592,10 +667,11 @@ export default function Drive() {
   }, [queue, pois, userLocation]);
 
   const nextPoiDist      = liveQueue[0]?.distanceMi;
+  const nextStoryLabel   = nowPlaying?.poi_name
+    ?? liveQueue[0]?.name
+    ?? '—';
   const storiesAvailable = pois.length > 0 ? pois.length : totalStories;
 
-  // ── Stats strip (B6 / drift 5.78) ────────────────────────────────────────
-  // "POIs ahead · 1 every Xm" — recomputes as user advances along the route.
   const poisAhead = useMemo(() => {
     if (!userLocation || pois.length === 0) return pois.length;
     const userArc = arcLengthAlongRoute(
@@ -615,25 +691,16 @@ export default function Drive() {
     return Math.max(1, Math.round(Math.max(0, remainingMin) / poisAhead));
   }, [poisAhead, remainingMin]);
 
-  const handleFeedback = async (poiId: string, rating: 'up' | 'down') => {
-    setRatedPois(prev => new Set(prev).add(poiId));
-    await submitContribution({
-      userId: tripId ?? 'anonymous',
-      type:   'narration_rating',
-      poiId,
-      details: { rating, narrator_slug: narrator?.slug ?? '' },
-    });
-  };
+  const isPeek = snapLevel === 'peek';
+  const tripModeValue: 'driving' | 'hiking' = trailMode ? 'hiking' : 'driving';
 
-  const handleShare = () => {
-    const msg = nowPlaying
-      ? `Just heard about "${nowPlaying.poi_name}" on my XRoad trip to ${params.destination ?? 'my destination'}!`
-      : `Exploring ${params.destination ?? 'somewhere new'} with XRoad!`;
-    Share.share({ message: msg });
-  };
+  const markerColors = useMemo(
+    () => ({ primary: theme.colors.primary, ink: theme.colors.ink, paperSoft: theme.colors.paperSoft }),
+    [theme.colors.primary, theme.colors.ink, theme.colors.paperSoft],
+  );
 
   return (
-    <View style={s.root}>
+    <View style={[s.root, { backgroundColor: theme.colors.paper }]}>
       <StatusBar translucent barStyle="light-content" backgroundColor="transparent" />
 
       {/* ── FULL-SCREEN MAP ─────────────────────────────────────────────── */}
@@ -653,7 +720,7 @@ export default function Drive() {
         {routePreview.polylineCoords?.length > 1 && (
           <Polyline
             coordinates={routePreview.polylineCoords}
-            strokeColor="#4A90D9"
+            strokeColor={theme.colors.primary}
             strokeWidth={5}
             lineCap="round"
             lineJoin="round"
@@ -662,131 +729,157 @@ export default function Drive() {
 
         {userLocation && (
           <Marker coordinate={userLocation} anchor={{ x: 0.5, y: 0.5 }}>
-            <View style={s.userLocOuter}>
-              <View style={s.userLocInner} />
+            <View style={[s.userLocOuter, { backgroundColor: theme.colors.secondaryTint }]}>
+              <View style={[s.userLocInner, { backgroundColor: theme.colors.secondaryDeep, borderColor: theme.colors.paper }]} />
             </View>
           </Marker>
         )}
 
-        {/* Corridor POI dots — tracksViewChanges omitted (drift 5.66): on
-            react-native-maps 1.20.1 + Android, setting tracksViewChanges={false}
-            on a Marker with a custom View child captures an empty bitmap before
-            the child renders, leaving the marker invisible. Default true is the
-            visibility-safe choice. Perf note: 1000-marker corridors re-snapshot
-            on each prop change; if pan/zoom jitters at scale, switch to a
-            delayed-flip pattern (track=true initially, flip false after mount). */}
         {pois.map(poi => (
           <DrivePoiMarker
             key={poi.id}
             poi={poi}
             isActive={poi.id === activePoiId}
             onPress={() => setSelectedPoi(prev => prev?.id === poi.id ? null : poi)}
-            activeStyle={s.poiActive}
-            activeDotStyle={s.poiActiveDot}
+            themeColors={markerColors}
           />
         ))}
       </MapView>
 
       {/* ── TOP OVERLAYS ─────────────────────────────────────────────────── */}
-
-      {/* Top-left: back button + narrator chip */}
-      <View style={[s.overlayTL, { top: STATUS_BAR_PAD }]}>
-        <TouchableOpacity style={s.topBackBtn} onPress={handleGoBack} activeOpacity={0.7}>
-          <Text style={s.topBackArrow}>←</Text>
-        </TouchableOpacity>
-        <View style={[s.avatarCircle, { backgroundColor: avatarBg }]}>
-          <Text style={[s.avatarInitials, { color: avatarTxt }]}>
-            {narrator?.avatar_initials ?? '??'}
-          </Text>
-        </View>
-        <View>
-          <Text style={s.overlayName} numberOfLines={1}>
-            {narrator?.name ?? 'Narrator'}
-          </Text>
-          <View style={s.statusRow}>
-            <Animated.View style={[s.statusDot, { opacity: isPlaying ? pulseAnim : 0 }]} />
-            <Text style={s.statusText}>{isPlaying ? 'Narrating' : ' '}</Text>
-          </View>
-        </View>
+      <View style={[s.topRow, { top: STATUS_BAR_PAD }]} pointerEvents="box-none">
+        <PersonaPill
+          initials={narrator?.avatar_initials ?? '??'}
+          avatarColor={avatarColorFor(narrator)}
+          name={narrator?.name ?? 'Narrator'}
+          onBack={handleGoBack}
+        />
+        <StoriesBadge count={storiesAvailable} />
       </View>
 
-      {/* Top-right: total stories available along route */}
-      <View style={[s.overlayTR, { top: STATUS_BAR_PAD }]}>
-        <Text style={s.storyCountLabel}>{storiesAvailable}</Text>
-        <Text style={s.storyCountUnit}>{storiesAvailable === 1 ? 'story' : 'stories'}</Text>
-      </View>
-
-      {/* ETA card — full-width, below top overlays */}
-      <View style={[s.etaCard, { top: STATUS_BAR_PAD + 56 }]}>
-        <View style={s.etaCell}>
-          <Text style={s.etaValue}>
-            {remainingMin < 60
-              ? `${remainingMin}m`
-              : `${Math.floor(remainingMin / 60)}h ${remainingMin % 60}m`}
-          </Text>
-          <Text style={s.etaLabel}>remaining</Text>
-        </View>
-        <View style={s.etaDivider} />
-        <View style={s.etaCell}>
-          <Text style={s.etaValue}>{fmtMiles(remainingMi)}</Text>
-          <Text style={s.etaLabel}>distance</Text>
-        </View>
-        <View style={s.etaDivider} />
-        <View style={s.etaCell}>
-          <Text style={s.etaValue}>
-            {nextPoiDist !== undefined ? fmtMiles(nextPoiDist) : '—'}
-          </Text>
-          <Text style={s.etaLabel}>next story</Text>
-        </View>
+      {/* Stats strip — 3 columns under the top pills */}
+      <View
+        style={[
+          s.statsCard,
+          Platform.OS === 'android' ? { elevation: 6 } : shadows.control,
+          {
+            top:             STATUS_BAR_PAD + 56,
+            backgroundColor: theme.colors.paperSoft,
+            borderColor:     theme.colors.paperEdge,
+          },
+        ]}
+        pointerEvents="box-none"
+      >
+        <TripStat label="REMAINING" value={fmtRemaining(remainingMin)} />
+        <View style={[s.statsDivider, { backgroundColor: theme.colors.line }]} />
+        <TripStat label="DISTANCE"  value={fmtMiles(remainingMi)} />
+        <View style={[s.statsDivider, { backgroundColor: theme.colors.line }]} />
+        <TripStat
+          label="NEXT STORY"
+          value={nextPoiDist != null ? fmtMiles(nextPoiDist) : nextStoryLabel}
+        />
       </View>
 
       {/* Quiet mode badge */}
       {quietMode && (
-        <View style={[s.quietBadge, { top: STATUS_BAR_PAD + 126 }]}>
-          <Text style={s.quietBadgeText}>🔇 Quiet mode</Text>
+        <View
+          style={[
+            s.quietBadge,
+            {
+              top:             STATUS_BAR_PAD + 130,
+              backgroundColor: theme.colors.paperSoft,
+              borderColor:     theme.colors.paperEdge,
+            },
+          ]}
+        >
+          <IconVolumeOff size={14} color={theme.colors.ink} />
+          <Text style={[theme.textVariants.label, { color: theme.colors.ink, fontSize: 12 }]}>
+            Quiet
+          </Text>
         </View>
       )}
 
-      {/* Map style picker — bottom-right, above peeked sheet */}
-      <MapStylePicker
-        value={mapStyleId}
-        onChange={handleMapStyleChange}
-        mapboxToken={MAPBOX_TOKEN}
-        buttonBottom={driveSnaps.peek + 16}
-        buttonRight={12}
-      />
+      {/* Map controls — visible only when sheet is peeked */}
+      {isPeek && (
+        <>
+          <MapStylePicker
+            value={mapStyleId}
+            onChange={handleMapStyleChange}
+            mapboxToken={MAPBOX_TOKEN}
+            buttonBottom={driveSnaps.peek + 16}
+            buttonRight={12}
+          />
 
-      {/* Recenter button — above map style picker */}
-      <TouchableOpacity
-        style={[s.recenterBtn, { bottom: driveSnaps.peek + 64 }]}
-        onPress={recenter}
-        hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-        activeOpacity={0.7}
-      >
-        <CompassIcon />
-      </TouchableOpacity>
+          <TouchableOpacity
+            style={[
+              s.recenterBtn,
+              Platform.OS === 'android' ? { elevation: 6 } : shadows.control,
+              {
+                bottom:          driveSnaps.peek + 64,
+                backgroundColor: theme.colors.paperSoft,
+                borderColor:     theme.colors.paperEdge,
+              },
+            ]}
+            onPress={recenter}
+            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+            activeOpacity={0.7}
+          >
+            <CompassPuck color={theme.colors.primary} muted={theme.colors.inkFaint} ink={theme.colors.ink} />
+          </TouchableOpacity>
+        </>
+      )}
 
       {/* ── POI callout card ─────────────────────────────────────────────── */}
       {selectedPoi && (
-        <View style={[s.poiCallout, { bottom: driveSnaps.peek + 20 }]}>
+        <View
+          style={[
+            s.poiCallout,
+            Platform.OS === 'android' ? { elevation: 10 } : shadows.card,
+            {
+              bottom:          driveSnaps.peek + 20,
+              backgroundColor: theme.colors.paperSoft,
+              borderColor:     theme.colors.paperEdge,
+            },
+          ]}
+        >
           <View style={s.poiCalloutHeader}>
-            <Text style={s.poiCalloutName} numberOfLines={2}>{selectedPoi.name}</Text>
-            <TouchableOpacity
-              style={s.poiCalloutClose}
+            <Text
+              style={[theme.textVariants.label, { color: theme.colors.ink, flex: 1, fontSize: 15 }]}
+              numberOfLines={2}
+            >
+              {selectedPoi.name}
+            </Text>
+            <Pressable
               onPress={() => setSelectedPoi(null)}
               hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              style={{ width: 28, height: 28, alignItems: 'center', justifyContent: 'center' }}
             >
-              <Text style={s.poiCalloutCloseIcon}>×</Text>
-            </TouchableOpacity>
+              <IconClose size={20} color={theme.colors.inkSoft} />
+            </Pressable>
           </View>
           {!!selectedPoi.category && (
-            <Text style={s.poiCalloutCategory}>{selectedPoi.category}</Text>
+            <Text
+              style={[
+                theme.textVariants.eyebrow,
+                { color: theme.colors.primary, marginTop: 4 },
+              ]}
+            >
+              {selectedPoi.category}
+            </Text>
           )}
           {selectedPoi.tags?.length > 0 && (
             <View style={s.poiCalloutTags}>
               {selectedPoi.tags.slice(0, 5).map((tag, i) => (
-                <View key={i} style={s.poiCalloutTag}>
-                  <Text style={s.poiCalloutTagText}>{tag.replace(/_/g, ' ')}</Text>
+                <View
+                  key={i}
+                  style={[
+                    s.poiCalloutTag,
+                    { backgroundColor: theme.colors.paperWarm, borderColor: theme.colors.paperEdge },
+                  ]}
+                >
+                  <Text style={[theme.textVariants.meta, { color: theme.colors.inkSoft, fontSize: 11 }]}>
+                    {tag.replace(/_/g, ' ')}
+                  </Text>
                 </View>
               ))}
             </View>
@@ -795,160 +888,288 @@ export default function Drive() {
       )}
 
       {/* ── DRAGGABLE BOTTOM SHEET ───────────────────────────────────────── */}
-      <Animated.View style={[s.bottomSheet, { height: sheetAnim }]}>
-
+      <Animated.View
+        style={[
+          s.bottomSheet,
+          Platform.OS === 'android' ? { elevation: 16 } : shadows.sheet,
+          {
+            height:          sheetAnim,
+            backgroundColor: theme.colors.paper,
+            borderColor:     theme.colors.paperEdge,
+          },
+        ]}
+      >
         {/* Drag handle */}
         <View {...sheetPan} style={s.dragHandleWrap}>
-          <View style={s.dragHandle} />
-          <View style={s.driveLogoWrap}>
-            <Wordmark size="m" />
-          </View>
+          <View style={[s.dragHandle, { backgroundColor: theme.colors.line }]} />
         </View>
 
-        {/* ── Stats strip (B6 / drift 5.78) — visible in peek + expanded. */}
-        <View style={s.driveStatsStrip}>
-          <Text style={s.driveStatsText} numberOfLines={1}>
-            {poisAhead} {poisAhead === 1 ? 'POI' : 'POIs'} ahead
-            {poisAhead > 0 ? `  ·  1 every ${avgPaceAheadMin}m` : ''}
-          </Text>
-        </View>
+        {/* Watermark — large + breathing when peeked, smaller when expanded */}
+        <TripWatermark compact={!isPeek} />
 
-        {/* ── PEEK: play/pause + skip forward + end trip ────────────── */}
-        {snapLevel === 'peek' && (
+        {/* POIs-ahead line */}
+        <Text
+          allowFontScaling={false}
+          style={[
+            theme.textVariants.body,
+            { color: theme.colors.inkSoft, textAlign: 'center', fontSize: 13, marginBottom: 8 },
+          ]}
+          numberOfLines={1}
+        >
+          {poisAhead} {poisAhead === 1 ? 'POI' : 'POIs'} ahead
+          {poisAhead > 0 ? `  ·  1 every ${avgPaceAheadMin}m` : ''}
+        </Text>
+
+        {/* ── PEEK: minimal action row ─────────────────────────────────── */}
+        {isPeek && (
           <View style={s.peekRow}>
-            <TouchableOpacity style={s.audioPlayBtn} onPress={togglePlayPause} activeOpacity={0.8}>
-              <Text style={s.audioPlayIcon}>{isPlaying ? '⏸' : '▶'}</Text>
+            <TouchableOpacity
+              style={[s.bigPlayBtn, { backgroundColor: theme.colors.ink }]}
+              onPress={togglePlayPause}
+              activeOpacity={0.85}
+            >
+              {isPlaying
+                ? <IconPause size={26} color={theme.colors.paper} accent={theme.colors.paper} />
+                : <IconPlay  size={26} color={theme.colors.paper} accent={theme.colors.paper} />}
             </TouchableOpacity>
-            <TouchableOpacity style={s.audioSkipBtn} onPress={handleSkipForward} activeOpacity={0.7} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-              <Text style={s.audioSkipIcon}>⏭</Text>
+            <TouchableOpacity
+              style={[
+                s.skipBtn,
+                { backgroundColor: theme.colors.paperWarm, borderColor: theme.colors.paperEdge },
+              ]}
+              onPress={handleSkipForward}
+              activeOpacity={0.7}
+              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+            >
+              <IconSkipFwd size={20} color={theme.colors.ink} accent={theme.colors.accent} />
             </TouchableOpacity>
-            <TouchableOpacity style={[s.endTripBtn, { flex: 1 }]} onPress={handleEndTrip} activeOpacity={0.8}>
-              <Text style={s.endTripBtnText}>End trip</Text>
-            </TouchableOpacity>
+            <Pressable
+              style={({ pressed }) => [
+                s.endTripBtn,
+                Platform.OS === 'android' ? { elevation: 6 } : null,
+                {
+                  flex:            1,
+                  backgroundColor: pressed ? theme.colors.dangerDeep : theme.colors.danger,
+                  shadowColor:     theme.colors.danger,
+                  shadowOpacity:   0.45,
+                  shadowRadius:    14,
+                  shadowOffset:    { width: 0, height: 4 },
+                },
+              ]}
+              onPress={handleEndTrip}
+            >
+              <IconClose size={18} color="#FFFFFF" />
+              <Text style={[theme.textVariants.label, { color: '#FFFFFF', fontSize: 15 }]}>
+                End trip
+              </Text>
+            </Pressable>
           </View>
         )}
 
-        {/* ── EXPANDED: all controls locked together ────────────────── */}
-        {snapLevel !== 'peek' && (
+        {/* ── EXPANDED: media controls + queue + slider + footer ───────── */}
+        {!isPeek && (
           <>
-            {/* Scrollable middle — now playing + controls + queue + slider */}
-            <ScrollView style={s.sheetMiddle} showsVerticalScrollIndicator={false} bounces={false}>
+            <View style={[s.expandDivider, { backgroundColor: theme.colors.line }]} />
 
-              {/* Now playing card */}
+            <ScrollView style={s.sheetMiddle} showsVerticalScrollIndicator={false} bounces={false}>
+              {/* Now playing card (only when narrating) */}
               {showCard && (
-                <Animated.View style={[
-                  s.nowPlayingCard,
-                  { backgroundColor: cardBg, opacity: cardAnim,
-                    transform: [{ translateY: cardAnim.interpolate({ inputRange: [0, 1], outputRange: [12, 0] }) }] },
-                ]}>
+                <Animated.View
+                  style={[
+                    s.nowPlayingCard,
+                    {
+                      backgroundColor: theme.colors.paperWarm,
+                      borderColor:     theme.colors.paperEdge,
+                      opacity:         cardAnim,
+                      transform: [{ translateY: cardAnim.interpolate({ inputRange: [0, 1], outputRange: [12, 0] }) }],
+                    },
+                  ]}
+                >
                   <View style={s.nowPlayingHeader}>
-                    <View style={[s.nowPlayingDot, { backgroundColor: avatarBg }]} />
-                    <Text style={s.nowPlayingBadge}>Now playing</Text>
+                    <Animated.View
+                      style={[
+                        s.statusDot,
+                        { backgroundColor: theme.colors.primary, opacity: pulseAnim },
+                      ]}
+                    />
+                    <Text style={[theme.textVariants.eyebrow, { color: theme.colors.inkSoft }]}>
+                      Now playing
+                    </Text>
                   </View>
-                  <Text style={s.nowPlayingName} numberOfLines={1}>
+                  <Text
+                    style={[
+                      theme.textVariants.title,
+                      { color: theme.colors.ink, fontSize: 17, lineHeight: 22, marginTop: 4 },
+                    ]}
+                    numberOfLines={1}
+                  >
                     {nowPlaying?.poi_name ?? ''}
                   </Text>
-                  <View style={s.progressRail}>
-                    <View style={[s.progressFill, { width: `${Math.min(playProgress * 100, 100)}%` as any }]} />
+                  <View style={[s.progressRail, { backgroundColor: theme.colors.line }]}>
+                    <View
+                      style={[
+                        s.progressFill,
+                        {
+                          backgroundColor: theme.colors.primary,
+                          width:           `${Math.min(playProgress * 100, 100)}%` as any,
+                        },
+                      ]}
+                    />
                   </View>
                   <View style={s.progressLabels}>
-                    <Text style={s.progressTime}>{fmtSeconds(playElapsed)}</Text>
-                    <Text style={s.progressTime}>
+                    <Text style={[theme.textVariants.meta, { color: theme.colors.inkSoft, fontSize: 11 }]}>
+                      {fmtSeconds(playElapsed)}
+                    </Text>
+                    <Text style={[theme.textVariants.meta, { color: theme.colors.inkSoft, fontSize: 11 }]}>
                       {fmtSeconds(playDuration || (nowPlaying?.estimated_seconds ?? 0))}
                     </Text>
                   </View>
                 </Animated.View>
               )}
 
-              {/* Feedback card (when narrating) */}
-              {nowPlaying && (
-                <View style={s.feedbackCard}>
-                  <Text style={s.feedbackTitle} numberOfLines={2}>{nowPlaying.poi_name}</Text>
-                  <Text style={s.feedbackQuestion}>Rate this story</Text>
-                  {ratedPois.has(nowPlaying.poi_id) ? (
-                    <Text style={s.feedbackThanks}>Thanks for your feedback!</Text>
-                  ) : (
-                    <View style={s.feedbackBtns}>
-                      <TouchableOpacity style={s.feedbackBtn} onPress={() => handleFeedback(nowPlaying.poi_id, 'up')} activeOpacity={0.75}>
-                        <Text style={s.feedbackBtnIcon}>👍</Text>
-                        <Text style={s.feedbackBtnLabel}>Loved it</Text>
-                      </TouchableOpacity>
-                      <TouchableOpacity style={s.feedbackBtn} onPress={() => handleFeedback(nowPlaying.poi_id, 'down')} activeOpacity={0.75}>
-                        <Text style={s.feedbackBtnIcon}>👎</Text>
-                        <Text style={s.feedbackBtnLabel}>Not for me</Text>
-                      </TouchableOpacity>
-                    </View>
-                  )}
-                  <TouchableOpacity style={s.shareBtn} onPress={handleShare} activeOpacity={0.8}>
-                    <Text style={s.shareBtnText}>Share this story</Text>
-                  </TouchableOpacity>
-                </View>
+              {/* Media controls — 3 circular buttons centered */}
+              <View style={s.mediaControls}>
+                <TouchableOpacity
+                  style={[
+                    s.mediaSkipBtn,
+                    { backgroundColor: theme.colors.paperWarm, borderColor: theme.colors.paperEdge },
+                  ]}
+                  onPress={handleSkipBack}
+                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                  activeOpacity={0.75}
+                >
+                  <IconSkipBack size={22} color={theme.colors.ink} accent={theme.colors.accent} />
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[s.mediaPlayBtn, { backgroundColor: theme.colors.ink }]}
+                  onPress={togglePlayPause}
+                  activeOpacity={0.85}
+                >
+                  {isPlaying
+                    ? <IconPause size={28} color={theme.colors.paper} accent={theme.colors.paper} />
+                    : <IconPlay  size={28} color={theme.colors.paper} accent={theme.colors.paper} />}
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[
+                    s.mediaSkipBtn,
+                    { backgroundColor: theme.colors.paperWarm, borderColor: theme.colors.paperEdge },
+                  ]}
+                  onPress={handleSkipForward}
+                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                  activeOpacity={0.75}
+                >
+                  <IconSkipFwd size={22} color={theme.colors.ink} accent={theme.colors.accent} />
+                </TouchableOpacity>
+              </View>
+
+              {/* Up next */}
+              <Text
+                style={[
+                  theme.textVariants.eyebrow,
+                  { color: theme.colors.inkSoft, marginTop: 16, marginBottom: 8 },
+                ]}
+              >
+                Up next
+              </Text>
+              {liveQueue.length === 0 ? (
+                <Text
+                  style={{
+                    fontFamily: theme.fontFamilies.serifItalic,
+                    fontStyle:  'italic',
+                    fontSize:   13,
+                    color:      theme.colors.inkSoft,
+                    paddingVertical: 8,
+                  }}
+                >
+                  Loading stories…
+                </Text>
+              ) : (
+                liveQueue.slice(0, 5).map((item, idx) => (
+                  <View
+                    key={`${item.id}-${idx}`}
+                    style={[s.queueRow, { borderBottomColor: theme.colors.line }]}
+                  >
+                    <View style={[s.queueDot, { backgroundColor: theme.colors.primary }]} />
+                    <Text
+                      style={[theme.textVariants.body, { color: theme.colors.ink, flex: 1 }]}
+                      numberOfLines={1}
+                    >
+                      {item.name}
+                    </Text>
+                    <Text style={[theme.textVariants.meta, { color: theme.colors.inkSoft }]}>
+                      {fmtMiles(item.distanceMi)}
+                    </Text>
+                  </View>
+                ))
               )}
 
-              {/* Playback controls */}
-              <View style={s.audioControls}>
-                <TouchableOpacity style={s.audioSkipBtn} onPress={handleSkipBack} activeOpacity={0.7} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-                  <Text style={s.audioSkipIcon}>⏮</Text>
-                </TouchableOpacity>
-                <TouchableOpacity style={s.audioPlayBtn} onPress={togglePlayPause} activeOpacity={0.8}>
-                  <Text style={s.audioPlayIcon}>{isPlaying ? '⏸' : '▶'}</Text>
-                </TouchableOpacity>
-                <TouchableOpacity style={s.audioSkipBtn} onPress={handleSkipForward} activeOpacity={0.7} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-                  <Text style={s.audioSkipIcon}>⏭</Text>
-                </TouchableOpacity>
+              {/* Story corridor */}
+              <View style={{ marginTop: 18 }}>
+                <LabeledSlider
+                  label="Story corridor"
+                  value={poiDist}
+                  onChange={setPoiDist}
+                  min={POI_MIN}
+                  max={POI_MAX}
+                  step={POI_STEP}
+                  formatValue={(v) => fmtMiles(v)}
+                  formatEdge={(v) => fmtMiles(v)}
+                />
               </View>
 
-              {/* Up next queue — sorted closest first.
-                  liveQueue (not queue) so distances update with GPS movement
-                  and survive server-pushed items that omit distanceMi. */}
-              <View style={s.upNext}>
-                <Text style={s.upNextLabel}>Up next</Text>
-                {liveQueue.slice(0, 5).map((item, idx) => (
-                  <View key={`${item.id}-${idx}`} style={s.queueRow}>
-                    <View style={s.queueDot} />
-                    <Text style={s.queueName} numberOfLines={1}>{item.name}</Text>
-                    <Text style={s.queueDist}>{fmtMiles(item.distanceMi)}</Text>
-                  </View>
-                ))}
-                {liveQueue.length === 0 && (
-                  <Text style={s.queueEmpty}>Loading stories…</Text>
-                )}
+              {/* Mode toggle */}
+              <View style={{ marginTop: 18, marginBottom: 6 }}>
+                <ModePillRow
+                  value={tripModeValue}
+                  onChange={(next) => setTrailMode(next === 'hiking')}
+                />
               </View>
-
-              {/* Story corridor slider */}
-              <View style={s.sliderLabelRow}>
-                <Text style={s.sliderLabelKey}>Story corridor</Text>
-                <Text style={s.sliderLabelVal}>{fmtMiles(poiDist)}</Text>
-              </View>
-              <View style={s.sliderRow}>
-                <Text style={s.sliderEdge}>{fmtMiles(POI_MIN)}</Text>
-                <PoiSlider value={poiDist} onChange={setPoiDist} />
-                <Text style={s.sliderEdge}>{fmtMiles(POI_MAX)}</Text>
-              </View>
-
             </ScrollView>
 
-            {/* Mode segment — pinned above action row */}
-            <View style={s.modeSegment}>
-              <TouchableOpacity style={[s.modeSeg, !trailMode && s.modeSegActive]} onPress={() => setTrailMode(false)} activeOpacity={0.8}>
-                <Text style={[s.modeSegText, !trailMode && s.modeSegTextActive]}>🚗 Driving</Text>
-              </TouchableOpacity>
-              <View style={s.modeSegDivider} />
-              <TouchableOpacity style={[s.modeSeg, trailMode && s.modeSegActive]} onPress={() => setTrailMode(true)} activeOpacity={0.8}>
-                <Text style={[s.modeSegText, trailMode && s.modeSegTextActive]}>🥾 Hiking</Text>
-              </TouchableOpacity>
-            </View>
-
-            {/* Action row — always at bottom */}
-            <View style={s.actions}>
-              <TouchableOpacity style={[s.quietBtn, quietMode && s.quietBtnActive]} onPress={() => setQuietMode(q => !q)} activeOpacity={0.8}>
-                <Text style={[s.quietBtnText, quietMode && s.quietBtnTextActive]}>
-                  {quietMode ? '▶ Resume' : '🔇 Quiet'}
+            {/* Footer — Quiet + End trip */}
+            <View style={s.footer}>
+              <Pressable
+                style={({ pressed }) => [
+                  s.quietBtn,
+                  {
+                    backgroundColor: quietMode ? theme.colors.primaryTint : theme.colors.paperWarm,
+                    borderColor:     quietMode ? theme.colors.primary     : theme.colors.paperEdge,
+                    opacity:         pressed ? 0.85 : 1,
+                  },
+                ]}
+                onPress={() => setQuietMode(q => !q)}
+              >
+                {quietMode
+                  ? <IconVolume    size={18} color={theme.colors.primary} accent={theme.colors.primary} />
+                  : <IconVolumeOff size={18} color={theme.colors.ink}    accent={theme.colors.accent} />}
+                <Text
+                  style={[
+                    theme.textVariants.label,
+                    { color: quietMode ? theme.colors.primary : theme.colors.ink, fontSize: 13 },
+                  ]}
+                >
+                  {quietMode ? 'Resume' : 'Quiet'}
                 </Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={s.endTripBtn} onPress={handleEndTrip} activeOpacity={0.8}>
-                <Text style={s.endTripBtnText}>End trip</Text>
-              </TouchableOpacity>
+              </Pressable>
+              <Pressable
+                style={({ pressed }) => [
+                  s.footerEndBtn,
+                  {
+                    backgroundColor: pressed ? theme.colors.dangerDeep : theme.colors.danger,
+                    shadowColor:     theme.colors.danger,
+                    shadowOpacity:   0.45,
+                    shadowRadius:    14,
+                    shadowOffset:    { width: 0, height: 4 },
+                  },
+                  Platform.OS === 'android' ? { elevation: 6 } : null,
+                ]}
+                onPress={handleEndTrip}
+              >
+                <IconClose size={18} color="#FFFFFF" />
+                <Text style={[theme.textVariants.label, { color: '#FFFFFF', fontSize: 14 }]}>
+                  End trip
+                </Text>
+              </Pressable>
             </View>
           </>
         )}
@@ -959,266 +1180,240 @@ export default function Drive() {
   );
 }
 
-// ── Compass icon (recenter button) ───────────────────────────────────────────
-function CompassIcon() {
+// ── Compass puck (recenter button glyph) ─────────────────────────────────────
+
+function CompassPuck({ color, muted, ink }: { color: string; muted: string; ink: string }) {
   return (
-    <View style={ci.wrap}>
-      {/* North tip — filled teal */}
-      <View style={ci.tipNorth} />
-      {/* South tip — muted */}
-      <View style={ci.tipSouth} />
-      {/* Center dot */}
-      <View style={ci.dot} />
-      {/* N label */}
-      <Text style={ci.nLabel}>N</Text>
+    <View style={cp.wrap}>
+      <View style={[cp.tipNorth, { borderBottomColor: color }]} />
+      <View style={[cp.tipSouth, { borderTopColor:    muted }]} />
+      <View style={[cp.dot,      { backgroundColor:   ink }]} />
     </View>
   );
 }
-const ci = StyleSheet.create({
-  wrap:      { width: 22, height: 22, alignItems: 'center', justifyContent: 'center' },
-  tipNorth:  {
+
+const cp = StyleSheet.create({
+  wrap: { width: 22, height: 22, alignItems: 'center', justifyContent: 'center' },
+  tipNorth: {
     position: 'absolute', top: 0,
     width: 0, height: 0,
     borderLeftWidth: 5, borderRightWidth: 5, borderBottomWidth: 11,
     borderLeftColor: 'transparent', borderRightColor: 'transparent',
-    borderBottomColor: '#2EC4B6',
   },
-  tipSouth:  {
+  tipSouth: {
     position: 'absolute', bottom: 0,
     width: 0, height: 0,
     borderLeftWidth: 5, borderRightWidth: 5, borderTopWidth: 11,
     borderLeftColor: 'transparent', borderRightColor: 'transparent',
-    borderTopColor: 'rgba(160,124,82,0.5)',
   },
-  dot:       {
-    width: 5, height: 5, borderRadius: 2.5,
-    backgroundColor: C.BG_BASE,
-  },
-  nLabel:    {
-    position: 'absolute', top: -5,
-    fontSize: 7, fontWeight: '800', color: '#2EC4B6',
-    letterSpacing: 0,
-  },
+  dot: { width: 5, height: 5, borderRadius: 2.5 },
 });
-
-// ── Narrator card tint ────────────────────────────────────────────────────────
-function narratorCardBg(hex: string): string {
-  try {
-    const r = parseInt(hex.slice(1, 3), 16);
-    const g = parseInt(hex.slice(3, 5), 16);
-    const b = parseInt(hex.slice(5, 7), 16);
-    const mix = (c: number) => Math.round(c * 0.18 + 26 * 0.82);
-    return `rgb(${mix(r)},${mix(g)},${mix(b)})`;
-  } catch {
-    return C.BG_SURFACE;
-  }
-}
 
 // ── Styles ────────────────────────────────────────────────────────────────────
 
 const s = StyleSheet.create({
-  root: { flex: 1, backgroundColor: C.BG_BASE },
+  root: { flex: 1 },
 
-  // User location dot — green pulsing
-  userLocOuter: { width: 22, height: 22, borderRadius: 11, backgroundColor: `${C.ACCENT}33`, alignItems: 'center', justifyContent: 'center' },
-  userLocInner: { width: 12, height: 12, borderRadius: 6, backgroundColor: C.ACCENT_TEXT, borderWidth: 2, borderColor: C.BG_BASE },
+  userLocOuter: { width: 22, height: 22, borderRadius: 11, alignItems: 'center', justifyContent: 'center' },
+  userLocInner: { width: 12, height: 12, borderRadius: 6,  borderWidth: 2 },
 
-  // POI markers — inactive POIs render via PoiMarkerX (drift 5.94). The
-  // active = currently-narrating halo + inner dot stays as a distinct
-  // now-playing visual.
-  poiActive:    { width: 32, height: 32, borderRadius: 16, backgroundColor: `${C.WARNING_BRIGHT}40`, alignItems: 'center', justifyContent: 'center' },
-  poiActiveDot: { width: 18, height: 18, borderRadius: 9, backgroundColor: C.WARNING_BRIGHT, borderWidth: 2, borderColor: C.BG_BASE },
-
-  // Overlays
-  overlayTL: {
-    position: 'absolute', left: 14,
-    flexDirection: 'row', alignItems: 'center', gap: 10,
-    backgroundColor: 'rgba(38,26,12,0.88)',
-    borderRadius: 24, paddingHorizontal: 10, paddingVertical: 7,
-    borderWidth: 1, borderColor: C.BORDER_SUBTLE,
+  // Top row — PersonaPill left, StoriesBadge right
+  topRow: {
+    position:       'absolute',
+    left:           12,
+    right:          12,
+    flexDirection:  'row',
+    alignItems:     'flex-start',
+    justifyContent: 'space-between',
   },
-  overlayTR: {
-    position: 'absolute', right: 14,
-    alignItems: 'center',
-    backgroundColor: 'rgba(38,26,12,0.88)',
-    borderRadius: 16, paddingHorizontal: 12, paddingVertical: 7,
-    borderWidth: 1, borderColor: C.BORDER_SUBTLE,
+
+  // 3-column stats card
+  statsCard: {
+    position:       'absolute',
+    left:           12,
+    right:          12,
+    flexDirection:  'row',
+    alignItems:     'center',
+    height:         60,
+    borderRadius:   18,
+    borderWidth:    1,
+    paddingVertical: 8,
   },
-  avatarCircle:   { width: 34, height: 34, borderRadius: 17, alignItems: 'center', justifyContent: 'center' },
-  avatarInitials: { fontSize: 13, fontWeight: '700' },
-  overlayName:    { fontSize: 12, fontWeight: '600', color: C.TEXT_PRIMARY, maxWidth: 110 },
-  statusRow:      { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 2 },
-  statusDot:      { width: 7, height: 7, borderRadius: 3.5, backgroundColor: C.ACCENT_TEXT },
-  statusText:     { fontSize: 11, color: C.ACCENT_TEXT, fontWeight: '500' },
-
-  storyCountLabel: { fontSize: 16, fontWeight: '800', color: C.TEXT_PRIMARY, textAlign: 'center' },
-  storyCountUnit:  { fontSize: 10, color: C.TEXT_TERTIARY, textTransform: 'uppercase', letterSpacing: 0.5, textAlign: 'center' },
-
-  // ETA card
-  etaCard: {
-    position: 'absolute', left: 12, right: 12,
-    height: 56,
-    backgroundColor: 'rgba(245,240,232,0.97)',
-    borderRadius: 14,
-    borderWidth: 1, borderColor: 'rgba(160,124,82,0.20)',
-    flexDirection: 'row', alignItems: 'center',
-    shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.18, shadowRadius: 6,
-    elevation: 4,
+  statsDivider: {
+    width:   StyleSheet.hairlineWidth,
+    height:  32,
   },
-  etaCell:    { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 1 },
-  etaValue:   { fontSize: 15, fontWeight: '800', color: '#1a1208' },
-  etaLabel:   { fontSize: 9, fontWeight: '600', color: 'rgba(26,18,8,0.45)', textTransform: 'uppercase', letterSpacing: 0.5 },
-  etaDivider: { width: StyleSheet.hairlineWidth, height: 28, backgroundColor: 'rgba(160,124,82,0.30)' },
 
+  // Quiet badge
   quietBadge: {
-    position: 'absolute', alignSelf: 'center',
-    backgroundColor: 'rgba(38,26,12,0.90)',
-    borderRadius: 20, paddingHorizontal: 14, paddingVertical: 5,
-    borderWidth: 1, borderColor: C.BORDER_SUBTLE,
+    position:          'absolute',
+    alignSelf:         'center',
+    flexDirection:     'row',
+    alignItems:        'center',
+    gap:               6,
+    paddingHorizontal: 14,
+    paddingVertical:   6,
+    borderRadius:      999,
+    borderWidth:       1,
   },
-  quietBadgeText: { fontSize: 12, color: C.TEXT_PRIMARY, fontWeight: '600' },
 
-  // POI callout card
-  poiCallout: {
-    position: 'absolute', left: 16, right: 16,
-    backgroundColor: 'rgba(38,26,12,0.97)',
-    borderRadius: 14, borderWidth: 1, borderColor: C.BORDER_SUBTLE,
-    padding: 14,
-    ...Platform.select({
-      ios:     { shadowColor: '#000', shadowOpacity: 0.45, shadowRadius: 12, shadowOffset: { width: 0, height: 4 } },
-      android: { elevation: 8 },
-      default: {},
-    }),
-  },
-  poiCalloutHeader:    { flexDirection: 'row', alignItems: 'flex-start', gap: 8 },
-  poiCalloutName:      { flex: 1, fontSize: 15, fontWeight: '700', color: C.TEXT_PRIMARY },
-  poiCalloutClose:     { width: 28, height: 28, alignItems: 'center', justifyContent: 'center' },
-  poiCalloutCloseIcon: { fontSize: 22, color: C.TEXT_TERTIARY, lineHeight: 24 },
-  poiCalloutCategory:  { fontSize: 11, fontWeight: '600', color: C.ACCENT_TEXT, textTransform: 'uppercase', letterSpacing: 0.6, marginTop: 5 },
-  poiCalloutTags:      { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 8 },
-  poiCalloutTag:       { backgroundColor: C.BG_ELEVATED, borderRadius: 6, borderWidth: 1, borderColor: C.BORDER_SUBTLE, paddingHorizontal: 8, paddingVertical: 3 },
-  poiCalloutTagText:   { fontSize: 11, fontWeight: '500', color: C.TEXT_SECONDARY },
-
+  // Recenter / map controls
   recenterBtn: {
-    position: 'absolute', right: 14, width: 38, height: 38, borderRadius: 19,
-    backgroundColor: 'rgba(38,26,12,0.90)',
-    borderWidth: 1, borderColor: C.BORDER_SUBTLE,
-    alignItems: 'center', justifyContent: 'center',
+    position:        'absolute',
+    right:           14,
+    width:           44,
+    height:          44,
+    borderRadius:    22,
+    borderWidth:     1,
+    alignItems:      'center',
+    justifyContent:  'center',
   },
 
-  // Draggable bottom sheet
+  // POI callout
+  poiCallout: {
+    position:     'absolute',
+    left:         16,
+    right:        16,
+    borderRadius: 18,
+    borderWidth:  1,
+    padding:      14,
+  },
+  poiCalloutHeader: { flexDirection: 'row', alignItems: 'flex-start', gap: 8 },
+  poiCalloutTags:   { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 8 },
+  poiCalloutTag: {
+    borderRadius:      8,
+    borderWidth:       1,
+    paddingHorizontal: 8,
+    paddingVertical:   3,
+  },
+
+  // Bottom sheet
   bottomSheet: {
-    position: 'absolute', bottom: 0, left: 0, right: 0,
-    backgroundColor: 'rgba(38,26,12,0.97)',
-    borderTopLeftRadius: 20, borderTopRightRadius: 20,
-    borderTopWidth: 1, borderColor: C.BORDER_SUBTLE,
-    paddingHorizontal: 16,
-    overflow: 'hidden',
+    position:           'absolute',
+    bottom:             0,
+    left:               0,
+    right:              0,
+    borderTopLeftRadius:  24,
+    borderTopRightRadius: 24,
+    borderTopWidth:     1,
+    paddingHorizontal:  16,
+    overflow:           'hidden',
   },
   dragHandleWrap: { alignItems: 'center', paddingVertical: 10 },
-  dragHandle:     { width: 36, height: 4, backgroundColor: C.BORDER_STRONG, borderRadius: 2 },
-  sheetMiddle:    { flex: 1 },
+  dragHandle:     { width: 40, height: 4, borderRadius: 2 },
 
-  // Drive stats strip (B6 / drift 5.78) — compact single-line under the
-  // drag handle; visible in both peek and expanded sheet states.
-  driveStatsStrip: {
-    alignItems: 'center', paddingTop: 2, paddingBottom: 8,
-    borderBottomWidth: StyleSheet.hairlineWidth, borderColor: C.BORDER_SUBTLE,
-    marginBottom: 6,
+  expandDivider: { height: 1, marginVertical: 4 },
+
+  sheetMiddle: { flex: 1 },
+
+  // Peek action row
+  peekRow: {
+    flexDirection: 'row',
+    alignItems:    'center',
+    gap:           10,
+    paddingBottom: 6,
   },
-  driveStatsText: { fontSize: 12, color: C.TEXT_SECONDARY, fontWeight: '600' },
-
-  // Peek: minimal controls row
-  peekRow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingBottom: 6 },
+  bigPlayBtn: {
+    width:           52,
+    height:          52,
+    borderRadius:    26,
+    alignItems:      'center',
+    justifyContent:  'center',
+  },
+  skipBtn: {
+    width:           44,
+    height:          44,
+    borderRadius:    22,
+    borderWidth:     1,
+    alignItems:      'center',
+    justifyContent:  'center',
+  },
+  endTripBtn: {
+    flexDirection:     'row',
+    alignItems:        'center',
+    justifyContent:    'center',
+    gap:               8,
+    paddingVertical:   14,
+    paddingHorizontal: 18,
+    borderRadius:      999,
+    minHeight:         52,
+  },
 
   // Now playing
-  nowPlayingCard:   { borderRadius: 14, paddingHorizontal: 14, paddingTop: 11, paddingBottom: 13, marginBottom: 8 },
-  nowPlayingHeader: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 4 },
-  nowPlayingDot:    { width: 8, height: 8, borderRadius: 4 },
-  nowPlayingBadge:  { fontSize: 10, fontWeight: '700', color: C.TEXT_TERTIARY, textTransform: 'uppercase', letterSpacing: 0.6 },
-  nowPlayingName:   { fontSize: 15, fontWeight: '700', color: C.TEXT_PRIMARY, marginBottom: 10 },
-  progressRail:     { height: 4, backgroundColor: C.BORDER_SUBTLE, borderRadius: 2 },
-  progressFill:     { height: 4, backgroundColor: C.ACCENT_TEXT, borderRadius: 2, position: 'absolute', left: 0 },
-  progressLabels:   { flexDirection: 'row', justifyContent: 'space-between', marginTop: 5 },
-  progressTime:     { fontSize: 11, color: C.TEXT_TERTIARY, fontWeight: '500' },
+  nowPlayingCard: {
+    borderRadius: 16,
+    borderWidth:  1,
+    padding:      14,
+    marginBottom: 8,
+  },
+  nowPlayingHeader: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  statusDot: { width: 8, height: 8, borderRadius: 4 },
+  progressRail: { height: 4, borderRadius: 2, marginTop: 10, overflow: 'hidden' },
+  progressFill: { height: 4, borderRadius: 2, position: 'absolute', left: 0 },
+  progressLabels: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 5 },
 
-  // Audio controls
-  audioControls: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 28, marginBottom: 10 },
-  audioSkipBtn:  { width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center', backgroundColor: C.BG_ELEVATED, borderWidth: 1, borderColor: C.BORDER_SUBTLE },
-  audioSkipIcon: { fontSize: 18, color: C.TEXT_SECONDARY },
-  audioPlayBtn:  { width: 52, height: 52, borderRadius: 26, alignItems: 'center', justifyContent: 'center', backgroundColor: C.TEXT_PRIMARY },
-  audioPlayIcon: { fontSize: 22, color: C.BG_BASE },
-
-  // Top-left back button (map overlay)
-  topBackBtn:   { width: 36, height: 36, borderRadius: 18, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(38,26,12,0.80)', marginRight: 2 },
-  topBackArrow: { fontSize: 20, color: C.TEXT_PRIMARY },
+  // Media controls — deployed sheet
+  mediaControls: {
+    flexDirection:  'row',
+    alignItems:     'center',
+    justifyContent: 'center',
+    gap:            28,
+    marginTop:      12,
+    marginBottom:   4,
+  },
+  mediaSkipBtn: {
+    width:           44,
+    height:          44,
+    borderRadius:    22,
+    borderWidth:     1,
+    alignItems:      'center',
+    justifyContent:  'center',
+  },
+  mediaPlayBtn: {
+    width:           58,
+    height:          58,
+    borderRadius:    29,
+    alignItems:      'center',
+    justifyContent:  'center',
+  },
 
   // Up next
-  upNext:      { marginBottom: 6 },
-
-  // POI slider
-  sliderLabelRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'baseline', marginTop: 14, marginBottom: 10 },
-  sliderLabelKey: { fontSize: 10, fontWeight: '700', color: C.TEXT_TERTIARY, textTransform: 'uppercase', letterSpacing: 0.8 },
-  sliderLabelVal: { fontSize: 14, fontWeight: '700', color: C.ACCENT_TEXT },
-  sliderRow:      { flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 12 },
-  sliderEdge:     { fontSize: 11, color: C.TEXT_TERTIARY, minWidth: 36, textAlign: 'center' },
-  upNextLabel: { fontSize: 10, fontWeight: '700', color: C.TEXT_TERTIARY, textTransform: 'uppercase', letterSpacing: 0.8, marginBottom: 8 },
-  queueRow:    { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 7, borderBottomWidth: StyleSheet.hairlineWidth, borderColor: C.BORDER_SUBTLE },
-  queueDot:    { width: 8, height: 8, borderRadius: 4, backgroundColor: C.WARNING_BRIGHT, flexShrink: 0 },
-  queueName:   { flex: 1, fontSize: 13, fontWeight: '500', color: C.TEXT_SECONDARY },
-  queueDist:   { fontSize: 12, color: C.TEXT_TERTIARY, fontWeight: '500' },
-  queueEmpty:  { fontSize: 13, color: C.TEXT_TERTIARY, textAlign: 'center', paddingVertical: 10 },
-
-  // Mode segmented control
-  modeSegment: {
-    flexDirection: 'row', height: 40,
-    borderRadius: 10, borderWidth: 1.5, borderColor: C.BORDER_STRONG,
-    overflow: 'hidden', marginBottom: 10,
+  queueRow: {
+    flexDirection:    'row',
+    alignItems:       'center',
+    gap:              10,
+    paddingVertical:  9,
+    borderBottomWidth: StyleSheet.hairlineWidth,
   },
-  modeSeg: {
-    flex: 1, alignItems: 'center', justifyContent: 'center',
-    backgroundColor: 'transparent',
-  },
-  modeSegActive:    { backgroundColor: C.ACCENT_LIGHT },
-  modeSegText:      { fontSize: 13, fontWeight: '600', color: C.TEXT_TERTIARY },
-  modeSegTextActive:{ color: C.ACCENT_TEXT },
-  modeSegDivider:   { width: 1.5, backgroundColor: C.BORDER_STRONG },
+  queueDot: { width: 8, height: 8, borderRadius: 4, flexShrink: 0 },
 
-  // Actions row — paddingBottom 16 ensures End trip CTA stays ≥16px above the
-  // SafeAreaView inset edge in expanded state, clearing Android nav / gesture
-  // zone. Peek state clearance comes from driveSnaps.peek (insets.bottom + 16).
-  actions:      { flexDirection: 'row', gap: 10, paddingTop: 0, paddingBottom: 16 },
-
-  // Quiet mode — ghost/secondary
-  quietBtn:         { borderRadius: 12, borderWidth: 1.5, borderColor: C.BORDER_STRONG, paddingHorizontal: 18, height: 48, alignItems: 'center', justifyContent: 'center', backgroundColor: 'transparent' },
-  quietBtnActive:   { borderColor: C.ACCENT_BORDER, backgroundColor: C.ACCENT_LIGHT },
-  quietBtnText:     { fontSize: 13, fontWeight: '600', color: C.TEXT_SECONDARY },
-  quietBtnTextActive: { color: C.ACCENT_TEXT },
-
-  // End trip — primary destructive
-  endTripBtn:     { flex: 1, height: 48, borderRadius: 12, alignItems: 'center', justifyContent: 'center', backgroundColor: C.DANGER },
-  endTripBtnText: { fontSize: 15, fontWeight: '700', color: '#FFFFFF' },
-
-  feedbackCard: {
-    backgroundColor: C.BG_ELEVATED,
-    borderRadius: 14, borderWidth: 1, borderColor: C.BORDER_SUBTLE,
-    padding: 16, gap: 10, marginBottom: 12,
+  // Footer
+  footer: {
+    flexDirection: 'row',
+    gap:           10,
+    paddingTop:    8,
+    paddingBottom: 16,
   },
-  feedbackTitle:    { fontSize: 14, fontWeight: '700', color: C.TEXT_PRIMARY },
-  feedbackQuestion: { fontSize: 12, color: C.TEXT_TERTIARY, fontWeight: '500' },
-  feedbackThanks:   { fontSize: 13, color: C.ACCENT_TEXT, fontWeight: '600' },
-  feedbackBtns:     { flexDirection: 'row', gap: 10 },
-  feedbackBtn: {
-    flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6,
-    borderRadius: 10, borderWidth: 1, borderColor: C.BORDER_STRONG,
-    paddingVertical: 10, backgroundColor: C.BG_ELEVATED,
+  quietBtn: {
+    flexDirection:     'row',
+    alignItems:        'center',
+    justifyContent:    'center',
+    gap:               6,
+    paddingHorizontal: 14,
+    paddingVertical:   10,
+    borderRadius:      14,
+    borderWidth:       1,
+    minHeight:         48,
   },
-  feedbackBtnIcon:  { fontSize: 16 },
-  feedbackBtnLabel: { fontSize: 13, fontWeight: '600', color: C.TEXT_SECONDARY },
-  shareBtn: {
-    borderRadius: 10, borderWidth: 1, borderColor: C.BORDER_STRONG,
-    paddingVertical: 11, alignItems: 'center', backgroundColor: C.BG_ELEVATED,
+  footerEndBtn: {
+    flex:              1,
+    flexDirection:     'row',
+    alignItems:        'center',
+    justifyContent:    'center',
+    gap:               8,
+    paddingHorizontal: 14,
+    paddingVertical:   12,
+    borderRadius:      14,
+    minHeight:         48,
   },
-  shareBtnText:  { fontSize: 13, fontWeight: '600', color: C.TEXT_SECONDARY },
-  driveLogoWrap: { marginTop: 4, opacity: 0.5 },
 });

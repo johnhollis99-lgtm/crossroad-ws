@@ -1,33 +1,22 @@
 /**
- * Map style picker — Field Notes brand grammar (drift 5.98).
+ * Map style picker — Pine palette.
  *
- * Trigger: cream paper pill anchored absolutely on the parent screen,
- * Layers SVG glyph + small "MAP" mono label, e2 shadow. Colors are locked
- * to light-theme constants so the trigger stays cream-on-map in both
- * schemes (matches the Wordmark pill, ModePillRow, PoiCallout,
- * CoordinatesPill family).
+ * Trigger: paperWarm pill, Layers SVG glyph + "MAP" eyebrow label, control
+ * shadow. Pine is single-dark so the trigger and panel both sit on the dark
+ * forest surface — no light/dark posture to lock against.
  *
- * Panel: theme-aware paper surface (flips to dark paper in dark mode —
- * the picker is interactive UI, not a branded chip), "MAP STYLE" mono
- * kicker, 1px ink-rule divider, one row per available MapStyleId.
- * Rows render the display name in Fraunces italic 500 17px and a mono
- * uppercase descriptor sublabel; the active row carries a small ink-red
- * dot on the right (editorial / Field Notes aesthetic — the dot reads
- * cleaner than a checkmark inside the editorial type ramp).
+ * Panel: paper surface, "MAP STYLE" eyebrow kicker, hairline line divider,
+ * one row per available MapStyleId. Rows render the display name in
+ * Instrument Serif italic 17px and a DM Sans uppercase eyebrow descriptor.
+ * The active row carries a small emerald (primary) dot on the right.
  *
  * The underlying MAP_STYLES catalog and MapStyleId enum (in
  * lib/mapStyle.ts) are untouched. STYLE_DISPLAY here maps id → visible
- * name + descriptor without renaming the catalog keys; Mapbox style
- * URLs go through unchanged.
+ * name + descriptor without renaming the catalog keys.
  *
- * Prop signature notes:
- *  - `mapboxToken` is retained on the interface for backward compat but
- *    no longer consumed (the pre-drift-5.98 thumbnail visuals are gone).
- *  - `trailMode` / `onTrailToggle` are retained for backward compat but
- *    no longer rendered — they were never wired from any screen per the
- *    CLAUDE.md "still exists but is not wired from any screen" note.
- *    Removing the props would break existing call-site interfaces;
- *    leaving them inert is the lower-blast-radius option.
+ * Prop signature notes (preserved for backward compat):
+ *  - `mapboxToken` is no longer consumed (thumbnail visuals are gone).
+ *  - `trailMode` / `onTrailToggle` are accepted but inert.
  */
 
 import React, { useState } from 'react';
@@ -41,30 +30,28 @@ import {
 } from 'react-native';
 import Svg, { Path } from 'react-native-svg';
 
-import { lightTheme, useTheme } from '../src/design/theme';
+import { useTheme } from '../src/design/theme';
+import { shadows } from '../src/design/tokens';
 import { MAP_STYLES, MapStyleId } from '../lib/mapStyle';
 
 interface Props {
   value: MapStyleId;
   onChange: (id: MapStyleId) => void;
-  /** Retained for backward compat; unused after drift 5.98 (no thumbnails). */
+  /** Retained for backward compat; unused (no thumbnails). */
   mapboxToken: string;
   /** Position from top — panel opens downward (legacy screens). */
   buttonTop?: number;
   /** Position from bottom — panel opens upward (preferred). */
   buttonBottom?: number;
   buttonRight?: number;
-  /** Retained for backward compat; not rendered after drift 5.98. */
+  /** Retained for backward compat; not rendered. */
   trailMode?: boolean;
-  /** Retained for backward compat; not rendered after drift 5.98. */
+  /** Retained for backward compat; not rendered. */
   onTrailToggle?: (on: boolean) => void;
 }
 
 const STYLE_ORDER: MapStyleId[] = ['standard', 'dark', 'satellite', 'topo'];
 
-// Catalog → display mapping (drift 5.98). Mapbox style URLs in
-// lib/mapStyle.ts and the MapStyleId enum are untouched; only the
-// visible name + descriptor pair changes here.
 const STYLE_DISPLAY: Record<MapStyleId, { name: string; descriptor: string }> = {
   standard:  { name: 'Default',   descriptor: 'STREETS' },
   dark:      { name: 'Dark',      descriptor: 'NIGHT MODE' },
@@ -76,7 +63,7 @@ const PANEL_WIDTH = Math.min(280, Dimensions.get('window').width - 28);
 
 const PILL_SHADOW = Platform.OS === 'android'
   ? ({ elevation: 4 } as const)
-  : lightTheme.elevation.e2;
+  : shadows.control;
 
 function LayersIcon({ color }: { color: string }) {
   return (
@@ -139,21 +126,34 @@ export function MapStylePicker({
         />
       )}
 
-      {/* Trigger pill — light-theme constants so the chip stays cream-on-map
-          in both schemes (matches Wordmark / ModePillRow / PoiCallout family). */}
       <TouchableOpacity
-        style={[s.trigger, PILL_SHADOW, btnPos]}
+        style={[
+          s.trigger,
+          PILL_SHADOW,
+          {
+            backgroundColor: theme.colors.paperSoft,
+            borderColor:     theme.colors.paperEdge,
+          },
+          btnPos,
+        ]}
         onPress={() => setOpen(v => !v)}
         activeOpacity={0.8}
         accessibilityRole="button"
-        accessibilityLabel="Map style picker"
+        accessibilityLabel={`Map style: ${STYLE_DISPLAY[value].name}`}
         accessibilityState={{ expanded: open }}
       >
-        <LayersIcon color={lightTheme.colors.ink} />
-        <Text allowFontScaling={false} style={s.triggerLabel}>MAP</Text>
+        {/* Thumbnail (paperWarm circle + Layers glyph) per Pine Phase 2 spec. */}
+        <View style={[s.thumb, { backgroundColor: theme.colors.paperWarm, borderColor: theme.colors.paperEdge }]}>
+          <LayersIcon color={theme.colors.ink} />
+        </View>
+        <Text
+          allowFontScaling={false}
+          style={[theme.textVariants.label, { color: theme.colors.ink, fontSize: 13 }]}
+        >
+          {STYLE_DISPLAY[value].name}
+        </Text>
       </TouchableOpacity>
 
-      {/* Picker panel — theme-aware (paper in light, dark paper in dark). */}
       {open && (
         <View
           style={[
@@ -161,6 +161,7 @@ export function MapStylePicker({
             PILL_SHADOW,
             {
               backgroundColor: theme.colors.paper,
+              borderColor:     theme.colors.paperEdge,
               width: PANEL_WIDTH,
             },
             panelPos,
@@ -168,11 +169,11 @@ export function MapStylePicker({
         >
           <Text
             allowFontScaling={false}
-            style={[s.panelKicker, { color: theme.colors.inkSoft }]}
+            style={[theme.textVariants.eyebrow, { color: theme.colors.inkSoft, marginBottom: 8 }]}
           >
             MAP STYLE
           </Text>
-          <View style={[s.panelDivider, { backgroundColor: theme.colors.rule }]} />
+          <View style={[s.panelDivider, { backgroundColor: theme.colors.line }]} />
           {STYLE_ORDER.map((id, idx) => {
             const display  = STYLE_DISPLAY[id];
             const selected = id === value;
@@ -187,25 +188,28 @@ export function MapStylePicker({
                 accessibilityState={{ selected }}
                 style={[
                   s.row,
-                  !isLast && { borderBottomWidth: 1, borderBottomColor: theme.colors.rule },
+                  !isLast && { borderBottomWidth: 1, borderBottomColor: theme.colors.lineSoft },
                 ]}
               >
                 <View style={{ flex: 1 }}>
                   <Text
                     allowFontScaling={false}
-                    style={[s.rowName, { color: theme.colors.ink }]}
+                    style={[
+                      theme.textVariants.titleSmall,
+                      { color: theme.colors.ink, fontSize: 17, lineHeight: 20.4 },
+                    ]}
                   >
                     {display.name}
                   </Text>
                   <Text
                     allowFontScaling={false}
-                    style={[s.rowSub, { color: theme.colors.inkSoft }]}
+                    style={[theme.textVariants.eyebrow, { color: theme.colors.inkSoft, marginTop: 2 }]}
                   >
                     {display.descriptor}
                   </Text>
                 </View>
                 {selected && (
-                  <View style={[s.activeDot, { backgroundColor: theme.colors.accent }]} />
+                  <View style={[s.activeDot, { backgroundColor: theme.colors.primary }]} />
                 )}
               </TouchableOpacity>
             );
@@ -221,32 +225,26 @@ const s = StyleSheet.create({
     position:          'absolute',
     flexDirection:     'row',
     alignItems:        'center',
-    gap:               6,
-    paddingVertical:   8,
-    paddingHorizontal: 12,
+    gap:               8,
+    paddingVertical:   5,
+    paddingLeft:       5,
+    paddingRight:      12,
     borderRadius:      999,
-    backgroundColor:   lightTheme.colors.paper,
+    borderWidth:       1,
   },
-  triggerLabel: {
-    fontFamily:    lightTheme.fontFamilies.mono,
-    fontSize:      10,
-    fontWeight:    '400',
-    letterSpacing: 1.6,
-    textTransform: 'uppercase',
-    color:         lightTheme.colors.ink,
+  thumb: {
+    width:           28,
+    height:          28,
+    borderRadius:    14,
+    borderWidth:     1,
+    alignItems:      'center',
+    justifyContent:  'center',
   },
   panel: {
     position:     'absolute',
-    borderRadius: 18,             // mirrors theme.radii.l for consistency
+    borderRadius: 18,
     padding:      14,
-  },
-  panelKicker: {
-    fontFamily:    lightTheme.fontFamilies.mono,
-    fontSize:      10,
-    fontWeight:    '400',
-    letterSpacing: 1.6,
-    textTransform: 'uppercase',
-    marginBottom:  8,
+    borderWidth:  1,
   },
   panelDivider: {
     height:       1,
@@ -258,22 +256,6 @@ const s = StyleSheet.create({
     paddingVertical:   12,
     paddingHorizontal: 4,
     minHeight:         44,
-  },
-  rowName: {
-    fontFamily:    lightTheme.fontFamilies.serifItalic,
-    fontStyle:     'italic',
-    fontWeight:    '500',
-    fontSize:      17,
-    lineHeight:    20.4,
-    letterSpacing: -0.3,
-  },
-  rowSub: {
-    marginTop:     2,
-    fontFamily:    lightTheme.fontFamilies.mono,
-    fontSize:      10,
-    fontWeight:    '400',
-    letterSpacing: 1.6,
-    textTransform: 'uppercase',
   },
   activeDot: {
     width:        8,

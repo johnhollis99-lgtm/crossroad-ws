@@ -45,11 +45,21 @@ import { MapStylePicker } from '../components/MapStylePicker';
 import {
   CategoryChip,
   CoordinatesPill,
+  IconArchitecture,
+  IconFilm,
+  IconFood,
+  IconHistory,
+  IconMusic,
+  IconNature,
+  IconRoadside,
+  IconScience,
+  IconWeird,
   ModePillRow,
   PoiCallout,
   PoiMarkerX,
   Wordmark,
 } from '../src/components';
+import type { IconProps } from '../src/components';
 import { useTripStore } from '../src/store/tripStore';
 import { curateRoutePOIs } from '../src/lib/curation/curateRoutePOIs';
 
@@ -69,6 +79,18 @@ const ROUTE_ALT_COLOR: Record<string, string> = {
 
 // ── Category chips ────────────────────────────────────────────────────────────
 const CAT_CHIPS = ['History','Nature','Architecture','Food','Music','Weird','Roadside','Film','Science'] as const;
+
+const CATEGORY_ICONS: Record<string, React.ComponentType<IconProps>> = {
+  'History':      IconHistory,
+  'Nature':       IconNature,
+  'Architecture': IconArchitecture,
+  'Food':         IconFood,
+  'Music':        IconMusic,
+  'Weird':        IconWeird,
+  'Roadside':     IconRoadside,
+  'Film':         IconFilm,
+  'Science':      IconScience,
+};
 const CAT_SLUG: Record<string,string> = {
   History:'history', Nature:'nature', Architecture:'architecture',
   Food:'food_drink', Music:'local_culture', Weird:'hidden_gems',
@@ -220,9 +242,9 @@ export default function MapScreen() {
   const locTimer    = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const badgeStyle = useCallback((badge: 'Fastest' | 'Scenic' | 'Shortest') => {
-    if (badge === 'Fastest')  return { bg: 'rgba(99,153,34,0.20)',  fg: theme.colors.accent2 };
-    if (badge === 'Shortest') return { bg: 'rgba(186,117,23,0.20)', fg: theme.colors.accent  };
-    return { bg: 'rgba(216,90,48,0.20)', fg: theme.colors.accent };
+    if (badge === 'Fastest')  return { bg: 'rgba(99,153,34,0.20)',  fg: theme.colors.primary };
+    if (badge === 'Shortest') return { bg: 'rgba(186,117,23,0.20)', fg: theme.colors.primary  };
+    return { bg: 'rgba(216,90,48,0.20)', fg: theme.colors.primary };
   }, [theme]);
 
   // GPS position
@@ -872,7 +894,7 @@ export default function MapScreen() {
         styles={s}
       />
     );
-  }, [s]);
+  }, [theme]);
 
   const handleMapPress = useCallback(async (e: any) => {
     // Map-background tap drops a pending-pin (stop candidate). The POI
@@ -956,29 +978,29 @@ export default function MapScreen() {
     root: { flex: 1, backgroundColor: theme.colors.paper },
     desktopSidebar: {
       position: 'absolute', left: 0, top: 0, bottom: 0, width: 320,
-      backgroundColor: theme.colors.paperDeep,
-      borderRightWidth: 1, borderColor: theme.colors.rule,
+      backgroundColor: theme.colors.paperWarm,
+      borderRightWidth: 1, borderColor: theme.colors.line,
     },
 
     // Map markers
     destPin: {
       width: 22, height: 22, borderRadius: 11,
-      backgroundColor: `${theme.colors.accent}44`, alignItems: 'center', justifyContent: 'center',
+      backgroundColor: `${theme.colors.primary}44`, alignItems: 'center', justifyContent: 'center',
     },
     destPinDot: {
       width: 11, height: 11, borderRadius: 6,
-      backgroundColor: theme.colors.accent, borderWidth: 2, borderColor: theme.colors.paper,
+      backgroundColor: theme.colors.primary, borderWidth: 2, borderColor: theme.colors.paper,
     },
     originPin: {
       width: 22, height: 22, borderRadius: 11,
-      backgroundColor: `${theme.colors.accent2}44`, alignItems: 'center', justifyContent: 'center',
+      backgroundColor: `${theme.colors.primary}44`, alignItems: 'center', justifyContent: 'center',
     },
     originPinDot: {
       width: 11, height: 11, borderRadius: 6,
-      backgroundColor: theme.colors.accent2, borderWidth: 2, borderColor: theme.colors.paper,
+      backgroundColor: theme.colors.primary, borderWidth: 2, borderColor: theme.colors.paper,
     },
-    stopDot:       { width: 10, height: 10, borderRadius: 5, backgroundColor: theme.colors.accent2, borderWidth: 1.5, borderColor: theme.colors.paper },
-    stopDotActive: { width: 14, height: 14, borderRadius: 7, backgroundColor: theme.colors.accent2, borderWidth: 2.5, borderColor: theme.colors.paper },
+    stopDot:       { width: 10, height: 10, borderRadius: 5, backgroundColor: theme.colors.primary, borderWidth: 1.5, borderColor: theme.colors.paper },
+    stopDotActive: { width: 14, height: 14, borderRadius: 7, backgroundColor: theme.colors.primary, borderWidth: 2.5, borderColor: theme.colors.paper },
 
     // Top gradient overlay (translucent fade — kept rgba, not a panel)
     topGradient: {
@@ -989,16 +1011,16 @@ export default function MapScreen() {
     // Bottom sheet
     sheet: {
       position: 'absolute', bottom: 0, left: 0, right: 0,
-      backgroundColor: theme.colors.paperDeep,
+      backgroundColor: theme.colors.paperWarm,
       borderTopLeftRadius: 20, borderTopRightRadius: 20,
-      borderTopWidth: 1, borderColor: theme.colors.rule,
+      borderTopWidth: 1, borderColor: theme.colors.line,
       overflow: 'hidden',
     },
     dragHandleWrap: {
       width: '100%', alignItems: 'center', paddingVertical: 10,
     },
     dragHandle: {
-      width: 36, height: 4, backgroundColor: theme.colors.cardEdge,
+      width: 36, height: 4, backgroundColor: theme.colors.paperEdge,
       borderRadius: 2,
     },
     sheetContent: { paddingHorizontal: 16, paddingTop: 4, paddingBottom: 28, gap: 10 },
@@ -1041,11 +1063,11 @@ export default function MapScreen() {
       alignItems: 'center', justifyContent: 'center',
     },
     logoPinInner: { width: 4, height: 4, borderRadius: 2, backgroundColor: '#1a1208' },
-    brand:  { ...theme.textVariants.h3, color: theme.colors.ink },
-    brandX: { ...theme.textVariants.h3, color: '#2EC4B6' },
+    brand:  { ...theme.textVariants.titleSmall, color: theme.colors.ink },
+    brandX: { ...theme.textVariants.titleSmall, color: '#2EC4B6' },
     settingsBtn: {
       width: 36, height: 36, borderRadius: 10,
-      backgroundColor: theme.colors.cardEdge, borderWidth: 1, borderColor: theme.colors.rule,
+      backgroundColor: theme.colors.paperEdge, borderWidth: 1, borderColor: theme.colors.line,
       alignItems: 'center', justifyContent: 'center',
     },
     settingsIcon: { fontSize: 16 },
@@ -1053,9 +1075,9 @@ export default function MapScreen() {
     // Search card (floating pill)
     searchCard: {
       marginHorizontal: 16,
-      backgroundColor: theme.colors.paperDeep,
+      backgroundColor: theme.colors.paperWarm,
       borderRadius: 14,
-      borderWidth: 1, borderColor: theme.colors.rule,
+      borderWidth: 1, borderColor: theme.colors.line,
       overflow: 'visible',
     },
     searchRow: {
@@ -1063,21 +1085,21 @@ export default function MapScreen() {
       paddingHorizontal: 14, paddingVertical: 11,
     },
     searchDot:     { width: 8, height: 8, borderRadius: 4, flexShrink: 0 },
-    searchDivider: { height: 1, backgroundColor: theme.colors.rule, marginLeft: 32 },
-    originText:    { ...theme.textVariants.ui, color: theme.colors.inkSoft, flex: 1 },
-    destText:      { ...theme.textVariants.ui, color: theme.colors.ink,     flex: 1 },
+    searchDivider: { height: 1, backgroundColor: theme.colors.line, marginLeft: 32 },
+    originText:    { ...theme.textVariants.body, color: theme.colors.inkSoft, flex: 1 },
+    destText:      { ...theme.textVariants.body, color: theme.colors.ink,     flex: 1 },
     destPlaceholder: { color: theme.colors.inkSoft },
     gpsPill: {
-      ...theme.textVariants.metaSmall,
-      color: theme.colors.accent2,
-      borderWidth: 1, borderColor: theme.colors.accent2, borderRadius: 4,
+      ...theme.textVariants.eyebrow,
+      color: theme.colors.primary,
+      borderWidth: 1, borderColor: theme.colors.primary, borderRadius: 4,
       paddingHorizontal: 4, paddingVertical: 1,
     },
-    clearBtn: { ...theme.textVariants.uiSmall, color: theme.colors.inkSoft, paddingHorizontal: 4 },
+    clearBtn: { ...theme.textVariants.meta, color: theme.colors.inkSoft, paddingHorizontal: 4 },
 
     // Shared suggestion items
     suggIcon: { fontSize: 12 },
-    suggText: { ...theme.textVariants.ui, color: theme.colors.inkSoft, flex: 1 },
+    suggText: { ...theme.textVariants.body, color: theme.colors.inkSoft, flex: 1 },
 
     // Routes header
     routesHeader: {
@@ -1085,31 +1107,31 @@ export default function MapScreen() {
       paddingTop: 4,
     },
     routesLabel: { ...theme.textVariants.meta, color: theme.colors.ink },
-    addStopText: { ...theme.textVariants.ui, color: theme.colors.accent2 },
+    addStopText: { ...theme.textVariants.body, color: theme.colors.primary },
 
     // Route cards
     routeCard: {
-      backgroundColor: theme.colors.cardEdge,
+      backgroundColor: theme.colors.paperEdge,
       borderRadius: 12,
-      borderWidth: 1.5, borderColor: theme.colors.rule,
+      borderWidth: 1.5, borderColor: theme.colors.line,
       padding: 14, gap: 8,
     },
-    routeCardSel: { borderColor: theme.colors.accent2, backgroundColor: `${theme.colors.accent2}26` },
+    routeCardSel: { borderColor: theme.colors.primary, backgroundColor: `${theme.colors.primary}26` },
     routeCardTop: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
     routeCardTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 8, flex: 1 },
-    routeCardName:    { ...theme.textVariants.ui, color: theme.colors.inkSoft },
-    routeCardNameSel: { color: theme.colors.accent2 },
+    routeCardName:    { ...theme.textVariants.body, color: theme.colors.inkSoft },
+    routeCardNameSel: { color: theme.colors.primary },
     badge:     { borderRadius: 4, paddingHorizontal: 6, paddingVertical: 2 },
     badgeText: { ...theme.textVariants.meta },
-    routeDuration:    { ...theme.textVariants.h2, color: theme.colors.inkSoft },
+    routeDuration:    { ...theme.textVariants.title, color: theme.colors.inkSoft },
     routeDurationSel: { color: theme.colors.ink },
     routeCardBottom:  { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-    routeMeta:        { ...theme.textVariants.ui, color: theme.colors.inkSoft, flex: 1 },
-    storiesText:      { ...theme.textVariants.ui, color: theme.colors.accent },
-    storiesTextSel:   { color: theme.colors.accent },
+    routeMeta:        { ...theme.textVariants.body, color: theme.colors.inkSoft, flex: 1 },
+    storiesText:      { ...theme.textVariants.body, color: theme.colors.primary },
+    storiesTextSel:   { color: theme.colors.primary },
 
     emptyState: { paddingVertical: 20, alignItems: 'center' },
-    emptyText:  { ...theme.textVariants.ui, color: theme.colors.inkSoft },
+    emptyText:  { ...theme.textVariants.body, color: theme.colors.inkSoft },
 
     // Legend row
     legendRow: {
@@ -1121,20 +1143,20 @@ export default function MapScreen() {
 
     // Customize CTA
     customizeBtn: {
-      backgroundColor: theme.colors.paperDeep,
+      backgroundColor: theme.colors.paperWarm,
       borderRadius: 12,
       paddingVertical: 16, alignItems: 'center',
-      borderWidth: 1, borderColor: theme.colors.cardEdge,
+      borderWidth: 1, borderColor: theme.colors.paperEdge,
     },
     customizeBtnDisabled: { opacity: 0.4 },
-    customizeBtnText: { ...theme.textVariants.buttonStrong, color: theme.colors.ink },
+    customizeBtnText: { ...theme.textVariants.label, color: theme.colors.ink },
 
     // Location search overlay (modal scrim kept as opaque-black dim)
     locOverlay: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0,0,0,0.6)' },
     locSheet: {
-      backgroundColor: theme.colors.paperDeep,
+      backgroundColor: theme.colors.paperWarm,
       borderTopLeftRadius: 20, borderTopRightRadius: 20,
-      borderTopWidth: 1, borderColor: theme.colors.rule,
+      borderTopWidth: 1, borderColor: theme.colors.line,
       paddingHorizontal: 16, paddingBottom: 44, paddingTop: 8,
       maxHeight: '85%',
     },
@@ -1142,69 +1164,69 @@ export default function MapScreen() {
       flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
       marginBottom: 12,
     },
-    locTitle:  { ...theme.textVariants.h3, color: theme.colors.ink },
-    locCancel: { ...theme.textVariants.ui, color: theme.colors.accent2 },
+    locTitle:  { ...theme.textVariants.titleSmall, color: theme.colors.ink },
+    locCancel: { ...theme.textVariants.body, color: theme.colors.primary },
     locInputRow: {
       flexDirection: 'row', alignItems: 'center', gap: 8,
-      backgroundColor: theme.colors.cardEdge,
-      borderRadius: 10, borderWidth: 1, borderColor: theme.colors.rule,
+      backgroundColor: theme.colors.paperEdge,
+      borderRadius: 10, borderWidth: 1, borderColor: theme.colors.line,
       paddingHorizontal: 12, paddingVertical: 10, marginBottom: 8,
     },
     locInputIcon: { fontSize: 14 },
-    locInput:     { ...theme.textVariants.ui, color: theme.colors.ink, flex: 1 },
+    locInput:     { ...theme.textVariants.body, color: theme.colors.ink, flex: 1 },
     locGpsRow: {
       flexDirection: 'row', alignItems: 'center', gap: 12,
       paddingVertical: 14,
-      borderBottomWidth: 1, borderColor: theme.colors.rule,
+      borderBottomWidth: 1, borderColor: theme.colors.line,
     },
     locGpsIconWrap: {
       width: 32, height: 32, borderRadius: 16,
-      backgroundColor: `${theme.colors.accent2}22`,
+      backgroundColor: `${theme.colors.primary}22`,
       alignItems: 'center', justifyContent: 'center',
     },
-    locGpsLabel:    { ...theme.textVariants.ui, color: theme.colors.ink },
-    locGpsSub:      { ...theme.textVariants.uiSmall, color: theme.colors.inkSoft, marginTop: 1 },
-    locActiveCheck: { ...theme.textVariants.ui, color: theme.colors.accent2 },
-    locDivider:     { height: 1, backgroundColor: theme.colors.rule, marginVertical: 6 },
+    locGpsLabel:    { ...theme.textVariants.body, color: theme.colors.ink },
+    locGpsSub:      { ...theme.textVariants.meta, color: theme.colors.inkSoft, marginTop: 1 },
+    locActiveCheck: { ...theme.textVariants.body, color: theme.colors.primary },
+    locDivider:     { height: 1, backgroundColor: theme.colors.line, marginVertical: 6 },
     locSectionLabel: { ...theme.textVariants.meta, color: theme.colors.inkSoft, marginBottom: 4 },
     locResultRow:    { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 13, paddingHorizontal: 2 },
-    locResultBorder: { borderTopWidth: 1, borderColor: theme.colors.rule },
+    locResultBorder: { borderTopWidth: 1, borderColor: theme.colors.line },
     locEmptyState:   { paddingVertical: 20, alignItems: 'center' },
 
     // Add stop modal (modal scrim kept as opaque-black dim)
     modalOverlay: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0,0,0,0.6)' },
     modalSheet: {
-      backgroundColor: theme.colors.paperDeep,
+      backgroundColor: theme.colors.paperWarm,
       borderTopLeftRadius: 20, borderTopRightRadius: 20,
-      borderTopWidth: 1, borderColor: theme.colors.rule,
+      borderTopWidth: 1, borderColor: theme.colors.line,
       paddingHorizontal: 16, paddingBottom: 44, paddingTop: 8,
       zIndex: 1,
     },
     modalHandle: {
-      width: 36, height: 4, backgroundColor: theme.colors.cardEdge,
+      width: 36, height: 4, backgroundColor: theme.colors.paperEdge,
       borderRadius: 2, alignSelf: 'center', marginBottom: 16,
     },
-    modalTitle: { ...theme.textVariants.h3, color: theme.colors.ink, marginBottom: 12 },
+    modalTitle: { ...theme.textVariants.titleSmall, color: theme.colors.ink, marginBottom: 12 },
     modalInputRow: {
       flexDirection: 'row', alignItems: 'center',
-      backgroundColor: theme.colors.cardEdge,
-      borderRadius: 10, borderWidth: 1, borderColor: theme.colors.rule,
+      backgroundColor: theme.colors.paperEdge,
+      borderRadius: 10, borderWidth: 1, borderColor: theme.colors.line,
       paddingHorizontal: 12, paddingVertical: 10, marginBottom: 8,
     },
-    modalInput:   { ...theme.textVariants.ui, color: theme.colors.ink, flex: 1 },
+    modalInput:   { ...theme.textVariants.body, color: theme.colors.ink, flex: 1 },
     modalSuggRow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 13, paddingHorizontal: 2 },
 
     // Pending pin (map-tap to drop a stop)
     pendingPinWrap: { alignItems: 'center' },
     pendingPinDot: {
       width: 14, height: 14, borderRadius: 7,
-      backgroundColor: theme.colors.accent2, borderWidth: 2.5, borderColor: theme.colors.paper,
+      backgroundColor: theme.colors.primary, borderWidth: 2.5, borderColor: theme.colors.paper,
     },
-    pendingPinStem: { width: 2.5, height: 10, backgroundColor: theme.colors.accent2, borderRadius: 1.5 },
+    pendingPinStem: { width: 2.5, height: 10, backgroundColor: theme.colors.primary, borderRadius: 1.5 },
     pendingPinCallout: {
       position: 'absolute',
-      backgroundColor: theme.colors.paperDeep,
-      borderRadius: 12, borderWidth: 1, borderColor: theme.colors.rule,
+      backgroundColor: theme.colors.paperWarm,
+      borderRadius: 12, borderWidth: 1, borderColor: theme.colors.line,
       flexDirection: 'row', alignItems: 'center', gap: 10,
       paddingHorizontal: 14, paddingVertical: 12,
       zIndex: 30,
@@ -1216,8 +1238,8 @@ export default function MapScreen() {
     // since its label IS the stop name, not a redundant coord string.
     pendingPinActionRow: {
       position: 'absolute',
-      backgroundColor: theme.colors.paperDeep,
-      borderRadius: 12, borderWidth: 1, borderColor: theme.colors.rule,
+      backgroundColor: theme.colors.paperWarm,
+      borderRadius: 12, borderWidth: 1, borderColor: theme.colors.line,
       flexDirection: 'row', alignItems: 'center', gap: 10,
       paddingHorizontal: 14, paddingVertical: 10,
       zIndex: 30,
@@ -1225,54 +1247,54 @@ export default function MapScreen() {
     },
     pendingPinIcon: {
       width: 30, height: 30, borderRadius: 15,
-      backgroundColor: `${theme.colors.accent2}22`,
+      backgroundColor: `${theme.colors.primary}22`,
       alignItems: 'center', justifyContent: 'center',
     },
-    pendingPinAddr: { ...theme.textVariants.ui, color: theme.colors.ink },
+    pendingPinAddr: { ...theme.textVariants.body, color: theme.colors.ink },
     pendingPinAddBtn: {
-      backgroundColor: `${theme.colors.accent2}26`, borderRadius: 8,
-      borderWidth: 1, borderColor: theme.colors.accent2,
+      backgroundColor: `${theme.colors.primary}26`, borderRadius: 8,
+      borderWidth: 1, borderColor: theme.colors.primary,
       paddingHorizontal: 12, paddingVertical: 7,
     },
-    pendingPinAddText: { ...theme.textVariants.uiSmall, color: theme.colors.accent2 },
+    pendingPinAddText: { ...theme.textVariants.meta, color: theme.colors.primary },
     removeStopBtn: {
-      backgroundColor: `${theme.colors.accent}26`, borderRadius: 8,
-      borderWidth: 1, borderColor: theme.colors.accent,
+      backgroundColor: `${theme.colors.primary}26`, borderRadius: 8,
+      borderWidth: 1, borderColor: theme.colors.primary,
       paddingHorizontal: 12, paddingVertical: 7,
     },
-    removeStopText: { ...theme.textVariants.uiSmall, color: theme.colors.accent },
+    removeStopText: { ...theme.textVariants.meta, color: theme.colors.primary },
 
     // Route attribute tags
     tagRow:         { flexDirection: 'row', flexWrap: 'wrap', gap: 5, marginTop: 4 },
     tagChip:        { borderRadius: 5, borderWidth: 1, paddingHorizontal: 6, paddingVertical: 2 },
-    tagChipPro:     { borderColor: theme.colors.accent2, backgroundColor: `${theme.colors.accent2}1f` },
-    tagChipCon:     { borderColor: theme.colors.accent,  backgroundColor: `${theme.colors.accent}1f`  },
-    tagChipNeutral: { borderColor: theme.colors.cardEdge, backgroundColor: `${theme.colors.ink}0a`    },
-    tagTextPro:     { ...theme.textVariants.uiSmall, color: theme.colors.accent2 },
-    tagTextCon:     { ...theme.textVariants.uiSmall, color: theme.colors.accent  },
-    tagTextNeutral: { ...theme.textVariants.uiSmall, color: theme.colors.inkSoft },
+    tagChipPro:     { borderColor: theme.colors.primary, backgroundColor: `${theme.colors.primary}1f` },
+    tagChipCon:     { borderColor: theme.colors.primary,  backgroundColor: `${theme.colors.primary}1f`  },
+    tagChipNeutral: { borderColor: theme.colors.paperEdge, backgroundColor: `${theme.colors.ink}0a`    },
+    tagTextPro:     { ...theme.textVariants.meta, color: theme.colors.primary },
+    tagTextCon:     { ...theme.textVariants.meta, color: theme.colors.primary  },
+    tagTextNeutral: { ...theme.textVariants.meta, color: theme.colors.inkSoft },
 
     // North button pill
     northBtn: {
       position: 'absolute',
       flexDirection: 'row', alignItems: 'center', gap: 5,
       paddingHorizontal: 13, height: 36, borderRadius: 10,
-      backgroundColor: theme.colors.paperDeep,
-      borderWidth: 1.5, borderColor: theme.colors.cardEdge,
+      backgroundColor: theme.colors.paperWarm,
+      borderWidth: 1.5, borderColor: theme.colors.paperEdge,
       shadowColor: theme.colors.ink,
       shadowOffset: { width: 0, height: 2 },
       shadowOpacity: 0.35,
       shadowRadius: 5,
       elevation: 5,
     },
-    northBtnArrow: { ...theme.textVariants.ui,      color: theme.colors.inkSoft },
-    northBtnLabel: { ...theme.textVariants.uiSmall, color: theme.colors.inkSoft },
+    northBtnArrow: { ...theme.textVariants.body,      color: theme.colors.inkSoft },
+    northBtnLabel: { ...theme.textVariants.meta, color: theme.colors.inkSoft },
 
     // Add stop inline panel
     addStopPanel: {
       position: 'absolute',
-      backgroundColor: theme.colors.paperDeep,
-      borderRadius: 12, borderWidth: 1, borderColor: theme.colors.rule,
+      backgroundColor: theme.colors.paperWarm,
+      borderRadius: 12, borderWidth: 1, borderColor: theme.colors.line,
       overflow: 'hidden', zIndex: 25,
     },
     addStopRow: {
@@ -1280,8 +1302,8 @@ export default function MapScreen() {
       paddingHorizontal: 12, paddingVertical: 10,
     },
     addStopIcon:    { fontSize: 13, color: theme.colors.inkSoft },
-    addStopInput:   { ...theme.textVariants.ui, color: theme.colors.ink, flex: 1 },
-    addStopSuggs:   { maxHeight: 180, borderTopWidth: 1, borderColor: theme.colors.rule },
+    addStopInput:   { ...theme.textVariants.body, color: theme.colors.ink, flex: 1 },
+    addStopSuggs:   { maxHeight: 180, borderTopWidth: 1, borderColor: theme.colors.line },
     addStopSuggRow: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 12, paddingVertical: 10 },
 
     // Search pill + chips
@@ -1292,20 +1314,20 @@ export default function MapScreen() {
     searchPill: {
       flexDirection: 'row', alignItems: 'center', gap: 10,
       height: 40, borderRadius: 20,
-      backgroundColor: theme.colors.paperDeep,
-      borderWidth: 1, borderColor: theme.colors.rule,
+      backgroundColor: theme.colors.paperWarm,
+      borderWidth: 1, borderColor: theme.colors.line,
       paddingHorizontal: 14,
       marginHorizontal: 12,
       shadowColor: theme.colors.ink, shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.3, shadowRadius: 4,
       elevation: 4,
     },
     searchPillIcon:        { fontSize: 14 },
-    searchPillText:        { ...theme.textVariants.ui, color: theme.colors.ink, flex: 1 },
+    searchPillText:        { ...theme.textVariants.body, color: theme.colors.ink, flex: 1 },
     searchPillPlaceholder: { color: theme.colors.inkSoft },
     searchPillAvatar: {
       width: 28, height: 28, borderRadius: 14,
-      backgroundColor: theme.colors.cardEdge,
-      borderWidth: 1, borderColor: theme.colors.cardEdge,
+      backgroundColor: theme.colors.paperEdge,
+      borderWidth: 1, borderColor: theme.colors.paperEdge,
       alignItems: 'center', justifyContent: 'center',
     },
     // Cluster bubble — ink-red accent fill, tabular mono count in paper.
@@ -1321,7 +1343,7 @@ export default function MapScreen() {
     // numerals don't sit a hair high in the bubble.
     clusterBubble: {
       alignItems: 'center', justifyContent: 'center',
-      backgroundColor: theme.colors.accent,
+      backgroundColor: theme.colors.primary,
       ...Platform.select({
         ios: {
           shadowColor:   '#000',
@@ -1593,7 +1615,7 @@ export default function MapScreen() {
                     {r.distanceMi} mi{r.summary ? ` · ${r.summary}` : ''}
                   </Text>
                   {r.poiCount === null
-                    ? <ActivityIndicator size="small" color={theme.colors.accent} />
+                    ? <ActivityIndicator size="small" color={theme.colors.primary} />
                     : <Text style={[s.storiesText, isSelected && s.storiesTextSel]}>
                         {r.poiCount} {r.poiCount === 1 ? 'story' : 'stories'}
                       </Text>
@@ -1629,9 +1651,9 @@ export default function MapScreen() {
 
           {/* Legend */}
           <View style={s.legendRow}>
-            <View style={[s.legendDot, { backgroundColor: theme.colors.accent }]} />
+            <View style={[s.legendDot, { backgroundColor: theme.colors.primary }]} />
             <Text style={s.legendText}>POIs</Text>
-            <View style={[s.legendDot, { backgroundColor: theme.colors.accent2 }]} />
+            <View style={[s.legendDot, { backgroundColor: theme.colors.primary }]} />
             <Text style={s.legendText}>Stops</Text>
           </View>
 
@@ -1681,7 +1703,7 @@ export default function MapScreen() {
             </View>
           )}
           <View style={s.logoWrap} pointerEvents="none">
-            <Wordmark size="m" background="pill" />
+            <Wordmark size="m" background="pill" squiggle />
           </View>
 
           {/* Drive | Hike-or-Walk mode selector (drift 5.93). Persists via tripStore.
@@ -1706,7 +1728,7 @@ export default function MapScreen() {
               {destination || 'Where to?'}
             </Text>
             {loadingRoute
-              ? <ActivityIndicator size="small" color={theme.colors.accent2} style={{ marginRight: 4 }} />
+              ? <ActivityIndicator size="small" color={theme.colors.primary} style={{ marginRight: 4 }} />
               : destination.length > 0 && (
                 <TouchableOpacity
                   onPress={() => { setDestination(''); setDestCoords(null); clearRoutes(); }}
@@ -1731,14 +1753,25 @@ export default function MapScreen() {
                 if (scrolled !== chipsScrolled) setChipsScrolled(scrolled);
               }}
             >
-              {CAT_CHIPS.map(chip => (
-                <CategoryChip
-                  key={chip}
-                  label={chip}
-                  active={selectedCategories.includes(chip)}
-                  onToggle={() => toggleCategory(chip)}
-                />
-              ))}
+              {CAT_CHIPS.map(chip => {
+                const isActive = selectedCategories.includes(chip);
+                const Icon = CATEGORY_ICONS[chip];
+                return (
+                  <CategoryChip
+                    key={chip}
+                    label={chip}
+                    active={isActive}
+                    onToggle={() => toggleCategory(chip)}
+                    icon={Icon ? (
+                      <Icon
+                        size={14}
+                        color={isActive ? theme.colors.paperSoft : theme.colors.ink}
+                        accent={isActive ? theme.colors.paperSoft : theme.colors.accent}
+                      />
+                    ) : undefined}
+                  />
+                );
+              })}
             </ScrollView>
             {chipsScrolled && (
               <LinearGradient
@@ -1786,7 +1819,7 @@ export default function MapScreen() {
             {/* Search card */}
             <View style={[s.searchCard, { marginBottom: 12 }]}>
               <TouchableOpacity style={s.searchRow} onPress={() => openLocOverlay('origin')} activeOpacity={0.7}>
-                <View style={[s.searchDot, { backgroundColor: originMode === 'gps' ? theme.colors.accent2 : theme.colors.accent2 }]} />
+                <View style={[s.searchDot, { backgroundColor: originMode === 'gps' ? theme.colors.primary : theme.colors.primary }]} />
                 <Text style={s.originText} numberOfLines={1}>{originName}</Text>
                 {originMode === 'gps'
                   ? <Text style={s.gpsPill}>GPS</Text>
@@ -1799,7 +1832,7 @@ export default function MapScreen() {
                 <View key={`swp-${i}`}>
                   <View style={s.searchDivider} />
                   <View style={s.searchRow}>
-                    <View style={[s.searchDot, { backgroundColor: theme.colors.accent2 }]} />
+                    <View style={[s.searchDot, { backgroundColor: theme.colors.primary }]} />
                     <Text style={s.originText} numberOfLines={1}>{wp.text}</Text>
                     <TouchableOpacity onPress={() => removeWaypoint(i)} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
                       <Text style={s.clearBtn}>✕</Text>
@@ -1809,12 +1842,12 @@ export default function MapScreen() {
               ))}
               <View style={s.searchDivider} />
               <TouchableOpacity style={s.searchRow} onPress={() => openLocOverlay('dest')} activeOpacity={0.7}>
-                <View style={[s.searchDot, { backgroundColor: theme.colors.accent }]} />
+                <View style={[s.searchDot, { backgroundColor: theme.colors.primary }]} />
                 <Text style={[s.destText, !destination && s.destPlaceholder]} numberOfLines={1}>
                   {destination || 'Where to?'}
                 </Text>
                 {loadingRoute
-                  ? <ActivityIndicator size="small" color={theme.colors.accent2} />
+                  ? <ActivityIndicator size="small" color={theme.colors.primary} />
                   : destination.length > 0 && (
                     <TouchableOpacity onPress={() => { setDestination(''); setDestCoords(null); clearRoutes(); }} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
                       <Text style={s.clearBtn}>✕</Text>
@@ -1847,7 +1880,7 @@ export default function MapScreen() {
                     </View>
                     <View style={s.routeCardBottom}>
                       <Text style={s.routeMeta}>{r.distanceMi} mi{r.summary ? ` · ${r.summary}` : ''}</Text>
-                      {r.poiCount === null ? <ActivityIndicator size="small" color={theme.colors.accent} /> : <Text style={[s.storiesText, isSelected && s.storiesTextSel]}>{r.poiCount} {r.poiCount === 1 ? 'story' : 'stories'}</Text>}
+                      {r.poiCount === null ? <ActivityIndicator size="small" color={theme.colors.primary} /> : <Text style={[s.storiesText, isSelected && s.storiesTextSel]}>{r.poiCount} {r.poiCount === 1 ? 'story' : 'stories'}</Text>}
                     </View>
                     {tags.length > 0 && (
                       <View style={s.tagRow}>
@@ -1873,9 +1906,9 @@ export default function MapScreen() {
                 <View style={s.emptyState}><Text style={s.emptyText}>No routes found. Try a different destination.</Text></View>
               )}
               <View style={s.legendRow}>
-                <View style={[s.legendDot, { backgroundColor: theme.colors.accent }]} />
+                <View style={[s.legendDot, { backgroundColor: theme.colors.primary }]} />
                 <Text style={s.legendText}>POIs</Text>
-                <View style={[s.legendDot, { backgroundColor: theme.colors.accent2 }]} />
+                <View style={[s.legendDot, { backgroundColor: theme.colors.primary }]} />
                 <Text style={s.legendText}>Stops</Text>
               </View>
               <TouchableOpacity style={[s.customizeBtn, !selectedRoute && s.customizeBtnDisabled]} onPress={handleCustomizeTrip} disabled={!selectedRoute} activeOpacity={0.85}>
@@ -1900,7 +1933,7 @@ export default function MapScreen() {
               {destination || 'Where to?'}
             </Text>
             {loadingRoute
-              ? <ActivityIndicator size="small" color={theme.colors.accent2} style={{ marginRight: 4 }} />
+              ? <ActivityIndicator size="small" color={theme.colors.primary} style={{ marginRight: 4 }} />
               : destination.length > 0 && (
                 <TouchableOpacity
                   onPress={() => { setDestination(''); setDestCoords(null); clearRoutes(); }}
@@ -1919,14 +1952,25 @@ export default function MapScreen() {
             showsHorizontalScrollIndicator={false}
             contentContainerStyle={s.chipRow}
           >
-            {CAT_CHIPS.map(chip => (
-              <CategoryChip
-                key={chip}
-                label={chip}
-                active={selectedCategories.includes(chip)}
-                onToggle={() => toggleCategory(chip)}
-              />
-            ))}
+            {CAT_CHIPS.map(chip => {
+              const isActive = selectedCategories.includes(chip);
+              const Icon = CATEGORY_ICONS[chip];
+              return (
+                <CategoryChip
+                  key={chip}
+                  label={chip}
+                  active={isActive}
+                  onToggle={() => toggleCategory(chip)}
+                  icon={Icon ? (
+                    <Icon
+                      size={14}
+                      color={isActive ? theme.colors.paperSoft : theme.colors.ink}
+                      accent={isActive ? theme.colors.paperSoft : theme.colors.accent}
+                    />
+                  ) : undefined}
+                />
+              );
+            })}
           </ScrollView>
         </View>
       )}
@@ -2136,7 +2180,7 @@ export default function MapScreen() {
               {/* Loading state */}
               {locLoading && (
                 <View style={s.locEmptyState}>
-                  <ActivityIndicator size="small" color={theme.colors.accent2} />
+                  <ActivityIndicator size="small" color={theme.colors.primary} />
                 </View>
               )}
 

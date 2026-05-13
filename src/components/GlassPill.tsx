@@ -4,17 +4,22 @@ import { BlurView } from 'expo-blur';
 import { useTheme } from '../design/theme';
 
 export interface GlassPillProps {
-  /** When true, ink-translucent fill with paper children; default is paper-translucent with ink children. */
+  /** When true, ink-tinted glass with paper-colored children; default is paper-tinted glass with ink children. */
   dark?:    boolean;
   children: React.ReactNode;
   testID?:  string;
 }
 
+// Pine is single-dark — both modes use a dark blur. The `dark` prop chooses
+// between two tints over that blur. Pine-paper (#08160F) at alpha for the
+// default; Pine-ink (#E8FAEF) at alpha for the inverse.
+const TINT_DEFAULT = 'rgba(8,22,15,0.7)';
+const TINT_INVERSE = 'rgba(232,250,239,0.6)';
+
 export function GlassPill({ dark, children, testID }: GlassPillProps) {
   const { theme } = useTheme();
-  const tintColor   = dark ? theme.colors.glassTintInverse : theme.colors.glassTint;
-  const borderColor = dark ? theme.colors.cardEdge         : theme.colors.rule;
-  const blurTint    = dark ? 'dark' as const               : 'light' as const;
+  const tintColor   = dark ? TINT_INVERSE : TINT_DEFAULT;
+  const borderColor = theme.colors.paperEdge;
 
   return (
     <View
@@ -26,7 +31,7 @@ export function GlassPill({ dark, children, testID }: GlassPillProps) {
     >
       <BlurView
         intensity={30}
-        tint={blurTint}
+        tint="dark"
         style={[StyleSheet.absoluteFillObject, { borderRadius: theme.radii.pill }]}
       />
       <View

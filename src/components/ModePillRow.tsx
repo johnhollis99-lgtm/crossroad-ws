@@ -1,23 +1,25 @@
 /**
- * Drive | Hike-or-Walk mode selector. Two equal-flex pills in a row.
+ * Drive | Walk mode selector. Two equal-flex pills in a row.
  *
- * Colors are LIGHT-THEME CONSTANTS regardless of the active system scheme —
- * the mode pill row is treated as a branded chip, like the Wordmark pill, so
- * it reads identically against any map background in both light and dark
- * mode. Active pill fills with ink-red and shows paper-cream label + icons;
- * inactive pill is a cream chip outlined in ink. Both carry an e2 drop
- * shadow to lift them off map overlays.
+ * Pine palette:
+ *   Active   → primary (emerald) fill + paperSoft icon/label
+ *   Inactive → paperWarm fill + ink icon/label + paperEdge border
  *
- * The visible Hike pill label reads "Hike / Walk" to broaden the mode beyond
- * pure hiking. The underlying state value space stays 'driving' | 'hiking' —
- * this component is a visual/control layer only.
+ * Both pills carry a control-style drop shadow on iOS; Android falls back
+ * to a lighter `elevation: 4` since the default token over-darkens these
+ * chip-sized surfaces.
+ *
+ * Visible labels are "Drive" and "Walk" per the Pine spec. Underlying state
+ * value space stays `'driving' | 'hiking'` so trip-mode wiring downstream
+ * is unaffected — this is a label-only change from the drift-5.93 posture.
  */
 
 import React from 'react';
 import { Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import Svg, { Circle, Path } from 'react-native-svg';
 
-import { lightTheme } from '../design/theme';
+import { useTheme } from '../design/theme';
+import { shadows } from '../design/tokens';
 
 export type ModePillValue = 'driving' | 'hiking';
 
@@ -54,23 +56,9 @@ function CarIcon({ color }: IconProps) {
   );
 }
 
-function MountainIcon({ color }: IconProps) {
-  return (
-    <Svg width={16} height={16} viewBox="0 0 24 24" fill="none">
-      <Path
-        d="M3 19l5-9 4 6 3-4 6 7H3z"
-        stroke={color}
-        strokeWidth={1.8}
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-    </Svg>
-  );
-}
-
 function WalkerIcon({ color }: IconProps) {
   return (
-    <Svg width={16} height={16} viewBox="0 0 24 24" fill="none">
+    <Svg width={18} height={18} viewBox="0 0 24 24" fill="none">
       <Circle cx={13} cy={4} r={1.5} stroke={color} strokeWidth={1.8} />
       <Path
         d="M11 22l2-6 -3-3 1-5 -3 2v3"
@@ -97,24 +85,20 @@ function WalkerIcon({ color }: IconProps) {
   );
 }
 
-// Both pills carry the same drop shadow. iOS pulls the shadow values from
-// lightTheme.elevation.e2 (the canonical token); Android uses elevation: 4
-// since the e2 token's elevation: 8 over-darkens these chip-sized surfaces
-// (matches the Wordmark pill's Platform-specific override).
 const PILL_SHADOW = Platform.OS === 'android'
   ? ({ elevation: 4 } as const)
-  : lightTheme.elevation.e2;
+  : shadows.control;
 
 export function ModePillRow({ value, onChange, testID }: ModePillRowProps) {
+  const { theme } = useTheme();
   const driveActive = value === 'driving';
   const hikeActive  = value === 'hiking';
 
-  // All four roles are locked to light-mode constants — the pill row is
-  // a branded chip, not a theme-aware surface.
-  const activeFg   = lightTheme.colors.paper;
-  const activeBg   = lightTheme.colors.accent;
-  const inactiveFg = lightTheme.colors.ink;
-  const inactiveBg = lightTheme.colors.paper;
+  const activeFg   = theme.colors.paperSoft;
+  const activeBg   = theme.colors.primary;
+  const inactiveFg = theme.colors.ink;
+  const inactiveBg = theme.colors.paperWarm;
+  const inactiveBd = theme.colors.paperEdge;
 
   const driveFg = driveActive ? activeFg : inactiveFg;
   const hikeFg  = hikeActive  ? activeFg : inactiveFg;
@@ -130,22 +114,15 @@ export function ModePillRow({ value, onChange, testID }: ModePillRowProps) {
         style={[
           styles.pill,
           driveActive
-            ? { backgroundColor: activeBg, borderWidth: 0 }
-            : { backgroundColor: inactiveBg, borderWidth: 1, borderColor: inactiveFg },
+            ? { backgroundColor: activeBg,   borderWidth: 0 }
+            : { backgroundColor: inactiveBg, borderWidth: 1, borderColor: inactiveBd },
           PILL_SHADOW,
         ]}
       >
         <CarIcon color={driveFg} />
         <Text
           allowFontScaling={false}
-          style={[
-            styles.label,
-            {
-              color:      driveFg,
-              fontFamily: lightTheme.fontFamilies.serifItalic,
-              fontWeight: driveActive ? '600' : '500',
-            },
-          ]}
+          style={[theme.textVariants.label, { color: driveFg }]}
         >
           Drive
         </Text>
@@ -154,32 +131,24 @@ export function ModePillRow({ value, onChange, testID }: ModePillRowProps) {
       <Pressable
         accessibilityRole="button"
         accessibilityState={{ selected: hikeActive }}
-        accessibilityLabel="Hike or walk mode"
+        accessibilityLabel="Walk mode"
         hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
         onPress={() => onChange('hiking')}
         style={[
           styles.pill,
           hikeActive
-            ? { backgroundColor: activeBg, borderWidth: 0 }
-            : { backgroundColor: inactiveBg, borderWidth: 1, borderColor: inactiveFg },
+            ? { backgroundColor: activeBg,   borderWidth: 0 }
+            : { backgroundColor: inactiveBg, borderWidth: 1, borderColor: inactiveBd },
           PILL_SHADOW,
         ]}
       >
-        <MountainIcon color={hikeFg} />
+        <WalkerIcon color={hikeFg} />
         <Text
           allowFontScaling={false}
-          style={[
-            styles.label,
-            {
-              color:      hikeFg,
-              fontFamily: lightTheme.fontFamilies.serifItalic,
-              fontWeight: hikeActive ? '600' : '500',
-            },
-          ]}
+          style={[theme.textVariants.label, { color: hikeFg }]}
         >
-          Hike / Walk
+          Walk
         </Text>
-        <WalkerIcon color={hikeFg} />
       </Pressable>
     </View>
   );
@@ -196,13 +165,9 @@ const styles = StyleSheet.create({
     flexDirection:     'row',
     alignItems:        'center',
     justifyContent:    'center',
-    gap:               6,
+    gap:               8,
     paddingVertical:   12,
     paddingHorizontal: 12,
     borderRadius:      999,
-  },
-  label: {
-    fontSize:  15,
-    fontStyle: 'italic',
   },
 });

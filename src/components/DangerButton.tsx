@@ -9,6 +9,8 @@ export interface DangerButtonProps {
   testID?:   string;
 }
 
+// Pine has no dedicated danger color. "End trip" reads as alerting via
+// inverted contrast (ink fill on the dark forest surface) rather than red.
 export function DangerButton({ onPress, label, disabled, testID }: DangerButtonProps) {
   const { theme } = useTheme();
 
@@ -22,17 +24,17 @@ export function DangerButton({ onPress, label, disabled, testID }: DangerButtonP
       style={({ pressed }) => [
         styles.base,
         {
-          backgroundColor:   theme.colors.accent,
+          backgroundColor:   theme.colors.ink,
           paddingVertical:   theme.spacing.m,
           paddingHorizontal: theme.spacing.l,
-          borderRadius:      26,
-          opacity:           disabled ? 0.5 : pressed ? 0.88 : 1,
+          borderRadius:      theme.radii.button,
+          opacity:           disabled ? 0.5 : pressed ? 0.85 : 1,
         },
       ]}
     >
       <Text
         style={[
-          theme.textVariants.buttonStrong,
+          theme.textVariants.label,
           { color: theme.colors.paper, textAlign: 'center' },
         ]}
       >

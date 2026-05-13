@@ -29,26 +29,25 @@ export function NarrationCard({
 
   return (
     <View testID={testID}>
-      <Card variant="paper" radius="m" style={{ paddingLeft: theme.spacing.l }}>
-        {/* Accent stripe on the left edge. Placed as an absolute child so the
-            card's intrinsic border + radius stay intact. */}
+      <Card variant="paperWarm" radius="card" style={{ paddingLeft: theme.spacing.l }}>
+        {/* Emerald stripe on the left edge — primary, not CVD-aware accent. */}
         <View
           pointerEvents="none"
-          style={[styles.stripe, { backgroundColor: theme.colors.accent }]}
+          style={[styles.stripe, { backgroundColor: theme.colors.primary }]}
         />
         <View style={styles.topRow}>
-          <Text style={[theme.textVariants.metaSmall, { color: theme.colors.inkSoft, flex: 1 }]}>
+          <Text style={[theme.textVariants.eyebrow, { color: theme.colors.inkSoft, flex: 1 }]}>
             {kicker}
           </Text>
           {percent ? (
-            <Text style={[theme.textVariants.metaSmall, { color: theme.colors.inkSoft }]}>
+            <Text style={[theme.textVariants.eyebrow, { color: theme.colors.inkSoft }]}>
               {percent}
             </Text>
           ) : null}
         </View>
         <Text
           style={[
-            theme.textVariants.button,
+            theme.textVariants.titleSmall,
             { color: theme.colors.ink, marginTop: theme.spacing.xs },
           ]}
         >
@@ -57,7 +56,7 @@ export function NarrationCard({
         {body ? (
           <Text
             style={[
-              theme.textVariants.bodyItalic,
+              theme.textVariants.body,
               { color: theme.colors.ink, marginTop: theme.spacing.s },
             ]}
           >

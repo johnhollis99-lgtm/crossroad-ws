@@ -1,59 +1,50 @@
 /**
- * Xroad font loading — wires expo-font's useFonts() against the three
- * @expo-google-fonts asset packages used by the type ramp:
+ * XRoad font loading — Pine type stack.
  *
- *   Fraunces        — 400, 400 italic, 500, 500 italic, 600
- *   Inter Tight     — 400, 500, 600
- *   JetBrains Mono  — 400, 500
+ *   Instrument Serif  — 400, 400 italic     (display / title)
+ *   DM Sans           — 400, 500, 600, 700  (body / label / meta / eyebrow)
+ *   JetBrains Mono    — 400, 500            (coords readout in CoordinatesPill)
  *
- * FONT_MAP keys match the family names referenced in src/design/tokens.ts so
- * `fontFamily: 'Fraunces'` etc. resolve to the registered face. On iOS, the
- * family-only keys ('Fraunces', 'Inter Tight', 'JetBrains Mono') resolve via
- * fontWeight against the per-weight keys; on Android, RN may need the
- * per-weight keys referenced directly from textVariants — adjust tokens.ts
- * if Android renders the wrong weight.
+ * FONT_MAP keys match the family-name strings in tokens.ts.fontFamilies.
+ * App.tsx fail-fast gates the navigator until useAppFonts() resolves.
  */
 
 import { useFonts } from 'expo-font';
 
 import {
-  Fraunces_400Regular,
-  Fraunces_400Regular_Italic,
-  Fraunces_500Medium,
-  Fraunces_500Medium_Italic,
-  Fraunces_600SemiBold,
-} from '@expo-google-fonts/fraunces';
+  InstrumentSerif_400Regular,
+  InstrumentSerif_400Regular_Italic,
+} from '@expo-google-fonts/instrument-serif';
 import {
-  InterTight_400Regular,
-  InterTight_500Medium,
-  InterTight_600SemiBold,
-} from '@expo-google-fonts/inter-tight';
+  DMSans_400Regular,
+  DMSans_500Medium,
+  DMSans_600SemiBold,
+  DMSans_700Bold,
+} from '@expo-google-fonts/dm-sans';
 import {
   JetBrainsMono_400Regular,
   JetBrainsMono_500Medium,
 } from '@expo-google-fonts/jetbrains-mono';
 
 // Font-family keys aligned with tokens.ts -> fontFamilies. Exposed here so a
-// future settings screen (or a debug overlay) can introspect what should be
+// future settings screen (or debug overlay) can introspect what should be
 // loaded without re-deriving from textVariants.
 export const FONT_KEYS = {
-  fraunces:        'Fraunces',
-  fraunces_italic: 'Fraunces-Italic',
-  inter_tight:     'Inter Tight',
-  jetbrains_mono:  'JetBrains Mono',
+  instrument_serif:        'Instrument Serif',
+  instrument_serif_italic: 'Instrument Serif-Italic',
+  dm_sans:                 'DM Sans',
+  jetbrains_mono:          'JetBrains Mono',
 } as const;
 
 const FONT_MAP = {
-  'Fraunces':              Fraunces_400Regular,
-  'Fraunces-Italic':       Fraunces_400Regular_Italic,
-  'Fraunces-500':          Fraunces_500Medium,
-  'Fraunces-500i':         Fraunces_500Medium_Italic,
-  'Fraunces-600':          Fraunces_600SemiBold,
-  'Inter Tight':           InterTight_400Regular,
-  'Inter Tight-500':       InterTight_500Medium,
-  'Inter Tight-600':       InterTight_600SemiBold,
-  'JetBrains Mono':        JetBrainsMono_400Regular,
-  'JetBrains Mono-500':    JetBrainsMono_500Medium,
+  'Instrument Serif':         InstrumentSerif_400Regular,
+  'Instrument Serif-Italic':  InstrumentSerif_400Regular_Italic,
+  'DM Sans':                  DMSans_400Regular,
+  'DM Sans-500':              DMSans_500Medium,
+  'DM Sans-600':              DMSans_600SemiBold,
+  'DM Sans-700':              DMSans_700Bold,
+  'JetBrains Mono':           JetBrainsMono_400Regular,
+  'JetBrains Mono-500':       JetBrainsMono_500Medium,
 };
 
 /**

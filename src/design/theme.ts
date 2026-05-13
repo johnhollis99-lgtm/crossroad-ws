@@ -1,18 +1,16 @@
 /**
- * Xroad theme — composes tokens into light + dark Theme objects, plus a
- * Context-based provider and useTheme() hook.
+ * XRoad theme — Pine (single dark scheme + CVD-safe accent swap).
  *
- * No Restyle. Existing screens use StyleSheet.create() and the new system
- * matches that pattern: components grab whatever they need off the theme
- * object and pass it to their own StyleSheet block, e.g.
+ * The CVD-safe toggle swaps `theme.colors.accent` from cobalt (`secondary`)
+ * to amber (`cvdSafe`). Icons read the accent color via `theme.colors.accent`
+ * — the RN port of the spec's `--ax` CSS custom property — so a single
+ * toggle paints every icon at once.
  *
- *   const { theme } = useTheme();
- *   const s = StyleSheet.create({
- *     wrap: { backgroundColor: theme.colors.paper, padding: theme.spacing.l },
- *   });
+ * `secondary` / `secondaryDeep` / `secondaryTint` stay cobalt regardless,
+ * so non-icon UI (Add stop pill bg, cobalt-tinted surfaces) is unaffected
+ * by CVD mode. That matches the spec — CVD only swaps the icon accent.
  *
- * Persistence: user's explicit color-scheme override (when not 'system') is
- * stored under AsyncStorage key `xroad.colorScheme`.
+ * Persistence: AsyncStorage key `xroad.cvdSafe` ('0' | '1').
  */
 
 import React, {
@@ -23,155 +21,144 @@ import React, {
   useMemo,
   useState,
 } from 'react';
-import { useColorScheme } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import type { TextStyle, ViewStyle } from 'react-native';
 
 import {
-  lightColors,
-  darkColors,
+  pineColors,
   textVariants,
   spacing,
   radii,
-  elevation,
+  shadows,
   fontFamilies,
 } from './tokens';
 import type { TextVariantName } from './tokens';
 
 // ── Types ─────────────────────────────────────────────────────────────────
 
-export type ColorScheme = 'light' | 'dark';
-export type ColorSchemeOverride = ColorScheme | 'system';
-
-// Both schemes must expose the same shape so any themed component can swap.
-// Light has no native `card`/`cardEdge` tokens — they alias to paperDeep/rule
-// so a component using `theme.colors.card` works in both schemes.
 export interface ThemeColors {
-  paper:            string;
-  paperDeep:        string;
-  ink:              string;
-  inkSoft:          string;
-  rule:             string;
-  card:             string;
-  cardEdge:         string;
-  accent:           string;
-  accent2:          string;
-  glassTint:        string;
-  glassTintInverse: string;
+  paper:             string;
+  paperSoft:         string;
+  paperWarm:         string;
+  paperEdge:         string;
+
+  ink:               string;
+  inkSoft:           string;
+  inkFaint:          string;
+
+  line:              string;
+  lineSoft:          string;
+
+  primary:           string;
+  primaryDeep:       string;
+  primaryTint:       string;
+  primaryTintEdge:   string;
+
+  secondary:         string;
+  secondaryDeep:     string;
+  secondaryTint:     string;
+  secondaryTintEdge: string;
+
+  /** CVD-aware icon accent. Cobalt when CVD-safe is off, amber when on. */
+  accent:            string;
+
+  danger:            string;
+  dangerDeep:        string;
+  dangerTint:        string;
 }
 
 export interface Theme {
-  scheme:        ColorScheme;
   colors:        ThemeColors;
   spacing:       typeof spacing;
   radii:         typeof radii;
-  elevation:     Record<'e1' | 'e2', ViewStyle>;
+  shadows:       typeof shadows;
   textVariants:  Record<TextVariantName, TextStyle>;
   fontFamilies:  typeof fontFamilies;
 }
 
 // ── Theme construction ────────────────────────────────────────────────────
 
-export const lightTheme: Theme = {
-  scheme: 'light',
-  colors: {
-    paper:            lightColors.paper,
-    paperDeep:        lightColors.paperDeep,
-    ink:              lightColors.ink,
-    inkSoft:          lightColors.inkSoft,
-    rule:             lightColors.rule,
-    card:             lightColors.paperDeep,   // light has no separate card token
-    cardEdge:         lightColors.rule,        // light card-edge aliases to rule
-    accent:           lightColors.accent,
-    accent2:          lightColors.accent2,
-    glassTint:        lightColors.glassTint,
-    glassTintInverse: lightColors.glassTintInverse,
-  },
-  spacing,
-  radii,
-  elevation,
-  textVariants,
-  fontFamilies,
-};
+function buildTheme(opts: { cvdSafe: boolean }): Theme {
+  return {
+    colors: {
+      paper:             pineColors.paper,
+      paperSoft:         pineColors.paperSoft,
+      paperWarm:         pineColors.paperWarm,
+      paperEdge:         pineColors.paperEdge,
+      ink:               pineColors.ink,
+      inkSoft:           pineColors.inkSoft,
+      inkFaint:          pineColors.inkFaint,
+      line:              pineColors.line,
+      lineSoft:          pineColors.lineSoft,
+      primary:           pineColors.primary,
+      primaryDeep:       pineColors.primaryDeep,
+      primaryTint:       pineColors.primaryTint,
+      primaryTintEdge:   pineColors.primaryTintEdge,
+      secondary:         pineColors.secondary,
+      secondaryDeep:     pineColors.secondaryDeep,
+      secondaryTint:     pineColors.secondaryTint,
+      secondaryTintEdge: pineColors.secondaryTintEdge,
+      accent:            opts.cvdSafe ? pineColors.cvdSafe : pineColors.secondary,
+      danger:            pineColors.danger,
+      dangerDeep:        pineColors.dangerDeep,
+      dangerTint:        pineColors.dangerTint,
+    },
+    spacing,
+    radii,
+    shadows,
+    textVariants,
+    fontFamilies,
+  };
+}
 
-export const darkTheme: Theme = {
-  scheme: 'dark',
-  colors: {
-    paper:            darkColors.paper,
-    paperDeep:        darkColors.paperDeep,
-    ink:              darkColors.ink,
-    inkSoft:          darkColors.inkSoft,
-    rule:             darkColors.rule,
-    card:             darkColors.card,
-    cardEdge:         darkColors.cardEdge,
-    accent:           darkColors.accent,
-    accent2:          darkColors.accent2,
-    glassTint:        darkColors.glassTint,
-    glassTintInverse: darkColors.glassTintInverse,
-  },
-  spacing,
-  radii,
-  elevation,
-  textVariants,
-  fontFamilies,
-};
+export const pineTheme:        Theme = buildTheme({ cvdSafe: false });
+export const pineThemeCvdSafe: Theme = buildTheme({ cvdSafe: true });
 
 // ── Context + Provider + hook ─────────────────────────────────────────────
 
-const COLOR_SCHEME_STORAGE_KEY = 'xroad.colorScheme';
+const CVD_STORAGE_KEY = 'xroad.cvdSafe';
 
 interface ThemeContextValue {
-  theme:       Theme;
-  scheme:      ColorScheme;
-  override:    ColorSchemeOverride;          // 'light' | 'dark' | 'system'
-  setOverride: (next: ColorSchemeOverride) => void;
+  theme:      Theme;
+  cvdSafe:    boolean;
+  setCvdSafe: (next: boolean) => void;
 }
 
-// Exported so demo screens can pin a subtree to a specific theme (light/dark
-// side-by-side previews). Production code should consume via useTheme().
 export const ThemeContext = createContext<ThemeContextValue | null>(null);
 
 export function ThemeProvider({ children }: { children: React.ReactNode }) {
-  const systemScheme = useColorScheme();     // 'light' | 'dark' | null
-  const [override, setOverrideState] = useState<ColorSchemeOverride>('system');
+  const [cvdSafe, setCvdSafeState] = useState(false);
   const [hydrated, setHydrated] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
-    AsyncStorage.getItem(COLOR_SCHEME_STORAGE_KEY)
+    AsyncStorage.getItem(CVD_STORAGE_KEY)
       .then((raw) => {
         if (cancelled) return;
-        if (raw === 'light' || raw === 'dark' || raw === 'system') {
-          setOverrideState(raw);
-        }
+        if (raw === '1') setCvdSafeState(true);
       })
       .catch(() => { /* AsyncStorage failure is non-fatal */ })
       .finally(() => { if (!cancelled) setHydrated(true); });
     return () => { cancelled = true; };
   }, []);
 
-  const setOverride = useCallback((next: ColorSchemeOverride) => {
-    setOverrideState(next);
-    AsyncStorage.setItem(COLOR_SCHEME_STORAGE_KEY, next).catch(() => { /* ignore */ });
+  const setCvdSafe = useCallback((next: boolean) => {
+    setCvdSafeState(next);
+    AsyncStorage.setItem(CVD_STORAGE_KEY, next ? '1' : '0').catch(() => { /* ignore */ });
   }, []);
 
-  const scheme: ColorScheme = override === 'system'
-    ? (systemScheme === 'dark' ? 'dark' : 'light')
-    : override;
-
-  const theme = scheme === 'dark' ? darkTheme : lightTheme;
+  const theme = cvdSafe ? pineThemeCvdSafe : pineTheme;
 
   const value = useMemo<ThemeContextValue>(
-    () => ({ theme, scheme, override, setOverride }),
-    [theme, scheme, override, setOverride],
+    () => ({ theme, cvdSafe, setCvdSafe }),
+    [theme, cvdSafe, setCvdSafe],
   );
 
-  // Wait for the persisted override to land before rendering — otherwise we'd
-  // flash the wrong scheme for ~1 frame on cold start when a user previously
-  // pinned 'dark' on a system-light device (or vice versa).
+  // Wait for the persisted CVD flag to land before rendering — otherwise
+  // we'd flash the wrong accent for ~1 frame on cold start.
   if (!hydrated) return null;
 
-  // createElement (not JSX) so this stays a .ts file per the design spec.
+  // createElement (not JSX) so this stays a .ts file.
   return React.createElement(ThemeContext.Provider, { value }, children);
 }
 

@@ -33,24 +33,24 @@ export function PrimaryButton({
       style={({ pressed }) => [
         styles.base,
         {
-          backgroundColor:   theme.colors.ink,
+          backgroundColor:   pressed ? theme.colors.primaryDeep : theme.colors.primary,
           paddingVertical:   14,
           paddingHorizontal: 16,
-          borderRadius:      24,
-          opacity:           disabled ? 0.5 : pressed ? 0.85 : 1,
+          borderRadius:      theme.radii.button,
+          opacity:           disabled ? 0.5 : 1,
         },
       ]}
     >
       <View style={styles.row}>
         <View style={styles.labels}>
-          <Text style={[theme.textVariants.button, { color: theme.colors.paper }]}>
+          <Text style={[theme.textVariants.label, { color: theme.colors.paperSoft }]}>
             {label}
           </Text>
           {sublabel ? (
             <Text
               style={[
-                theme.textVariants.metaSmall,
-                { color: theme.colors.paper, opacity: 0.6, marginTop: 2 },
+                theme.textVariants.meta,
+                { color: theme.colors.paperSoft, opacity: 0.7, marginTop: 2 },
               ]}
             >
               {sublabel}
@@ -60,8 +60,8 @@ export function PrimaryButton({
         {iconGlyph ? (
           <Text
             style={[
-              theme.textVariants.button,
-              { color: theme.colors.accent, marginLeft: theme.spacing.s },
+              theme.textVariants.label,
+              { color: theme.colors.paperSoft, marginLeft: theme.spacing.s },
             ]}
           >
             {iconGlyph}

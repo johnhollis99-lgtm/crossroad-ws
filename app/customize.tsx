@@ -1,60 +1,105 @@
 /**
- * RoadStory — Customize screen
+ * XRoad — Customize screen (Pine, Phase 2).
  *
- * Layout: 220px non-interactive map preview at top, dark scrollable sheet below.
+ * Layout: 240px non-interactive map peek at top with a fade-into-paper
+ * gradient, scrollable content below, sticky Start trip CTA pinned to the
+ * bottom edge. Every handler / state machine / data binding from the
+ * previous earthy-palette version is preserved — this is a visual rebuild.
  *
  * Receives from Map screen (params):
  *   route: JSON string { id, name, distance_mi, duration_minutes, story_count, origin, destination }
  *   routePreview, originLocation — forwarded to Drive screen
- *
-*/
+ */
 
-import React, { useState, useRef, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   Alert,
-  KeyboardAvoidingView,
-  LayoutChangeEvent,
-  Modal,
-  PanResponder,
   Platform,
+  Pressable,
   ScrollView,
   StatusBar,
   StyleSheet,
   Text,
-  TextInput,
-  TouchableOpacity,
   View,
 } from 'react-native';
 import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from 'react-native-maps';
 import { useNavigation, useRoute } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
-import { countPOIsAlongRoute, getAvailableNarrators, getPOIsAlongRoute, saveTrip } from '../lib/supabase';
-import type { NarratorRecord, POI } from '../lib/supabase';
-import { C } from '../lib/theme';
+
+import {
+  countPOIsAlongRoute,
+  getAvailableNarrators,
+  getPOIsAlongRoute,
+  saveTrip,
+} from '../lib/supabase';
+import type { NarratorRecord } from '../lib/supabase';
 import { MapStyleId, MAP_STYLES, loadMapStyle, saveMapStyle } from '../lib/mapStyle';
 import { MapStylePicker } from '../components/MapStylePicker';
-import { CategoryChip, Wordmark } from '../src/components';
+import { useTheme } from '../src/design/theme';
+import { shadows } from '../src/design/tokens';
+import {
+  CategoryChip,
+  IconArrowLeft,
+  IconArchitecture,
+  IconArt,
+  IconCar,
+  IconFilm,
+  IconFood,
+  IconHistory,
+  IconMusic,
+  IconNature,
+  IconRoadside,
+  IconScience,
+  IconWeird,
+  LabeledSlider,
+  NarratorCard,
+  SegmentedTrio,
+  TripStat,
+  Wordmark,
+} from '../src/components';
+import type { IconProps } from '../src/components';
 import { useTripStore } from '../src/store/tripStore';
 import { curateRoutePOIs, type Density } from '../src/lib/curation/curateRoutePOIs';
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
-const MAP_PREVIEW_H = 150;
+const MAP_PREVIEW_H = 240;
 const STATUS_TOP    = Platform.OS === 'ios' ? 50 : ((StatusBar.currentHeight ?? 24) + 8);
 const MAPBOX_TOKEN  = process.env.EXPO_PUBLIC_MAPBOX_TOKEN!;
 
+type Depth = 'glance' | 'ride_along' | 'deep_dive';
+
 const DEPTH_OPTIONS = [
-  { key: 'glance'     as const, label: 'Glance',     sub: '1-2 lines'       },
-  { key: 'ride_along' as const, label: 'Ride along', sub: 'Short paragraph' },
-  { key: 'deep_dive'  as const, label: 'Deep dive',  sub: 'Full story'      },
+  { value: 'glance'     as const, label: 'Glance',     sub: '1–2 lines'       },
+  { value: 'ride_along' as const, label: 'Ride along', sub: 'Short paragraph' },
+  { value: 'deep_dive'  as const, label: 'Deep dive',  sub: 'Full story'      },
+];
+
+const DENSITY_OPTIONS = [
+  { value: 'sparse'   as const, label: 'Sparse'   },
+  { value: 'balanced' as const, label: 'Balanced' },
+  { value: 'dense'    as const, label: 'Dense'    },
 ];
 
 const ALL_CATEGORIES = [
   'History', 'Nature', 'Architecture', 'Food',
   'Music', 'Weird', 'Roadside', 'Film', 'Science',
 ];
-const DEFAULT_CATEGORIES = ['History', 'Nature', 'Food', 'Roadside'];
+
+// Maps UI display labels → category icon component (Pine duotone glyphs).
+const CATEGORY_ICONS: Record<string, React.ComponentType<IconProps>> = {
+  'History':      IconHistory,
+  'Nature':       IconNature,
+  'Architecture': IconArchitecture,
+  'Food':         IconFood,
+  'Music':        IconMusic,
+  'Weird':        IconWeird,
+  'Roadside':     IconRoadside,
+  'Film':         IconFilm,
+  'Science':      IconScience,
+  'Art':          IconArt,
+};
 
 // Maps UI display labels → DB poi_category slugs used in get_corridor_pois
 const CAT_SLUG: Record<string, string> = {
@@ -69,8 +114,6 @@ const CAT_SLUG: Record<string, string> = {
   'Science':      'geology',
 };
 
-// POI slider range depends on trip mode (drift 5.81). Driving covers
-// regional / interstate corridors, hiking covers single-trail corridors.
 const POI_MIN          = 0;
 const POI_MAX_DRIVING  = 20;
 const POI_MAX_HIKING   = 2;
@@ -78,7 +121,19 @@ const POI_STEP         = 0.5;
 const POI_DEFAULT_DRV  = 1;
 const POI_DEFAULT_HIKE = 0.5;
 
+const RELEVANCE_MIN  = 0;
+const RELEVANCE_MAX  = 100;
+
 const SERVER_URL = (process.env.EXPO_PUBLIC_SERVER_URL ?? 'http://localhost:3001');
+
+// Per Pine Phase 2 spec: narrator avatar colors constrained to Pine-coherent
+// hues. Map slug → avatar bg. Fallback uses the persona's stored color.
+const NARRATOR_AVATAR_PALETTE: Record<string, string> = {
+  'the-professor':      '#60A5FA', // cobalt — matches secondary
+  'the-local':          '#9F7AEA', // lilac — replaces the legacy brown
+  'the-junior-ranger':  '#10B981', // emerald — matches primary
+  'the-truck-driver':   '#F59E0B', // amber — matches CVD-safe accent
+};
 
 // ── Preset narrators (fallback if Supabase RPC not yet migrated) ─────────────
 
@@ -97,7 +152,7 @@ const PRESET_NARRATORS: NarratorRecord[] = [
     voice_descriptor: 'Male, deep, measured',
     intro_line: "Alright, I've been looking at your route — there's more out here than you'd think. Let me walk you through it.",
     system_prompt_fragment: 'You are The Professor, a confident and encyclopedic road-trip narrator.',
-    avatar_color_bg: '#1E3A5F',
+    avatar_color_bg: NARRATOR_AVATAR_PALETTE['the-professor'],
     avatar_color_text: '#FFFFFF',
     avatar_initials: 'TP',
     is_preset: true,
@@ -117,8 +172,8 @@ const PRESET_NARRATORS: NarratorRecord[] = [
     voice_descriptor: 'Male, gravelly, no-nonsense',
     intro_line: "Alright, I've done this run about 400 times. Let me tell you what's actually worth looking at.",
     system_prompt_fragment: 'You are The Truck Driver, a road-trip narrator who has driven every highway in America.',
-    avatar_color_bg: '#2D2D2D',
-    avatar_color_text: '#FFD700',
+    avatar_color_bg: NARRATOR_AVATAR_PALETTE['the-truck-driver'],
+    avatar_color_text: '#FFFFFF',
     avatar_initials: 'TD',
     is_preset: true,
     source: 'preset',
@@ -137,7 +192,7 @@ const PRESET_NARRATORS: NarratorRecord[] = [
     voice_descriptor: 'Youthful, bright, energetic',
     intro_line: "Hey explorer! I'm your Junior Ranger and we've got SO many cool things to find on this trip!",
     system_prompt_fragment: 'You are The Junior Ranger, a road-trip narrator for children ages 4–12.',
-    avatar_color_bg: '#2E7D32',
+    avatar_color_bg: NARRATOR_AVATAR_PALETTE['the-junior-ranger'],
     avatar_color_text: '#FFFFFF',
     avatar_initials: 'JR',
     is_preset: true,
@@ -157,7 +212,7 @@ const PRESET_NARRATORS: NarratorRecord[] = [
     voice_descriptor: 'Conversational, relaxed, knowing',
     intro_line: "Look — the guidebook stuff is fine but I'll tell you what the guidebooks don't know.",
     system_prompt_fragment: 'You are The Local, a road-trip narrator who is an insider in every region.',
-    avatar_color_bg: '#5D4037',
+    avatar_color_bg: NARRATOR_AVATAR_PALETTE['the-local'],
     avatar_color_text: '#FFFFFF',
     avatar_initials: 'TL',
     is_preset: true,
@@ -166,8 +221,6 @@ const PRESET_NARRATORS: NarratorRecord[] = [
 ];
 
 // ── Types ────────────────────────────────────────────────────────────────────
-
-type Depth = 'glance' | 'ride_along' | 'deep_dive';
 
 interface RouteInfo {
   id: string;
@@ -192,218 +245,10 @@ function fmtMiles(mi: number): string {
   return mi % 1 === 0 ? `${mi} mi` : `${mi.toFixed(1)} mi`;
 }
 
-// ── POI distance slider ───────────────────────────────────────────────────────
-
-function PoiSlider({ value, onChange, max }: { value: number; onChange: (v: number) => void; max: number }) {
-  const trackWidth = useRef(0);
-  const maxRef = useRef(max);
-  maxRef.current = max;
-  const pct = (value - POI_MIN) / (max - POI_MIN);
-
-  const pan = useRef(
-    PanResponder.create({
-      onStartShouldSetPanResponder: () => true,
-      onMoveShouldSetPanResponder:  () => true,
-      onPanResponderGrant: (e) => snap(e.nativeEvent.locationX),
-      onPanResponderMove:  (e) => snap(e.nativeEvent.locationX),
-    })
-  ).current;
-
-  function snap(x: number) {
-    const ratio = Math.max(0, Math.min(1, x / (trackWidth.current || 1)));
-    const raw   = POI_MIN + ratio * (maxRef.current - POI_MIN);
-    onChange(Math.round(raw / POI_STEP) * POI_STEP);
-  }
-
-  return (
-    <View
-      style={sl.track}
-      onLayout={(e: LayoutChangeEvent) => { trackWidth.current = e.nativeEvent.layout.width; }}
-      {...pan.panHandlers}
-      hitSlop={{ top: 16, bottom: 16 }}
-    >
-      <View style={[sl.fill, { width: `${pct * 100}%` as any }]} />
-      <View style={[sl.thumb, { left: `${pct * 100}%` as any }]} />
-    </View>
-  );
+function avatarColorFor(narrator: NarratorRecord): string {
+  const slug = narrator.slug ?? '';
+  return NARRATOR_AVATAR_PALETTE[slug] ?? narrator.avatar_color_bg ?? '#10B981';
 }
-
-const sl = StyleSheet.create({
-  track: { flex: 1, height: 4, backgroundColor: C.BORDER_SUBTLE, borderRadius: 2, position: 'relative', justifyContent: 'center' },
-  fill:  { height: 4, backgroundColor: C.ACCENT, borderRadius: 2, position: 'absolute', left: 0 },
-  thumb: { width: 22, height: 22, borderRadius: 11, backgroundColor: C.BG_BASE, borderWidth: 2.5, borderColor: C.ACCENT_TEXT, position: 'absolute', marginLeft: -11, top: -9, elevation: 4, ...Platform.select({ web: { boxShadow: '0 2px 4px rgba(0,0,0,0.4)' }, default: { shadowColor: '#000', shadowOpacity: 0.4, shadowRadius: 4, shadowOffset: { width: 0, height: 2 } } }) },
-  marker: { position: 'absolute', top: -3, width: 2, height: 10, marginLeft: -1, backgroundColor: C.BORDER_STRONG, borderRadius: 1 },
-});
-
-// ── Relevance slider (B4 / drift 5.77) ────────────────────────────────────────
-// 0..100 continuous slider with implicit-only markers at 0/50/70/85/95.
-// Snaps to whole integers. Marker ticks render faintly under the track so
-// users can hit canonical thresholds without a dropdown.
-
-const RELEVANCE_MIN = 0;
-const RELEVANCE_MAX = 100;
-const RELEVANCE_MARKERS = [0, 50, 70, 85, 95] as const;
-
-function RelevanceSlider({ value, onChange }: { value: number; onChange: (v: number) => void }) {
-  const trackWidth = useRef(0);
-  const pct = (value - RELEVANCE_MIN) / (RELEVANCE_MAX - RELEVANCE_MIN);
-
-  const pan = useRef(
-    PanResponder.create({
-      onStartShouldSetPanResponder: () => true,
-      onMoveShouldSetPanResponder:  () => true,
-      onPanResponderGrant: (e) => snap(e.nativeEvent.locationX),
-      onPanResponderMove:  (e) => snap(e.nativeEvent.locationX),
-    })
-  ).current;
-
-  function snap(x: number) {
-    const ratio = Math.max(0, Math.min(1, x / (trackWidth.current || 1)));
-    const raw   = RELEVANCE_MIN + ratio * (RELEVANCE_MAX - RELEVANCE_MIN);
-    onChange(Math.round(raw));
-  }
-
-  return (
-    <View
-      style={sl.track}
-      onLayout={(e: LayoutChangeEvent) => { trackWidth.current = e.nativeEvent.layout.width; }}
-      {...pan.panHandlers}
-      hitSlop={{ top: 16, bottom: 16 }}
-    >
-      {RELEVANCE_MARKERS.map(m => (
-        <View key={m} style={[sl.marker, { left: `${((m - RELEVANCE_MIN) / (RELEVANCE_MAX - RELEVANCE_MIN)) * 100}%` as any }]} />
-      ))}
-      <View style={[sl.fill, { width: `${pct * 100}%` as any }]} />
-      <View style={[sl.thumb, { left: `${pct * 100}%` as any }]} />
-    </View>
-  );
-}
-
-// ── Create Narrator Modal ─────────────────────────────────────────────────────
-
-function CreateNarratorModal({
-  visible,
-  onClose,
-  onCreated,
-  depth,
-  categories,
-}: {
-  visible: boolean;
-  onClose: () => void;
-  onCreated: (n: NarratorRecord) => void;
-  depth: Depth;
-  categories: string[];
-}) {
-  const [vibes, setVibes]   = useState('');
-  const [rating, setRating] = useState<'everyone' | 'rated_r'>('everyone');
-  const [loading, setLoading] = useState(false);
-  const [error, setError]   = useState('');
-
-  const handleGenerate = async () => {
-    const vibeWords = vibes.split(',').map(w => w.trim()).filter(Boolean);
-    if (!vibeWords.length) { setError('Add at least one vibe word.'); return; }
-    setError('');
-    setLoading(true);
-    try {
-      const res = await fetch(`${SERVER_URL}/api/narrators/generate`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          mode: 'custom',
-          user_id: '00000000-0000-0000-0000-000000000000',
-          depth,
-          categories,
-          content_rating: rating,
-          vibe_words: vibeWords,
-        }),
-      });
-      const json = await res.json();
-      if (!res.ok) throw new Error(json.error ?? 'Generation failed');
-      onCreated(json.narrator as NarratorRecord);
-      setVibes('');
-      onClose();
-    } catch (e: any) {
-      setError(e.message ?? 'Something went wrong');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  return (
-    <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
-      <KeyboardAvoidingView
-        style={md.overlay}
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-      >
-        <View style={md.sheet}>
-          <View style={md.handle} />
-          <Text style={md.title}>Create your narrator</Text>
-
-          <Text style={md.label}>Personality vibes</Text>
-          <TextInput
-            style={md.input}
-            placeholder="mysterious, dry humor, conspiracy theorist"
-            placeholderTextColor={C.TEXT_TERTIARY}
-            value={vibes}
-            onChangeText={t => { setVibes(t); setError(''); }}
-            returnKeyType="done"
-            autoCorrect={false}
-          />
-
-          <Text style={md.label}>Content rating</Text>
-          <View style={md.ratingRow}>
-            {(['everyone', 'rated_r'] as const).map(r => (
-              <TouchableOpacity
-                key={r}
-                style={[md.ratingBtn, rating === r && md.ratingBtnOn]}
-                onPress={() => setRating(r)}
-                activeOpacity={0.8}
-              >
-                <Text style={[md.ratingText, rating === r && md.ratingTextOn]}>
-                  {r === 'everyone' ? 'Everyone' : '18+'}
-                </Text>
-              </TouchableOpacity>
-            ))}
-          </View>
-
-          {!!error && <Text style={md.errorText}>{error}</Text>}
-
-          <TouchableOpacity
-            style={[md.genBtn, loading && { opacity: 0.6 }]}
-            onPress={handleGenerate}
-            disabled={loading}
-            activeOpacity={0.85}
-          >
-            <Text style={md.genBtnText}>{loading ? 'Generating…' : 'Generate narrator'}</Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity onPress={onClose} style={md.cancelBtn} activeOpacity={0.7}>
-            <Text style={md.cancelText}>Cancel</Text>
-          </TouchableOpacity>
-        </View>
-      </KeyboardAvoidingView>
-    </Modal>
-  );
-}
-
-const md = StyleSheet.create({
-  overlay:      { flex: 1, backgroundColor: 'rgba(0,0,0,0.6)', justifyContent: 'flex-end' },
-  sheet:        { backgroundColor: C.BG_SURFACE, borderTopLeftRadius: 20, borderTopRightRadius: 20, borderTopWidth: 1, borderColor: C.BORDER_SUBTLE, padding: 24, paddingBottom: Platform.OS === 'ios' ? 40 : 24 },
-  handle:       { width: 36, height: 4, backgroundColor: C.BORDER_STRONG, borderRadius: 2, alignSelf: 'center', marginBottom: 20 },
-  title:        { fontSize: 18, fontWeight: '700', color: C.TEXT_PRIMARY, marginBottom: 20 },
-  label:        { fontSize: 10, fontWeight: '700', color: C.TEXT_TERTIARY, textTransform: 'uppercase', letterSpacing: 0.8, marginTop: 18, marginBottom: 8 },
-  input:        { borderWidth: 1.5, borderColor: C.BORDER_SUBTLE, borderRadius: 10, paddingHorizontal: 14, paddingVertical: 13, fontSize: 14, color: C.TEXT_PRIMARY, minHeight: 44, backgroundColor: C.BG_ELEVATED },
-  ratingRow:    { flexDirection: 'row', gap: 10 },
-  ratingBtn:    { flex: 1, paddingVertical: 13, borderRadius: 10, borderWidth: 1.5, borderColor: C.BORDER_SUBTLE, alignItems: 'center', minHeight: 44, backgroundColor: C.BG_ELEVATED },
-  ratingBtnOn:  { backgroundColor: C.ACCENT_LIGHT, borderColor: C.ACCENT_BORDER },
-  ratingText:   { fontSize: 14, fontWeight: '600', color: C.TEXT_SECONDARY },
-  ratingTextOn: { color: C.ACCENT_TEXT },
-  errorText:    { fontSize: 13, color: C.DANGER, marginTop: 12 },
-  genBtn:       { backgroundColor: C.ACCENT, borderRadius: 12, paddingVertical: 16, alignItems: 'center', marginTop: 20, minHeight: 52 },
-  genBtnText:   { fontSize: 16, fontWeight: '700', color: C.WHITE },
-  cancelBtn:    { paddingVertical: 16, alignItems: 'center', minHeight: 52 },
-  cancelText:   { fontSize: 15, color: C.TEXT_TERTIARY },
-});
 
 // ── Main screen ───────────────────────────────────────────────────────────────
 
@@ -411,6 +256,7 @@ export default function CustomizeScreen() {
   const navigation = useNavigation<any>();
   const route      = useRoute<any>();
   const insets     = useSafeAreaInsets();
+  const { theme }  = useTheme();
   const params     = route.params ?? {};
 
   const routeInfo: RouteInfo = params.route
@@ -425,18 +271,13 @@ export default function CustomizeScreen() {
   const midIdx = Math.floor(polylineCoords.length / 2);
   const midPoint = polylineCoords[midIdx] ?? { latitude: 34.05, longitude: -118.24 };
 
-  // ── Trip-mode awareness (drift 5.81) ─────────────────────────────────────
-  // Read activeTripMode from the Zustand store. Drives POI slider range,
-  // density default (B3), and the pace divisor used by the stats strip
-  // when it lands in commit 3.
+  // ── Trip-mode awareness ──────────────────────────────────────────────────
   const activeTripMode = useTripStore(s => s.activeTripMode);
   const isHiking       = activeTripMode === 'hiking';
   const poiMax         = isHiking ? POI_MAX_HIKING : POI_MAX_DRIVING;
   const poiDefault     = isHiking ? POI_DEFAULT_HIKE : POI_DEFAULT_DRV;
 
-  // ── Category state (drift 5.80) ───────────────────────────────────────────
-  // Lifted to the Zustand store so home and customize stay in sync.
-  // Empty = include all (B2 curation convention).
+  // ── Category state ───────────────────────────────────────────────────────
   const selectedCats         = useTripStore(s => s.selectedCategories);
   const toggleCategoryStore  = useTripStore(s => s.toggleCategory);
   const toggleCategory       = useCallback((cat: string) => {
@@ -464,13 +305,8 @@ export default function CustomizeScreen() {
   const [saving,           setSaving]           = useState(false);
   const [mapStyleId,       setMapStyleId]       = useState<MapStyleId>('dark');
   const [liveStoryCount,   setLiveStoryCount]   = useState<number | null>(routeInfo.story_count);
-  // B3 density (drift 5.75): balanced for driving, dense for hiking by default.
   const [density,          setDensityRaw]       = useState<Density>(isHiking ? 'dense' : 'balanced');
-  // B4 relevance threshold (drift 5.77): 0..100, default 0 = no filter.
   const [minRelevance,     setMinRelevanceRaw]  = useState<number>(0);
-  // Diagnostic wrappers (drift 5.96) — emit a transition log on every user
-  // slider/density change so the chip-toggle → rpc-call → rpc-return →
-  // stats-render chain is visible end-to-end in console.
   const setDensity = useCallback((next: Density) => {
     if (__DEV__) console.info('[customize] filter:slider-change', { which: 'density', value: next });
     setDensityRaw(next);
@@ -479,34 +315,17 @@ export default function CustomizeScreen() {
     if (__DEV__) console.info('[customize] filter:slider-change', { which: 'relevance', value: next });
     setMinRelevanceRaw(next);
   }, []);
-  // B5 curated count + avg pace for the stats strip. Refreshed on slider /
-  // category / distance / density / relevance changes via the effect below.
   const [curatedCount,     setCuratedCount]     = useState<number | null>(null);
   const [avgPaceMin,       setAvgPaceMin]       = useState<number | null>(null);
 
   // Clamp current poiDist if the mode-driven max shrinks beneath it
-  // (e.g. user toggles from Drive 20mi → Hike 2mi). Without this the
-  // slider thumb would render past the track end.
   useEffect(() => {
     if (poiDist > poiMax) setPoiDist(poiMax);
   }, [poiMax]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => { loadMapStyle().then(setMapStyleId); }, []);
 
-  // ── Stats / curation refresh (drift 5.75 / 5.76 / 5.77 / 5.78 / 5.96) ─────
-  // 150ms debounce per spec B5. Fetches the corridor with significance-desc
-  // sort, runs the pure curation function, and updates the stats strip's
-  // count + pace. Replaces the prior count-only `countPOIsAlongRoute` call.
-  //
-  // Pace divisor (drift 5.81 follow-up): driving uses route duration as-is;
-  // hiking estimates 20 min/mi when the route record has no native hike
-  // duration. Drift 5.85 tracks adding a real hike-duration field.
-  //
-  // Race-condition guard (drift 5.96): each effect bumps `filterRequestVersion`
-  // and stores its own version locally. RPC `.then` callbacks compare against
-  // the latest version on resolution and bail if stale — prevents a slow
-  // prior-toggle response from overwriting a fresh-toggle one. Without this,
-  // rapidly toggling chips could leave the stats strip showing a stale count.
+  // ── Stats / curation refresh ─────────────────────────────────────────────
   const HIKING_PACE_MIN_PER_MI = 20;
   const tripDurationMin = isHiking
     ? routeInfo.distance_mi * HIKING_PACE_MIN_PER_MI
@@ -541,7 +360,7 @@ export default function CustomizeScreen() {
         polylineCoords, rpcParams.corridorMi, mode, rpcParams.categories,
         { minSignificance: minRelevance },
       ).then(n => {
-        if (myVersion !== filterRequestVersion.current) return; // stale, drop
+        if (myVersion !== filterRequestVersion.current) return;
         if (__DEV__) {
           console.info('[customize] filter:rpc-return', { fn: 'countPOIsAlongRoute', count: n, version: myVersion });
         }
@@ -553,7 +372,7 @@ export default function CustomizeScreen() {
         polylineCoords, rpcParams.corridorMi, rpcParams.categories, mode,
         { sortMode: 'significance_desc', minSignificance: minRelevance, resultLimit: 500 },
       ).then(rawPOIs => {
-        if (myVersion !== filterRequestVersion.current) return; // stale, drop
+        if (myVersion !== filterRequestVersion.current) return;
         if (__DEV__) {
           console.info('[customize] filter:rpc-return', {
             fn:     'getPOIsAlongRoute',
@@ -580,14 +399,12 @@ export default function CustomizeScreen() {
     return () => clearTimeout(handle);
   }, [selectedCats, poiDist, isHiking, density, minRelevance, tripDurationMin]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Stats-strip render log — fires every time the curated count value the
-  // strip displays changes. Pairs with filter:rpc-return so the chain
-  // chip-toggle → rpc-call → rpc-return → stats-render is visible in console.
   useEffect(() => {
     if (__DEV__) {
       console.info('[customize] filter:stats-render', { count: curatedCount, avgPaceMin });
     }
   }, [curatedCount, avgPaceMin]);
+
   const handleMapStyleChange = (id: MapStyleId) => { setMapStyleId(id); saveMapStyle(id); };
   const activeMapStyle = MAP_STYLES[mapStyleId];
 
@@ -608,8 +425,6 @@ export default function CustomizeScreen() {
   }, []);
 
   // ── Start trip ────────────────────────────────────────────────────────────
-  // Note: Roll-the-dice + Create-your-own narrator flows removed per
-  // drift 5.83. The 4 narrator cards are the supported selection surface.
   const handleStartTrip = useCallback(async () => {
     if (saving) return;
 
@@ -617,7 +432,6 @@ export default function CustomizeScreen() {
       Alert.alert('Select a narrator', 'Choose a narrator before starting your trip.');
       return;
     }
-    // Empty categories = include all (B2 curation convention) — no alert here.
     if (poiDist < POI_MIN || poiDist > poiMax) {
       Alert.alert('Invalid distance', `POI distance must be between ${POI_MIN} and ${poiMax} miles.`);
       return;
@@ -637,8 +451,8 @@ export default function CustomizeScreen() {
       depth:           selectedDepth,
       categoryFilter:  selectedCats,
       poiDistanceM:    Math.round(poiDist * 1609.34),
-      density,                                  // drift 5.75
-      minRelevance,                             // drift 5.77
+      density,
+      minRelevance,
       status:          'active',
       startedAt:       new Date().toISOString(),
     };
@@ -670,23 +484,27 @@ export default function CustomizeScreen() {
         corridorMi:     Math.max(0.1, poiDist),
         tone:           'warm',
         voice:          selectedNarrator.slug ?? 'canyon_guide',
-        density,                                // drift 5.75 — drive curates with this
-        minRelevance,                           // drift 5.77 — drive curates with this
+        density,
+        minRelevance,
         tripMode:       isHiking ? 'hiking' : 'driving',
       }),
     });
-  }, [selectedNarrator, saving, selectedDepth, selectedCats, poiDist, routeInfo, params, navigation]);
+  }, [selectedNarrator, saving, selectedDepth, selectedCats, poiDist, routeInfo, params, navigation, density, minRelevance, isHiking, poiMax]);
 
   // ── Narrator grid: chunk into rows of 2 ──────────────────────────────────
   const narratorRows: NarratorRecord[][] = [];
   for (let i = 0; i < narrators.length; i += 2) narratorRows.push(narrators.slice(i, i + 2));
 
+  const paceLabel = avgPaceMin === null || avgPaceMin === 0
+    ? '—'
+    : `1 / ${Math.max(1, Math.round(avgPaceMin))}m`;
+
   // ── Render ────────────────────────────────────────────────────────────────
   return (
-    <View style={s.root}>
+    <View style={[styles.root, { backgroundColor: theme.colors.paper }]}>
 
-      {/* ── MAP PREVIEW — top 220px ──────────────────────────────────────── */}
-      <View style={s.mapWrap}>
+      {/* ── MAP PEEK — top 240px ──────────────────────────────────────────── */}
+      <View style={styles.mapWrap}>
         <MapView
           style={StyleSheet.absoluteFillObject}
           provider={PROVIDER_GOOGLE}
@@ -698,16 +516,16 @@ export default function CustomizeScreen() {
           pitchEnabled={false}
           toolbarEnabled={false}
           initialRegion={{
-            latitude:      midPoint.latitude,
-            longitude:     midPoint.longitude,
-            latitudeDelta: 0.10,
+            latitude:       midPoint.latitude,
+            longitude:      midPoint.longitude,
+            latitudeDelta:  0.10,
             longitudeDelta: 0.10,
           }}
         >
           {polylineCoords.length > 1 && (
             <Polyline
               coordinates={polylineCoords}
-              strokeColor="rgba(245,240,232,0.85)"
+              strokeColor={theme.colors.primary}
               strokeWidth={3}
             />
           )}
@@ -716,21 +534,40 @@ export default function CustomizeScreen() {
               coordinate={{ latitude: routePreview.destLat, longitude: routePreview.destLng }}
               anchor={{ x: 0.5, y: 0.5 }}
             >
-              <View style={s.destMarkerOuter}><View style={s.destMarkerInner} /></View>
+              <View style={[styles.destMarkerOuter, { backgroundColor: theme.colors.dangerTint }]}>
+                <View style={[styles.destMarkerInner, { backgroundColor: theme.colors.danger, borderColor: theme.colors.paper }]} />
+              </View>
             </Marker>
           )}
         </MapView>
 
-        {/* Dark gradient at bottom of map — blends into sheet */}
-        <View style={[s.mapFade, { pointerEvents: 'none' }]} />
+        {/* Gradient fade — bottom 110px of the map blends into the sheet bg */}
+        <LinearGradient
+          pointerEvents="none"
+          colors={['transparent', theme.colors.paper]}
+          locations={[0, 1]}
+          style={styles.mapFade}
+        />
 
-        {/* Header overlay on map */}
-        <View style={[s.mapHeader, { paddingTop: STATUS_TOP }]}>
-          <TouchableOpacity style={s.backBtn} onPress={() => navigation.goBack()} activeOpacity={0.7}>
-            <Text style={s.backArrow}>←</Text>
-          </TouchableOpacity>
+        {/* Top chrome on the map */}
+        <View style={[styles.mapHeader, { paddingTop: STATUS_TOP }]}>
+          <Pressable
+            style={[
+              styles.backBtn,
+              {
+                backgroundColor: theme.colors.paperSoft,
+                borderColor:     theme.colors.paperEdge,
+              },
+              Platform.OS === 'android' ? { elevation: 4 } : shadows.control,
+            ]}
+            onPress={() => navigation.goBack()}
+            accessibilityRole="button"
+            accessibilityLabel="Back"
+          >
+            <IconArrowLeft size={20} color={theme.colors.ink} />
+          </Pressable>
           <Wordmark size="m" />
-          <View style={{ width: 44 }} />
+          <View style={{ width: 40 }} />
         </View>
 
         <MapStylePicker
@@ -738,321 +575,304 @@ export default function CustomizeScreen() {
           onChange={handleMapStyleChange}
           mapboxToken={MAPBOX_TOKEN}
           buttonTop={STATUS_TOP + 6}
-          buttonRight={10}
+          buttonRight={12}
         />
       </View>
 
       {/* ── BOTTOM SHEET — scrollable ────────────────────────────────────── */}
-      {/* C3 / drift 5.69 (correct-file fix): explicit paddingBottom on the
-          scroll content so the Start trip CTA always clears the Android
-          system nav by ≥16px above insets.bottom. Replaces the prior
-          `<View height={40+insets.bottom}/>` sibling spacer pattern. */}
       <ScrollView
-        style={s.sheet}
-        contentContainerStyle={[s.sheetContent, { paddingBottom: insets.bottom + 16 }]}
+        style={[styles.sheet, { backgroundColor: theme.colors.paper }]}
+        contentContainerStyle={[styles.sheetContent, { paddingBottom: insets.bottom + 110 }]}
         showsVerticalScrollIndicator={false}
         keyboardShouldPersistTaps="handled"
       >
-        {/* Context bar */}
-        <View style={s.contextBar}>
-          <Text style={s.contextText} numberOfLines={1}>
-            <Text style={s.contextDim}>{routeInfo.origin}</Text>
-            <Text style={s.contextSep}> → </Text>
-            <Text style={s.contextBright}>{routeInfo.destination}</Text>
-            <Text style={s.contextSep}>  ·  </Text>
-            <Text style={s.contextDim}>{fmtDuration(routeInfo.duration_minutes)}</Text>
-            <Text style={s.contextSep}>  ·  </Text>
-            <Text style={[s.contextDim, { color: C.WARNING }]}>
-              {liveStoryCount === null ? '…' : liveStoryCount} {liveStoryCount === 1 ? 'story' : 'stories'}
-            </Text>
+        {/* Route summary inline row */}
+        <Text style={styles.routeSummary} numberOfLines={1}>
+          <Text style={[theme.textVariants.meta, { color: theme.colors.inkSoft }]}>
+            {routeInfo.origin}
           </Text>
-        </View>
+          <Text style={[theme.textVariants.meta, { color: theme.colors.primary }]}>
+            {'  →  '}
+          </Text>
+          <Text style={[theme.textVariants.label, { color: theme.colors.ink }]}>
+            {routeInfo.destination}
+          </Text>
+          <Text style={[theme.textVariants.meta, { color: theme.colors.inkFaint }]}>
+            {'  ·  '}
+          </Text>
+          <Text style={[theme.textVariants.meta, { color: theme.colors.inkSoft }]}>
+            {fmtDuration(Math.round(tripDurationMin))}
+          </Text>
+        </Text>
 
-        {/* ── Stats strip (B5 / drift 5.75) ────────────────────────────────
-            Distance · Duration · Curated POIs · Average pace.
-            Updates 150ms after density / relevance / category / distance
-            changes via the curation effect above. */}
-        <View style={s.statsStrip}>
-          <Text style={s.statsNum}>{fmtMiles(routeInfo.distance_mi)}</Text>
-          <Text style={s.statsDot}>·</Text>
-          <Text style={s.statsNum}>{fmtDuration(Math.round(tripDurationMin))}</Text>
-          <Text style={s.statsDot}>·</Text>
-          <Text style={s.statsNum}>{curatedCount === null ? '…' : curatedCount} POIs</Text>
-          <Text style={s.statsDot}>·</Text>
-          <Text style={s.statsNum}>
-            {avgPaceMin === null || avgPaceMin === 0
-              ? '—'
-              : `1 every ${Math.max(1, Math.round(avgPaceMin))}m`}
-          </Text>
+        {/* Stats strip — 4 equal columns, top + bottom hairline borders */}
+        <View
+          style={[
+            styles.statsStrip,
+            {
+              borderTopColor:    theme.colors.line,
+              borderBottomColor: theme.colors.line,
+            },
+          ]}
+        >
+          <TripStat label="DISTANCE" value={fmtMiles(routeInfo.distance_mi)} />
+          <TripStat label="DURATION" value={fmtDuration(Math.round(tripDurationMin))} />
+          <TripStat label="POIS"     value={curatedCount === null ? '…' : String(curatedCount)} />
+          <TripStat label="PACE"     value={paceLabel} />
         </View>
 
         {/* ── Narration depth ────────────────────────────────────────────── */}
-        <Text style={s.sectionLabel}>Narration depth</Text>
-        <View style={s.depthRow}>
-          {DEPTH_OPTIONS.map(opt => {
-            const sel = selectedDepth === opt.key;
-            return (
-              <TouchableOpacity
-                key={opt.key}
-                style={[s.depthBtn, sel && s.depthBtnSel]}
-                onPress={() => setSelectedDepth(opt.key)}
-                activeOpacity={0.8}
-              >
-                <Text style={[s.depthBtnLabel, sel && s.depthBtnLabelSel]}>{opt.label}</Text>
-                <Text style={[s.depthBtnSub,   sel && s.depthBtnSubSel]}>{opt.sub}</Text>
-              </TouchableOpacity>
-            );
-          })}
-        </View>
+        <Text style={[theme.textVariants.eyebrow, styles.sectionLabel, { color: theme.colors.inkSoft }]}>
+          Narration depth
+        </Text>
+        <SegmentedTrio
+          options={DEPTH_OPTIONS}
+          value={selectedDepth}
+          onChange={setSelectedDepth}
+          testID="depth-segments"
+        />
 
         {/* ── Narrator grid ──────────────────────────────────────────────── */}
-        <Text style={s.sectionLabel}>Your narrator</Text>
+        <Text style={[theme.textVariants.eyebrow, styles.sectionLabel, { color: theme.colors.inkSoft }]}>
+          Your narrator
+        </Text>
 
         {loadingNarrators ? (
-          <View style={s.narratorGrid}>
+          <View style={styles.narratorGrid}>
             {[0, 1].map(r => (
-              <View key={r} style={s.narratorRow}>
-                <View style={[s.narratorCard, s.narratorCardSkeleton]} />
-                <View style={[s.narratorCard, s.narratorCardSkeleton]} />
+              <View key={r} style={styles.narratorRow}>
+                <View style={[styles.skel, { backgroundColor: theme.colors.paperWarm }]} />
+                <View style={[styles.skel, { backgroundColor: theme.colors.paperWarm }]} />
               </View>
             ))}
           </View>
         ) : (
-          <View style={s.narratorGrid}>
+          <View style={styles.narratorGrid}>
             {narratorRows.map((row, ri) => (
-              <View key={ri} style={s.narratorRow}>
-                {row.map(narrator => {
-                  const sel = selectedNarrator?.id === narrator.id;
-                  return (
-                    <TouchableOpacity
-                      key={narrator.id}
-                      style={[s.narratorCard, sel && s.narratorCardSel]}
-                      onPress={() => setSelectedNarrator(narrator)}
-                      activeOpacity={0.8}
-                    >
-                      <View style={[s.avatar, { backgroundColor: narrator.avatar_color_bg ?? C.ACCENT }]}>
-                        <Text style={[s.avatarText, { color: narrator.avatar_color_text ?? C.WHITE }]}>
-                          {narrator.avatar_initials ?? '??'}
-                        </Text>
-                      </View>
-                      <Text style={[s.narratorName, sel && s.narratorNameSel]} numberOfLines={1}>
-                        {narrator.name}
-                      </Text>
-                      <Text style={s.narratorSub} numberOfLines={1}>{narrator.subtitle}</Text>
-                    </TouchableOpacity>
-                  );
-                })}
-                {row.length === 1 && <View style={s.narratorGhost} />}
+              <View key={ri} style={styles.narratorRow}>
+                {row.map(narrator => (
+                  <NarratorCard
+                    key={narrator.id}
+                    initials={narrator.avatar_initials ?? '??'}
+                    avatarColor={avatarColorFor(narrator)}
+                    name={narrator.name}
+                    subtitle={narrator.subtitle ?? ''}
+                    selected={selectedNarrator?.id === narrator.id}
+                    onSelect={() => setSelectedNarrator(narrator)}
+                  />
+                ))}
+                {row.length === 1 && <View style={{ flex: 1 }} />}
               </View>
             ))}
           </View>
         )}
 
-        {/* Roll-the-dice + Create-your-own removed per drift 5.83.
-            CreateNarratorModal definition remains in this file as a carrier
-            item against future re-enablement; it is not rendered here. */}
-
         {/* ── Categories ───────────────────────────────────────────────────── */}
-        <Text style={s.sectionLabel}>Categories</Text>
-        <View style={s.pillRowWrap}>
+        <Text style={[theme.textVariants.eyebrow, styles.sectionLabel, { color: theme.colors.inkSoft }]}>
+          Categories
+        </Text>
+        <View style={styles.pillRowWrap}>
           <ScrollView
             horizontal
             showsHorizontalScrollIndicator={false}
-            contentContainerStyle={s.pillScroll}
+            contentContainerStyle={styles.pillScroll}
             scrollEventThrottle={60}
             onScroll={e => {
               const scrolled = e.nativeEvent.contentOffset.x > 0;
               if (scrolled !== catsScrolled) setCatsScrolled(scrolled);
             }}
           >
-            {ALL_CATEGORIES.map(cat => (
-              <CategoryChip
-                key={cat}
-                label={cat}
-                active={selectedCats.includes(cat)}
-                onToggle={() => toggleCategory(cat)}
-              />
-            ))}
+            {ALL_CATEGORIES.map(cat => {
+              const isActive = selectedCats.includes(cat);
+              const Icon = CATEGORY_ICONS[cat];
+              return (
+                <CategoryChip
+                  key={cat}
+                  label={cat}
+                  active={isActive}
+                  onToggle={() => toggleCategory(cat)}
+                  icon={Icon ? (
+                    <Icon
+                      size={14}
+                      color={isActive ? theme.colors.paperSoft : theme.colors.ink}
+                      accent={isActive ? theme.colors.paperSoft : theme.colors.accent}
+                    />
+                  ) : undefined}
+                />
+              );
+            })}
           </ScrollView>
           {catsScrolled && (
             <LinearGradient
               pointerEvents="none"
-              colors={[C.BG_SURFACE, 'transparent']}
+              colors={[theme.colors.paper, 'transparent']}
               start={{ x: 0, y: 0 }}
               end={{ x: 1, y: 0 }}
-              style={s.pillFadeLeft}
+              style={styles.pillFadeLeft}
             />
           )}
           <LinearGradient
             pointerEvents="none"
-            colors={['transparent', C.BG_SURFACE]}
+            colors={['transparent', theme.colors.paper]}
             start={{ x: 0, y: 0 }}
             end={{ x: 1, y: 0 }}
-            style={s.pillFadeRight}
+            style={styles.pillFadeRight}
           />
         </View>
 
-        {/* ── Density (B3 / drift 5.75) ───────────────────────────────────── */}
-        <Text style={s.sectionLabel}>Density</Text>
-        <View style={s.densityRow}>
-          {(['sparse', 'balanced', 'dense'] as const).map(d => {
-            const sel = density === d;
-            return (
-              <TouchableOpacity
-                key={d}
-                style={[s.densitySeg, sel && s.densitySegSel]}
-                onPress={() => setDensity(d)}
-                activeOpacity={0.8}
-              >
-                <Text style={[s.densitySegText, sel && s.densitySegTextSel]}>
-                  {d.charAt(0).toUpperCase() + d.slice(1)}
-                </Text>
-              </TouchableOpacity>
-            );
-          })}
+        {/* ── Density ──────────────────────────────────────────────────────── */}
+        <Text style={[theme.textVariants.eyebrow, styles.sectionLabel, { color: theme.colors.inkSoft }]}>
+          Density
+        </Text>
+        <SegmentedTrio
+          options={DENSITY_OPTIONS}
+          value={density}
+          onChange={setDensity}
+          testID="density-segments"
+        />
+
+        {/* ── Min relevance ───────────────────────────────────────────────── */}
+        <View style={{ marginTop: 18 }}>
+          <LabeledSlider
+            label="Min relevance"
+            value={minRelevance}
+            onChange={setMinRelevance}
+            min={RELEVANCE_MIN}
+            max={RELEVANCE_MAX}
+            step={1}
+          />
         </View>
 
-        {/* ── Relevance threshold (B4 / drift 5.77) ───────────────────────── */}
-        <View style={s.sliderLabelRow}>
-          <Text style={s.sliderLabelKey}>Min relevance</Text>
-          <Text style={s.sliderLabelVal}>{minRelevance}</Text>
+        {/* ── POI distance ────────────────────────────────────────────────── */}
+        <View style={{ marginTop: 18 }}>
+          <LabeledSlider
+            label="POI distance"
+            value={poiDist}
+            onChange={setPoiDist}
+            min={POI_MIN}
+            max={poiMax}
+            step={POI_STEP}
+            formatValue={(v) => fmtMiles(v)}
+            formatEdge={(v) => fmtMiles(v)}
+          />
         </View>
-        <View style={s.sliderRow}>
-          <Text style={s.sliderEdge}>0</Text>
-          <RelevanceSlider value={minRelevance} onChange={setMinRelevance} />
-          <Text style={s.sliderEdge}>100</Text>
-        </View>
-
-        {/* ── POI distance slider ───────────────────────────────────────────── */}
-        <View style={s.sliderLabelRow}>
-          <Text style={s.sliderLabelKey}>POI distance</Text>
-          <Text style={s.sliderLabelVal}>{fmtMiles(poiDist)}</Text>
-        </View>
-        <View style={s.sliderRow}>
-          <Text style={s.sliderEdge}>{fmtMiles(POI_MIN)}</Text>
-          <PoiSlider value={poiDist} onChange={setPoiDist} max={poiMax} />
-          <Text style={s.sliderEdge}>{fmtMiles(poiMax)}</Text>
-        </View>
-
-        {/* ── Start trip CTA ────────────────────────────────────────────────── */}
-        <TouchableOpacity
-          style={[s.startBtn, saving && { opacity: 0.55 }]}
-          onPress={handleStartTrip}
-          disabled={saving}
-          activeOpacity={0.85}
-        >
-          <Text style={s.startBtnText}>{saving ? 'Starting…' : 'Start trip'}</Text>
-        </TouchableOpacity>
-
-        {/* (Prior `<View height={40+insets.bottom}/>` removed — see C3 above:
-            contentContainerStyle.paddingBottom now carries the gesture-zone buffer.) */}
       </ScrollView>
 
-      {/* CreateNarratorModal not rendered (drift 5.83) — kept in module
-          as a carrier for future re-enablement. */}
+      {/* ── Sticky Start trip CTA ─────────────────────────────────────────── */}
+      <Pressable
+        onPress={handleStartTrip}
+        disabled={saving}
+        accessibilityRole="button"
+        accessibilityState={{ disabled: saving }}
+        style={({ pressed }) => [
+          styles.startBtn,
+          Platform.OS === 'android' ? { elevation: 8 } : shadows.card,
+          {
+            bottom:          insets.bottom + 16,
+            backgroundColor: pressed ? theme.colors.primaryDeep : theme.colors.primary,
+            opacity:         saving ? 0.55 : 1,
+          },
+        ]}
+      >
+        <IconCar size={20} color={theme.colors.paper} />
+        <Text style={[theme.textVariants.label, { color: theme.colors.paper, fontSize: 16 }]}>
+          {saving ? 'Starting…' : 'Start trip'}
+        </Text>
+      </Pressable>
     </View>
   );
 }
 
 // ── Styles ────────────────────────────────────────────────────────────────────
 
-const s = StyleSheet.create({
-  root: { flex: 1, backgroundColor: C.BG_BASE },
+const styles = StyleSheet.create({
+  root: { flex: 1 },
 
-  // Map preview
-  mapWrap:    { height: MAP_PREVIEW_H, overflow: 'hidden' },
-  mapFade:    { position: 'absolute', bottom: 0, left: 0, right: 0, height: 60, backgroundColor: 'rgba(38,26,12,0.85)' },
-  mapHeader:  { position: 'absolute', top: 0, left: 0, right: 0, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 12, paddingBottom: 12 },
-  backBtn:    { width: 44, height: 44, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(38,26,12,0.75)', borderRadius: 22 },
-  backArrow:  { fontSize: 22, color: C.TEXT_PRIMARY },
-  headerTitle: { fontSize: 15, fontWeight: '600', color: C.TEXT_PRIMARY },
+  // Map peek
+  mapWrap:  { height: MAP_PREVIEW_H, overflow: 'hidden' },
+  mapFade:  { position: 'absolute', bottom: 0, left: 0, right: 0, height: 110 },
+  mapHeader:{
+    position:       'absolute',
+    top:            0,
+    left:           0,
+    right:          0,
+    flexDirection:  'row',
+    alignItems:     'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 12,
+    paddingBottom:  12,
+  },
+  backBtn: {
+    width:           40,
+    height:          40,
+    borderRadius:    20,
+    borderWidth:     1,
+    alignItems:      'center',
+    justifyContent:  'center',
+  },
 
-  destMarkerOuter: { width: 20, height: 20, borderRadius: 10, backgroundColor: `${C.DANGER}40`, alignItems: 'center', justifyContent: 'center' },
-  destMarkerInner: { width: 10, height: 10, borderRadius: 5, backgroundColor: C.DANGER, borderWidth: 2, borderColor: C.BG_BASE },
+  destMarkerOuter: {
+    width:           24,
+    height:          24,
+    borderRadius:    12,
+    alignItems:      'center',
+    justifyContent:  'center',
+  },
+  destMarkerInner: {
+    width:           12,
+    height:          12,
+    borderRadius:    6,
+    borderWidth:     2,
+  },
 
   // Sheet
-  sheet:        { flex: 1, backgroundColor: C.BG_SURFACE },
-  sheetContent: { paddingHorizontal: 20, paddingTop: 12, paddingBottom: 16 },
+  sheet:        { flex: 1 },
+  sheetContent: { paddingHorizontal: 16, paddingTop: 4 },
 
-  // Context bar
-  contextBar:   { paddingBottom: 10, borderBottomWidth: 1, borderColor: C.BORDER_SUBTLE },
-  contextText:  { fontSize: 13, lineHeight: 20 },
-  contextDim:   { color: C.TEXT_SECONDARY },
-  contextBright:{ color: C.TEXT_PRIMARY, fontWeight: '600' },
-  contextSep:   { color: C.BORDER_STRONG },
+  routeSummary: {
+    paddingVertical: 8,
+    lineHeight:      20,
+  },
 
-  // Section labels
-  sectionLabel: { fontSize: 10, fontWeight: '700', color: C.TEXT_TERTIARY, textTransform: 'uppercase', letterSpacing: 0.8, marginTop: 16, marginBottom: 8 },
+  // Stats strip
+  statsStrip: {
+    flexDirection:     'row',
+    alignItems:        'center',
+    paddingVertical:   12,
+    borderTopWidth:    StyleSheet.hairlineWidth,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    marginTop:         4,
+  },
 
-  // Depth buttons
-  depthRow:         { flexDirection: 'row', gap: 8 },
-  depthBtn:         { flex: 1, paddingVertical: 8, paddingHorizontal: 6, borderRadius: 12, borderWidth: 1.5, borderColor: C.BORDER_SUBTLE, backgroundColor: C.BG_ELEVATED, alignItems: 'center', minHeight: 50 },
-  depthBtnSel:      { borderColor: C.ACCENT_BORDER, backgroundColor: C.ACCENT_LIGHT },
-  depthBtnLabel:    { fontSize: 13, fontWeight: '600', color: C.TEXT_SECONDARY, textAlign: 'center' },
-  depthBtnLabelSel: { color: C.ACCENT_TEXT },
-  depthBtnSub:      { fontSize: 11, color: C.TEXT_TERTIARY, textAlign: 'center', marginTop: 2, lineHeight: 14 },
-  depthBtnSubSel:   { color: C.ACCENT_TEXT },
+  // Section labels (eyebrow)
+  sectionLabel: {
+    marginTop:    18,
+    marginBottom: 10,
+  },
 
   // Narrator grid
-  narratorGrid:        { gap: 8 },
-  narratorRow:         { flexDirection: 'row', gap: 8 },
-  narratorCard:        { flex: 1, borderRadius: 14, borderWidth: 1.5, borderColor: C.BORDER_SUBTLE, backgroundColor: C.BG_ELEVATED, padding: 10 },
-  narratorCardSel:     { borderColor: C.ACCENT_BORDER, backgroundColor: C.ACCENT_LIGHT },
-  narratorCardSkeleton:{ height: 90, opacity: 0.2, backgroundColor: C.BORDER_SUBTLE },
-  narratorGhost:       { flex: 1 },
-  avatar:     { width: 34, height: 34, borderRadius: 17, alignItems: 'center', justifyContent: 'center', marginBottom: 6 },
-  avatarText: { fontSize: 13, fontWeight: '700' },
-  narratorName:    { fontSize: 13, fontWeight: '700', color: C.TEXT_PRIMARY },
-  narratorNameSel: { color: C.ACCENT_TEXT },
-  narratorSub:     { fontSize: 11, color: C.TEXT_TERTIARY, marginTop: 1 },
-  narratorDesc:    { fontSize: 11, color: C.TEXT_TERTIARY, marginTop: 4, lineHeight: 16 },
+  narratorGrid: { gap: 10 },
+  narratorRow:  { flexDirection: 'row', gap: 10 },
+  skel:         { flex: 1, height: 96, borderRadius: 16, opacity: 0.3 },
 
-  // Narrator actions
-  actionRow:  { flexDirection: 'row', gap: 10, marginTop: 8 },
-  actionBtn:  { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, paddingVertical: 10, borderRadius: 12, borderWidth: 1.5, borderColor: C.BORDER_SUBTLE, borderStyle: 'dashed', minHeight: 44 },
-  actionIcon: { fontSize: 16 },
-  actionText: { fontSize: 12, fontWeight: '600', color: C.TEXT_SECONDARY },
-  ratingNote: { fontSize: 12, color: C.TEXT_TERTIARY, textAlign: 'center', marginTop: 10, lineHeight: 18 },
-
-  // Categories
+  // Categories scroll fades
   pillRowWrap:   { position: 'relative' },
   pillFadeLeft:  { position: 'absolute', left: 0,  top: 0, bottom: 0, width: 20 },
   pillFadeRight: { position: 'absolute', right: 0, top: 0, bottom: 0, width: 20 },
-  pillWrap:   { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
-  pillScroll: { gap: 8, flexDirection: 'row', paddingRight: 20 },
+  pillScroll:    { gap: 8, flexDirection: 'row', paddingRight: 20 },
 
-  // POI slider
-  sliderLabelRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'baseline', marginTop: 16, marginBottom: 10 },
-  sliderLabelKey: { fontSize: 10, fontWeight: '700', color: C.TEXT_TERTIARY, textTransform: 'uppercase', letterSpacing: 0.8 },
-  sliderLabelVal: { fontSize: 14, fontWeight: '700', color: C.ACCENT_TEXT },
-  sliderRow:  { flexDirection: 'row', alignItems: 'center', gap: 10 },
-  sliderEdge: { fontSize: 11, color: C.TEXT_TERTIARY, minWidth: 36, textAlign: 'center' },
-
-  // Start trip CTA
-  startBtn:     { backgroundColor: C.ACCENT, borderRadius: 14, paddingVertical: 13, alignItems: 'center', marginTop: 16, minHeight: 50 },
-  startBtnText: { fontSize: 17, fontWeight: '700', color: C.WHITE },
-
-  // Stats strip (B5 / drift 5.75)
-  statsStrip: {
-    flexDirection: 'row', alignItems: 'baseline', justifyContent: 'space-between',
-    paddingVertical: 10,
-    borderTopWidth: StyleSheet.hairlineWidth, borderBottomWidth: StyleSheet.hairlineWidth,
-    borderColor: C.BORDER_SUBTLE,
-    marginTop: 8,
+  // Sticky Start trip CTA
+  startBtn: {
+    position:          'absolute',
+    left:              16,
+    right:             16,
+    flexDirection:     'row',
+    alignItems:        'center',
+    justifyContent:    'center',
+    gap:               10,
+    paddingVertical:   16,
+    paddingHorizontal: 18,
+    borderRadius:      16,
+    minHeight:         56,
   },
-  statsNum: { fontSize: 14, fontWeight: '600', color: C.TEXT_PRIMARY, fontStyle: 'italic' },
-  statsDot: { fontSize: 14, color: C.TEXT_TERTIARY, paddingHorizontal: 6 },
-
-  // Density segmented control (B3 / drift 5.75)
-  densityRow: {
-    flexDirection: 'row', gap: 8, marginBottom: 4,
-  },
-  densitySeg: {
-    flex: 1, paddingVertical: 10, borderRadius: 10,
-    borderWidth: 1.5, borderColor: C.BORDER_SUBTLE,
-    backgroundColor: C.BG_ELEVATED, alignItems: 'center', minHeight: 44,
-  },
-  densitySegSel:     { borderColor: C.ACCENT_BORDER, backgroundColor: C.ACCENT_LIGHT },
-  densitySegText:    { fontSize: 13, fontWeight: '600', color: C.TEXT_SECONDARY },
-  densitySegTextSel: { color: C.ACCENT_TEXT },
 });

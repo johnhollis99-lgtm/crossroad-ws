@@ -4,17 +4,9 @@
  * react-native-map-clustering's interception of the built-in Callout tap
  * flow (drift 5.97).
  *
- * The parent captures the marker's screen coordinate via
- * `mapRef.current.pointForCoordinate(...)`, stashes it in state, and renders
- * <PoiCallout poi={...} screenPosition={...} onDismiss={...} />. Dismissal
- * is the parent's responsibility — wire onPress / onRegionChangeComplete on
- * MapView to call setSelectedPoi(null).
- *
- * Visual: cream paper pill, ink-italic POI name, optional miles sublabel.
- * Colors are LIGHT-THEME CONSTANTS regardless of the active scheme — the
- * callout is a branded chip, same posture as the Wordmark pill + ModePillRow
- * (always cream-on-map). Centers horizontally over the marker; sits 12px
- * above the pin to clear the X glyph.
+ * Pine palette: paperWarm chip backing, italic-serif POI name, mono uppercase
+ * miles sublabel. Centered horizontally over the marker; sits 12px above the
+ * pin to clear the X glyph.
  */
 
 import React, { useState } from 'react';
@@ -26,7 +18,8 @@ import {
   View,
 } from 'react-native';
 
-import { lightTheme } from '../design/theme';
+import { useTheme } from '../design/theme';
+import { shadows } from '../design/tokens';
 
 export interface PoiCalloutPoi {
   id:          string;
@@ -45,11 +38,12 @@ export interface PoiCalloutProps {
 
 const PIN_GAP_PX = 12;
 
-const SHADOW = Platform.OS === 'android'
+const CALLOUT_SHADOW = Platform.OS === 'android'
   ? ({ elevation: 4 } as const)
-  : lightTheme.elevation.e2;
+  : shadows.control;
 
 export function PoiCallout({ poi, screenPosition, testID }: PoiCalloutProps) {
+  const { theme } = useTheme();
   const [size, setSize] = useState<{ w: number; h: number } | null>(null);
 
   const onLayout = (e: LayoutChangeEvent) => {
@@ -61,7 +55,7 @@ export function PoiCallout({ poi, screenPosition, testID }: PoiCalloutProps) {
   // Pre-layout pass: render off-screen so onLayout captures the natural
   // dimensions before we position. Once size is known, anchor the pill
   // horizontally over the marker and 12px above the pin.
-  const left = size ? screenPosition.x - size.w / 2     : -9999;
+  const left = size ? screenPosition.x - size.w / 2          : -9999;
   const top  = size ? screenPosition.y - size.h - PIN_GAP_PX : -9999;
 
   const miles = typeof poi.distance_m === 'number'
@@ -76,11 +70,20 @@ export function PoiCallout({ poi, screenPosition, testID }: PoiCalloutProps) {
     >
       <View
         onLayout={onLayout}
-        style={[styles.pill, SHADOW, { left, top }]}
+        style={[
+          styles.pill,
+          CALLOUT_SHADOW,
+          {
+            backgroundColor: theme.colors.paperWarm,
+            borderColor:     theme.colors.paperEdge,
+            left,
+            top,
+          },
+        ]}
       >
         <Text
           allowFontScaling={false}
-          style={styles.name}
+          style={[theme.textVariants.title, { color: theme.colors.ink, fontSize: 16, lineHeight: 19 }]}
           numberOfLines={1}
         >
           {poi.name}
@@ -88,7 +91,7 @@ export function PoiCallout({ poi, screenPosition, testID }: PoiCalloutProps) {
         {miles && (
           <Text
             allowFontScaling={false}
-            style={styles.sublabel}
+            style={[theme.textVariants.eyebrow, { color: theme.colors.inkSoft, marginTop: 2 }]}
             numberOfLines={1}
           >
             {miles}
@@ -102,28 +105,11 @@ export function PoiCallout({ poi, screenPosition, testID }: PoiCalloutProps) {
 const styles = StyleSheet.create({
   pill: {
     position:          'absolute',
-    backgroundColor:   lightTheme.colors.paper,
     paddingVertical:   8,
     paddingHorizontal: 14,
     borderRadius:      999,
+    borderWidth:       1,
     alignItems:        'center',
     maxWidth:          260,
-  },
-  name: {
-    fontFamily: lightTheme.fontFamilies.serifItalic,
-    fontStyle:  'italic',
-    fontWeight: '500',
-    fontSize:   15,
-    color:      lightTheme.colors.ink,
-  },
-  sublabel: {
-    marginTop:     2,
-    fontFamily:    lightTheme.fontFamilies.mono,
-    fontWeight:    '400',
-    fontSize:      9,
-    lineHeight:    12.6,
-    letterSpacing: 1.6,
-    textTransform: 'uppercase',
-    color:         lightTheme.colors.inkSoft,
   },
 });

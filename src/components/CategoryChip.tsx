@@ -1,36 +1,33 @@
 /**
- * Toggle chip for category filters. Single-chip primitive; the row layout
- * (horizontal scroll, flex-wrap, etc.) is the caller's responsibility.
+ * Toggle chip for category filters. Pine palette + DM Sans label.
  *
- * Active chip fills with theme-aware ink-red and shows always-cream italic
- * text. Inactive chip is a theme-aware taupe (paperDeep) chip with an ink
- * outline + ink label — visibly distinct from the paper page background so
- * the OFF state reads as a button rather than blank space. Active text uses
- * lightTheme.colors.paper directly so it stays legible on the accent fill
- * regardless of system theme.
+ *   Active   → emerald (primary) fill + paperSoft text + primaryDeep border
+ *   Inactive → paperSoft fill + ink text + paperEdge border
  *
- * No shadow — chips sit on paper screens, not over the map.
+ * Optional `icon` slot renders before the label (Pine chip rail spec section 3).
+ * The caller supplies the icon node — typically a duotone SVG with stroke
+ * 1.8 in `theme.colors.ink` and accent shapes in `theme.colors.accent`.
  */
 
 import React from 'react';
-import { Pressable, StyleSheet, Text } from 'react-native';
-
-import { lightTheme, useTheme } from '../design/theme';
+import { Pressable, StyleSheet, View, Text } from 'react-native';
+import { useTheme } from '../design/theme';
 
 export interface CategoryChipProps {
   label:    string;
   active:   boolean;
   onToggle: () => void;
+  /** Optional leading icon (typically a 14×14 duotone SVG). */
+  icon?:    React.ReactNode;
   testID?:  string;
 }
 
-export function CategoryChip({ label, active, onToggle, testID }: CategoryChipProps) {
+export function CategoryChip({ label, active, onToggle, icon, testID }: CategoryChipProps) {
   const { theme } = useTheme();
 
-  const activeFg   = lightTheme.colors.paper;
-  const activeBg   = theme.colors.accent;
-  const inactiveFg = theme.colors.ink;
-  const inactiveBg = theme.colors.paperDeep;
+  const fg = active ? theme.colors.paperSoft : theme.colors.ink;
+  const bg = active ? theme.colors.primary   : theme.colors.paperSoft;
+  const bd = active ? theme.colors.primaryDeep : theme.colors.paperEdge;
 
   return (
     <Pressable
@@ -41,21 +38,16 @@ export function CategoryChip({ label, active, onToggle, testID }: CategoryChipPr
       onPress={onToggle}
       style={[
         styles.chip,
-        active
-          ? { backgroundColor: activeBg,   borderWidth: 0 }
-          : { backgroundColor: inactiveBg, borderWidth: 1, borderColor: inactiveFg },
+        {
+          backgroundColor: bg,
+          borderColor:     bd,
+        },
       ]}
     >
+      {icon ? <View style={styles.icon}>{icon}</View> : null}
       <Text
         allowFontScaling={false}
-        style={[
-          styles.label,
-          {
-            color:      active ? activeFg : inactiveFg,
-            fontFamily: theme.fontFamilies.serifItalic,
-            fontWeight: active ? '600' : '500',
-          },
-        ]}
+        style={[theme.textVariants.body, { color: fg }]}
       >
         {label}
       </Text>
@@ -67,12 +59,14 @@ const styles = StyleSheet.create({
   chip: {
     flexDirection:     'row',
     alignItems:        'center',
-    paddingVertical:   8,
-    paddingHorizontal: 14,
+    gap:               6,
+    paddingVertical:   6,
+    paddingHorizontal: 12,
     borderRadius:      999,
+    borderWidth:       1,
   },
-  label: {
-    fontSize:  14,
-    fontStyle: 'italic',
+  icon: {
+    width:  14,
+    height: 14,
   },
 });

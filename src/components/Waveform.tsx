@@ -52,7 +52,7 @@ export function Waveform({
           const h = barHeightAt(seed, i, minBar, height);
           const x = i * (barWidth + gap);
           const y = (height - h) / 2;
-          const fill = i < playedCount ? theme.colors.accent : theme.colors.rule;
+          const fill = i < playedCount ? theme.colors.primary : theme.colors.line;
           return (
             <Rect
               key={i}

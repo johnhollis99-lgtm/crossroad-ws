@@ -16,7 +16,7 @@ export interface AudienceMarkProps {
   type:    AudienceMarkType;
   size?:   AudienceMarkSize;
   tone?:   AudienceMarkTone;
-  /** When true, wrap the glyph in a circle of paperDeep (light) / card (dark). */
+  /** When true, wrap the glyph in a circle of paperWarm. */
   bg?:     boolean;
   testID?: string;
 }
@@ -29,18 +29,12 @@ const VIEW = 48;
  * final artwork swaps in later. */
 
 function FamilyGlyph({ stroke }: { stroke: string }) {
-  // Cottage: triangular roof + body rectangle + door + chimney + two smoke curls.
   return (
     <>
-      {/* roof */}
       <Path d="M 8 22 L 24 10 L 40 22" stroke={stroke} strokeWidth={STROKE} fill="none" strokeLinejoin="round" />
-      {/* body */}
       <Rect x={12} y={22} width={24} height={16} stroke={stroke} strokeWidth={STROKE} fill="none" />
-      {/* door */}
       <Rect x={21} y={28} width={6}  height={10} stroke={stroke} strokeWidth={STROKE} fill="none" />
-      {/* chimney */}
       <Path d="M 32 17 L 32 12 L 36 12 L 36 19" stroke={stroke} strokeWidth={STROKE} fill="none" strokeLinejoin="round" />
-      {/* smoke curls */}
       <Path d="M 34 9 Q 38 7 36 4" stroke={stroke} strokeWidth={STROKE} fill="none" strokeLinecap="round" />
       <Path d="M 37 11 Q 42 8 40 5" stroke={stroke} strokeWidth={STROKE} fill="none" strokeLinecap="round" />
     </>
@@ -48,10 +42,8 @@ function FamilyGlyph({ stroke }: { stroke: string }) {
 }
 
 function KidsGlyph({ stroke }: { stroke: string }) {
-  // Magnifying glass over a leaf. Lens upper-right, leaf lower-left underneath.
   return (
     <>
-      {/* leaf */}
       <Path
         d="M 8 38 Q 14 18 32 14 Q 26 32 8 38 Z"
         stroke={stroke}
@@ -59,31 +51,22 @@ function KidsGlyph({ stroke }: { stroke: string }) {
         fill="none"
         strokeLinejoin="round"
       />
-      {/* leaf midrib */}
       <Path d="M 10 36 L 28 18" stroke={stroke} strokeWidth={STROKE} fill="none" strokeLinecap="round" />
-      {/* magnifier lens */}
       <Circle cx={32} cy={20} r={10} stroke={stroke} strokeWidth={STROKE} fill="none" />
-      {/* handle */}
       <Line x1={40} y1={28} x2={44} y2={32} stroke={stroke} strokeWidth={STROKE + 0.5} strokeLinecap="round" />
     </>
   );
 }
 
 function UnfilteredGlyph({ stroke }: { stroke: string }) {
-  // Road vanishing toward horizon, with a sun above and a road sign on the right.
   return (
     <>
-      {/* horizon line */}
       <Line x1={4} y1={26} x2={44} y2={26} stroke={stroke} strokeWidth={STROKE} strokeLinecap="round" />
-      {/* sun on horizon */}
       <Circle cx={14} cy={22} r={5} stroke={stroke} strokeWidth={STROKE} fill="none" />
-      {/* road edges converging to vanishing point on horizon */}
       <Path d="M 10 44 L 22 27"  stroke={stroke} strokeWidth={STROKE} fill="none" strokeLinecap="round" />
       <Path d="M 38 44 L 26 27" stroke={stroke} strokeWidth={STROKE} fill="none" strokeLinecap="round" />
-      {/* center dashes */}
       <Line x1={24} y1={30} x2={24} y2={32} stroke={stroke} strokeWidth={STROKE} strokeLinecap="round" />
       <Line x1={24} y1={36} x2={24} y2={38} stroke={stroke} strokeWidth={STROKE} strokeLinecap="round" />
-      {/* sign post + plate (right side) */}
       <Line x1={40} y1={22} x2={40} y2={32} stroke={stroke} strokeWidth={STROKE} strokeLinecap="round" />
       <Rect x={34} y={14} width={12} height={8} stroke={stroke} strokeWidth={STROKE} fill="none" />
     </>
@@ -91,10 +74,8 @@ function UnfilteredGlyph({ stroke }: { stroke: string }) {
 }
 
 function LocalGlyph({ stroke }: { stroke: string }) {
-  // Open book with spectacles resting on the cover.
   return (
     <>
-      {/* open book: V-spine with pages on either side */}
       <Path
         d="M 6 22 Q 16 18 24 22 Q 32 18 42 22 L 42 38 Q 32 34 24 38 Q 16 34 6 38 Z"
         stroke={stroke}
@@ -102,13 +83,10 @@ function LocalGlyph({ stroke }: { stroke: string }) {
         fill="none"
         strokeLinejoin="round"
       />
-      {/* spine */}
       <Line x1={24} y1={22} x2={24} y2={38} stroke={stroke} strokeWidth={STROKE} strokeLinecap="round" />
-      {/* spectacles resting on cover (top) */}
       <Circle cx={16} cy={14} r={3.5} stroke={stroke} strokeWidth={STROKE} fill="none" />
       <Circle cx={28} cy={14} r={3.5} stroke={stroke} strokeWidth={STROKE} fill="none" />
       <Line  x1={19.5} y1={14} x2={24.5} y2={14} stroke={stroke} strokeWidth={STROKE} strokeLinecap="round" />
-      {/* earpiece hint */}
       <Line  x1={13} y1={12.5} x2={11} y2={11} stroke={stroke} strokeWidth={STROKE} strokeLinecap="round" />
       <Line  x1={31} y1={12.5} x2={33} y2={11} stroke={stroke} strokeWidth={STROKE} strokeLinecap="round" />
     </>
@@ -125,8 +103,8 @@ export function AudienceMark({
   testID,
 }: AudienceMarkProps) {
   const { theme } = useTheme();
-  const stroke = tone === 'ink' ? theme.colors.ink : theme.colors.paper;
-  const bgColor = theme.scheme === 'dark' ? theme.colors.card : theme.colors.paperDeep;
+  const stroke  = tone === 'ink' ? theme.colors.ink : theme.colors.paper;
+  const bgColor = theme.colors.paperWarm;
 
   const glyph = (() => {
     switch (type) {

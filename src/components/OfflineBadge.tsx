@@ -10,7 +10,7 @@ export interface OfflineBadgeProps {
 }
 
 const LABELS: Record<OfflineState, string> = {
-  cached:  'Offline · Cached',     // textTransform: uppercase applied via metaSmall
+  cached:  'Offline · Cached',
   stale:   'Offline · Stale',
   offline: 'Offline',
 };
@@ -18,10 +18,13 @@ const LABELS: Record<OfflineState, string> = {
 export function OfflineBadge({ state, testID }: OfflineBadgeProps) {
   const { theme } = useTheme();
 
+  // cached → primary (emerald, has audio ready)
+  // stale  → inkSoft (audio is old)
+  // offline → secondary (cobalt, no network)
   const dotColor =
-    state === 'cached'  ? theme.colors.accent2 :
-    state === 'stale'   ? theme.colors.inkSoft :
-                          theme.colors.accent;
+    state === 'cached' ? theme.colors.primary :
+    state === 'stale'  ? theme.colors.inkSoft :
+                         theme.colors.secondary;
 
   return (
     <View
@@ -29,16 +32,18 @@ export function OfflineBadge({ state, testID }: OfflineBadgeProps) {
       style={[
         styles.pill,
         {
-          backgroundColor:   theme.colors.ink,
+          backgroundColor:   theme.colors.paperWarm,
           paddingVertical:   theme.spacing.xs,
           paddingHorizontal: theme.spacing.s,
           borderRadius:      theme.radii.pill,
+          borderColor:       theme.colors.paperEdge,
+          borderWidth:       1,
           gap:               theme.spacing.xs,
         },
       ]}
     >
       <View style={[styles.dot, { backgroundColor: dotColor }]} />
-      <Text style={[theme.textVariants.metaSmall, { color: theme.colors.paper }]}>
+      <Text style={[theme.textVariants.eyebrow, { color: theme.colors.ink }]}>
         {LABELS[state]}
       </Text>
     </View>

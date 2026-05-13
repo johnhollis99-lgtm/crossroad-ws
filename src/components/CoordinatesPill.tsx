@@ -1,20 +1,14 @@
 /**
  * Floating coordinates pill — displays lat/lng for a map point above its
  * pin. Sibling of MapView, anchored via pointForCoordinate (caller resolves
- * + passes `screenPosition`). Same visual posture as PoiCallout from drift
- * 5.97: cream paper chip locked to light-theme constants regardless of
- * system scheme, e2 shadow.
+ * + passes `screenPosition`).
  *
- * Primary text is JetBrains Mono in the project's `meta`-style ramp:
- * uppercase, 11px, letter-spacing 1.6. Formatted as "35.564°N · 121.094°W"
- * so the coordinate reads at a glance.
- *
- * Optional `sublabel` (Fraunces italic 12px) carries a short prompt or a
- * geocoded address; omit it when there's nothing to say.
+ * Pine palette: paperWarm chip backing + JetBrains Mono uppercase coord
+ * text ("35.564°N · 121.094°W"); optional Fraunces—now Instrument Serif—
+ * italic sublabel (geocoded address on web).
  *
  * The pill is informational — no interactive children. The caller renders
- * the confirm / dismiss action menu separately (see app/index.tsx's
- * pin-drop action row).
+ * the confirm / dismiss action menu separately.
  */
 
 import React, { useState } from 'react';
@@ -26,7 +20,8 @@ import {
   View,
 } from 'react-native';
 
-import { lightTheme } from '../design/theme';
+import { useTheme } from '../design/theme';
+import { shadows } from '../design/tokens';
 
 export interface CoordinatesPillProps {
   coordinate:      { latitude: number; longitude: number };
@@ -37,9 +32,9 @@ export interface CoordinatesPillProps {
 
 const PIN_GAP_PX = 14;
 
-const SHADOW = Platform.OS === 'android'
+const PILL_SHADOW = Platform.OS === 'android'
   ? ({ elevation: 4 } as const)
-  : lightTheme.elevation.e2;
+  : shadows.control;
 
 function formatCoord(lat: number, lng: number): string {
   const ns = lat >= 0 ? 'N' : 'S';
@@ -50,6 +45,7 @@ function formatCoord(lat: number, lng: number): string {
 export function CoordinatesPill({
   coordinate, screenPosition, sublabel, testID,
 }: CoordinatesPillProps) {
+  const { theme } = useTheme();
   const [size, setSize] = useState<{ w: number; h: number } | null>(null);
 
   const onLayout = (e: LayoutChangeEvent) => {
@@ -58,8 +54,6 @@ export function CoordinatesPill({
     setSize({ w: width, h: height });
   };
 
-  // Pre-layout pass: render off-screen so onLayout captures natural
-  // dimensions before positioning.
   const left = size ? screenPosition.x - size.w / 2          : -9999;
   const top  = size ? screenPosition.y - size.h - PIN_GAP_PX : -9999;
 
@@ -71,11 +65,26 @@ export function CoordinatesPill({
     >
       <View
         onLayout={onLayout}
-        style={[styles.pill, SHADOW, { left, top }]}
+        style={[
+          styles.pill,
+          PILL_SHADOW,
+          {
+            backgroundColor: theme.colors.paperWarm,
+            borderColor:     theme.colors.paperEdge,
+            left,
+            top,
+          },
+        ]}
       >
         <Text
           allowFontScaling={false}
-          style={styles.coords}
+          style={[
+            styles.coords,
+            {
+              fontFamily: theme.fontFamilies.mono,
+              color:      theme.colors.ink,
+            },
+          ]}
           numberOfLines={1}
         >
           {formatCoord(coordinate.latitude, coordinate.longitude)}
@@ -83,7 +92,15 @@ export function CoordinatesPill({
         {sublabel ? (
           <Text
             allowFontScaling={false}
-            style={styles.sublabel}
+            style={[
+              theme.textVariants.title,
+              {
+                color:    theme.colors.inkSoft,
+                fontSize: 12,
+                lineHeight: 15.6,
+                marginTop: 2,
+              },
+            ]}
             numberOfLines={1}
           >
             {sublabel}
@@ -97,29 +114,18 @@ export function CoordinatesPill({
 const styles = StyleSheet.create({
   pill: {
     position:          'absolute',
-    backgroundColor:   lightTheme.colors.paper,
     paddingVertical:   8,
     paddingHorizontal: 14,
     borderRadius:      999,
+    borderWidth:       1,
     alignItems:        'center',
     maxWidth:          280,
   },
   coords: {
-    fontFamily:    lightTheme.fontFamilies.mono,
     fontWeight:    '400',
     fontSize:      11,
     lineHeight:    15.4,
     letterSpacing: 1.6,
     textTransform: 'uppercase',
-    color:         lightTheme.colors.ink,
-  },
-  sublabel: {
-    marginTop:   2,
-    fontFamily:  lightTheme.fontFamilies.serifItalic,
-    fontStyle:   'italic',
-    fontWeight:  '500',
-    fontSize:    12,
-    lineHeight:  15.6,
-    color:       lightTheme.colors.inkSoft,
   },
 });

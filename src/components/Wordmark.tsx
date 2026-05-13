@@ -1,7 +1,26 @@
+/**
+ * Canonical XRoad wordmark — Pine type stack.
+ *
+ * Reads "XRoad" with Instrument Serif roman X (cap, weight 400) followed by
+ * italic "Road" (Instrument Serif italic, weight 400). Bicolor: the X paints
+ * with `theme.colors.primary` (emerald — same brand mark used on POI markers
+ * and the cluster bubble count) and "Road" paints with the active text tone.
+ *
+ * Sizes m / l / xl drive the cap height (22 / 26 / 32 px). The Pine spec
+ * places the wordmark at 20–22px in the home header card (size 'm'); larger
+ * sizes exist for feature headlines and the demo screen.
+ *
+ * `background="pill"` adds a paperWarm pill backing with a control-style
+ * shadow — used by sibling screens that overlay the wordmark on a map.
+ * Pine collapses the light/dark posture of the old "cream chip" pattern;
+ * the pill now uses theme-aware paperWarm directly.
+ */
+
 import React from 'react';
 import { Platform, StyleSheet, Text, View } from 'react-native';
 import Svg, { Circle, Path } from 'react-native-svg';
-import { lightTheme, useTheme } from '../design/theme';
+import { useTheme } from '../design/theme';
+import { shadows } from '../design/tokens';
 
 export type WordmarkSize       = 'm' | 'l' | 'xl';
 export type WordmarkTone       = 'ink' | 'paper';
@@ -11,134 +30,125 @@ export interface WordmarkProps {
   size?:       WordmarkSize;
   tone?:       WordmarkTone;
   background?: WordmarkBackground;
+  /**
+   * When true, render the Pine "Squiggle" decoration (36px wide cream wavy
+   * line + small accent dot) above the wordmark text. Used on the home
+   * header card per Pine spec section 3.
+   */
+  squiggle?:   boolean;
   testID?:     string;
 }
 
-// Cap height (font-size for X / Road), horizon width, and center-dot radius
-// per size step. These literals are structural brand-mark dimensions driven
-// by the `size` prop, not typographic variants — the one documented exception
-// to "no fontSize literals outside textVariants" in the component library.
-const SIZE_MAP: Record<
-  WordmarkSize,
-  { capPx: number; horizonW: number; dotR: number; gap: number }
-> = {
-  m:  { capPx: 22, horizonW:  80, dotR: 1.6, gap: 6 },
-  l:  { capPx: 32, horizonW: 110, dotR: 2.2, gap: 7 },
-  xl: { capPx: 56, horizonW: 180, dotR: 3.4, gap: 8 },
-};
-
-// Pill padding scales ~30% per step. Top/bottom asymmetric — extra bottom
-// padding visually balances the descender-light "Road" baseline against
-// the horizon above.
-const PILL_PADDING: Record<WordmarkSize, { top: number; bottom: number; h: number }> = {
-  m:  { top:  8, bottom: 10, h: 14 },
-  l:  { top: 10, bottom: 13, h: 18 },
-  xl: { top: 13, bottom: 16, h: 22 },
-};
-
-function buildWavePath(width: number): string {
-  // Four-hump horizon: first quadratic hump above the baseline (control y=2),
-  // then three smooth T continuations that reflect through baseline endpoints
-  // for alternating up/down humps. ViewBox is 12 high; baseline sits at y=6.
-  const W = width;
+function Squiggle({ wave, dot }: { wave: string; dot: string }) {
   return (
-    `M0,6 ` +
-    `Q${(W * 0.125).toFixed(2)},2 ${(W * 0.25).toFixed(2)},6 ` +
-    `T${(W * 0.5).toFixed(2)},6 ` +
-    `T${(W * 0.75).toFixed(2)},6 ` +
-    `T${W.toFixed(2)},6`
+    <Svg width={36} height={10} viewBox="0 0 36 10">
+      <Path
+        d="M2,5 Q9,1 18,5 T34,5"
+        stroke={wave}
+        strokeWidth={1.3}
+        fill="none"
+        strokeLinecap="round"
+      />
+      <Circle cx={31} cy={3} r={1.6} fill={dot} />
+    </Svg>
   );
 }
+
+// Cap height per size step. These are structural brand-mark dimensions
+// driven by the `size` prop, not typographic variants — the documented
+// exception to "no fontSize literals outside textVariants."
+const SIZE_MAP: Record<WordmarkSize, { capPx: number; trackingPx: number }> = {
+  m:  { capPx: 22, trackingPx: -0.4 },
+  l:  { capPx: 26, trackingPx: -0.5 },
+  xl: { capPx: 32, trackingPx: -0.7 },
+};
+
+const PILL_PADDING: Record<WordmarkSize, { v: number; h: number }> = {
+  m:  { v:  6, h: 14 },
+  l:  { v:  7, h: 16 },
+  xl: { v:  8, h: 18 },
+};
+
+// shadows.control sourced at module scope so non-component contexts can
+// reference the same drop shadow without invoking useTheme().
+const PILL_SHADOW = Platform.OS === 'android'
+  ? ({ elevation: 4 } as const)
+  : shadows.control;
 
 export function Wordmark({
   size       = 'm',
   tone       = 'ink',
   background = 'none',
+  squiggle   = false,
   testID,
 }: WordmarkProps) {
   const { theme } = useTheme();
-  const { capPx, horizonW, dotR, gap } = SIZE_MAP[size];
+  const { capPx, trackingPx } = SIZE_MAP[size];
 
-  // Pill is a branded chip — colors are locked to light-mode constants
-  // regardless of system scheme, so the mark reads as XRoad-on-cream
-  // when overlaying a dark map even in dark-mode UI. Outside the pill,
-  // colors follow the active theme + `tone`.
-  const isPill = background === 'pill';
-  const wordColor = isPill
-    ? lightTheme.colors.ink
-    : (tone === 'ink' ? theme.colors.ink : theme.colors.paper);
-  const accentColor = isPill ? lightTheme.colors.accent : theme.colors.accent;
-  const strokeColor = wordColor;
-
-  const wavePath = React.useMemo(() => buildWavePath(horizonW), [horizonW]);
+  // Bicolor: X always emerald (brand mark continuity with POI markers).
+  // "Road" follows tone — ink for default surfaces, paperSoft for emerald
+  // backgrounds where ink would disappear.
+  const xColor    = theme.colors.primary;
+  const wordColor = tone === 'paper' ? theme.colors.paperSoft : theme.colors.ink;
+  const waveColor = tone === 'paper' ? theme.colors.paperSoft : theme.colors.inkSoft;
+  const dotColor  = theme.colors.accent;
 
   const inner = (
     <View style={styles.wrap}>
-      <Svg width={horizonW} height={12} viewBox={`0 0 ${horizonW} 12`}>
-        <Path
-          d={wavePath}
-          stroke={strokeColor}
-          strokeWidth={1}
-          fill="none"
-          strokeLinecap="round"
-        />
-        <Circle cx={horizonW / 2} cy={6} r={dotR} fill={accentColor} />
-      </Svg>
-      <View style={[styles.row, { marginTop: gap }]}>
-        <Text
-          allowFontScaling={false}
-          style={{
-            fontFamily:    theme.fontFamilies.serif,
-            fontWeight:    '600',
-            fontSize:      capPx,
-            lineHeight:    capPx,
-            letterSpacing: -0.5,
-            color:         accentColor,
-          }}
-        >
-          X
-        </Text>
-        <Text
-          allowFontScaling={false}
-          style={{
-            fontFamily:    theme.fontFamilies.serifItalic,
-            fontWeight:    '500',
-            fontStyle:     'italic',
-            fontSize:      capPx,
-            lineHeight:    capPx,
-            letterSpacing: -0.5,
-            color:         wordColor,
-          }}
-        >
-          Road
-        </Text>
+      {squiggle ? (
+        <View style={{ marginBottom: 2 }}>
+          <Squiggle wave={waveColor} dot={dotColor} />
+        </View>
+      ) : null}
+      <View style={styles.row}>
+      <Text
+        allowFontScaling={false}
+        style={{
+          fontFamily:    theme.fontFamilies.serif,
+          fontWeight:    '400',
+          fontSize:      capPx,
+          lineHeight:    capPx * 1.1,
+          letterSpacing: trackingPx,
+          color:         xColor,
+        }}
+      >
+        X
+      </Text>
+      <Text
+        allowFontScaling={false}
+        style={{
+          fontFamily:    theme.fontFamilies.serifItalic,
+          fontWeight:    '400',
+          fontStyle:     'italic',
+          fontSize:      capPx,
+          lineHeight:    capPx * 1.1,
+          letterSpacing: trackingPx,
+          color:         wordColor,
+        }}
+      >
+        Road
+      </Text>
       </View>
     </View>
   );
 
-  if (!isPill) {
+  if (background === 'none') {
     return <View testID={testID}>{inner}</View>;
   }
 
   const pad = PILL_PADDING[size];
-  // iOS pulls shadow values from lightTheme.elevation.e2 (same source as the
-  // ink shadow token). Android gets a lighter elevation: 4 since the e2 token
-  // value (8) over-darkens this chip-sized surface.
   return (
     <View
       testID={testID}
       style={[
         styles.pill,
         {
-          backgroundColor: lightTheme.colors.paper,
-          paddingTop:      pad.top,
-          paddingBottom:   pad.bottom,
-          paddingLeft:     pad.h,
-          paddingRight:    pad.h,
+          backgroundColor:   theme.colors.paperWarm,
+          borderColor:       theme.colors.paperEdge,
+          paddingVertical:   pad.v,
+          paddingHorizontal: pad.h,
         },
-        Platform.OS === 'android'
-          ? { elevation: 4 }
-          : lightTheme.elevation.e2,
+        PILL_SHADOW,
       ]}
     >
       {inner}
@@ -155,7 +165,8 @@ const styles = StyleSheet.create({
     alignItems:    'baseline',
   },
   pill: {
-    borderRadius: 999,
-    alignSelf:    'flex-start',
+    alignSelf:     'flex-start',
+    borderRadius:  999,
+    borderWidth:   1,
   },
 });

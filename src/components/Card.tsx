@@ -4,8 +4,8 @@ import type { ViewStyle } from 'react-native';
 import { useTheme } from '../design/theme';
 import type { RadiusName } from '../design/tokens';
 
-export type CardVariant = 'paper' | 'ink' | 'outlined';
-export type CardRadius = Extract<RadiusName, 'm' | 'l'>;
+export type CardVariant = 'paper' | 'paperWarm' | 'ink' | 'outlined';
+export type CardRadius = Extract<RadiusName, 'control' | 'button' | 'card' | 'sheet'>;
 
 export interface CardProps {
   variant?: CardVariant;
@@ -17,7 +17,7 @@ export interface CardProps {
 
 export function Card({
   variant = 'paper',
-  radius  = 'm',
+  radius  = 'card',
   style,
   children,
   testID,
@@ -31,13 +31,20 @@ export function Card({
     if (variant === 'outlined') {
       return {
         backgroundColor: 'transparent',
-        borderColor:     theme.colors.rule,
+        borderColor:     theme.colors.paperEdge,
+        borderWidth:     1,
+      };
+    }
+    if (variant === 'paperWarm') {
+      return {
+        backgroundColor: theme.colors.paperWarm,
+        borderColor:     theme.colors.paperEdge,
         borderWidth:     1,
       };
     }
     return {
-      backgroundColor: theme.scheme === 'dark' ? theme.colors.card : theme.colors.paper,
-      borderColor:     theme.colors.rule,
+      backgroundColor: theme.colors.paper,
+      borderColor:     theme.colors.paperEdge,
       borderWidth:     1,
     };
   })();

@@ -12,7 +12,7 @@ export function Kicker({ children, testID }: KickerProps) {
   return (
     <Text
       testID={testID}
-      style={[theme.textVariants.metaSmall, { color: theme.colors.inkSoft }]}
+      style={[theme.textVariants.eyebrow, { color: theme.colors.inkSoft }]}
     >
       {children}
     </Text>

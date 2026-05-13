@@ -1,11 +1,10 @@
 /**
  * Demo screen at the 'design-system' route. Renders one swatch per color and
- * one line per text variant, in both light and dark, side by side. Bypasses
- * useTheme() on purpose so each panel is locked to its theme regardless of
- * the system scheme — that's the comparison view the design check needs.
+ * one line per text variant.
  *
- * All text on this screen pulls from theme.textVariants. The only inline
- * sizes are the swatch chips and panel padding (structural, not text).
+ * Pine is single-dark, so the side-by-side panels compare DEFAULT (cobalt
+ * accent) vs CVD-SAFE (amber accent). Every other color is identical between
+ * the two panels — only the `accent` token changes.
  */
 
 import React from 'react';
@@ -18,7 +17,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-import { lightTheme, darkTheme } from './theme';
+import { pineTheme, pineThemeCvdSafe } from './theme';
 import type { Theme } from './theme';
 import type { TextVariantName } from './tokens';
 
@@ -29,32 +28,38 @@ interface TypeSample {
 }
 
 const TYPE_SAMPLES: TypeSample[] = [
-  { key: 'display',    label: 'display',    sample: 'The Open Road' },
-  { key: 'h1',         label: 'h1',         sample: 'Pacific Coast Highway' },
-  { key: 'h2',         label: 'h2',         sample: 'Big Sur, California' },
-  { key: 'h3',         label: 'h3',         sample: 'Today’s Story' },
-  { key: 'body',       label: 'body',       sample: 'Half a mile up the road, the old Mission begins to rise from the dust.' },
-  { key: 'bodyItalic', label: 'body italic', sample: 'Approaching Hearst Castle — three minutes out.' },
-  { key: 'ui',         label: 'ui',         sample: 'Begin trip' },
-  { key: 'uiSmall',    label: 'uiSmall',    sample: 'Next stop in 1.4 mi' },
-  { key: 'meta',       label: 'meta',       sample: 'Now playing — 02:14' },
-  { key: 'metaSmall',  label: 'metaSmall',  sample: 'Mile 38 · Driving' },
+  { key: 'display',      label: 'display',      sample: 'The Open Road' },
+  { key: 'displaySmall', label: 'displaySmall', sample: '1h 12m · 24 mi' },
+  { key: 'title',        label: 'title',        sample: 'XRoad' },
+  { key: 'titleSmall',   label: 'titleSmall',   sample: 'Big Sur, California' },
+  { key: 'label',        label: 'label',        sample: 'BEGIN TRIP' },
+  { key: 'body',         label: 'body',         sample: 'Vasquez Rocks · 12 min visit' },
+  { key: 'meta',         label: 'meta',         sample: '24 mi · 3 stops' },
+  { key: 'eyebrow',      label: 'eyebrow',      sample: 'Current route' },
 ];
 
 const COLOR_KEYS: Array<keyof Theme['colors']> = [
   'paper',
-  'paperDeep',
+  'paperSoft',
+  'paperWarm',
+  'paperEdge',
   'ink',
   'inkSoft',
-  'rule',
-  'card',
-  'cardEdge',
+  'inkFaint',
+  'line',
+  'lineSoft',
+  'primary',
+  'primaryDeep',
+  'primaryTint',
+  'primaryTintEdge',
+  'secondary',
+  'secondaryDeep',
+  'secondaryTint',
+  'secondaryTintEdge',
   'accent',
-  'accent2',
 ];
 
-function ThemePanel({ theme }: { theme: Theme }) {
-  const isLight = theme.scheme === 'light';
+function ThemePanel({ theme, label }: { theme: Theme; label: string }) {
   return (
     <View
       style={[
@@ -62,18 +67,17 @@ function ThemePanel({ theme }: { theme: Theme }) {
         {
           backgroundColor: theme.colors.paper,
           padding:         theme.spacing.xl,
-          borderRadius:    theme.radii.l,
-          borderWidth:     isLight ? 0 : 1,
-          borderColor:     theme.colors.cardEdge,
+          borderRadius:    theme.radii.card,
+          borderWidth:     1,
+          borderColor:     theme.colors.paperEdge,
         },
-        isLight ? theme.elevation.e2 : null,
       ]}
     >
-      <Text style={[theme.textVariants.meta, { color: theme.colors.inkSoft, marginBottom: theme.spacing.m }]}>
-        {theme.scheme === 'light' ? 'Light mode' : 'Dark mode'}
+      <Text style={[theme.textVariants.eyebrow, { color: theme.colors.inkSoft, marginBottom: theme.spacing.m }]}>
+        {label}
       </Text>
 
-      <Text style={[theme.textVariants.h3, { color: theme.colors.ink, marginBottom: theme.spacing.s }]}>
+      <Text style={[theme.textVariants.titleSmall, { color: theme.colors.ink, marginBottom: theme.spacing.s }]}>
         Colors
       </Text>
       <View style={{ marginBottom: theme.spacing['2xl'] }}>
@@ -84,7 +88,7 @@ function ThemePanel({ theme }: { theme: Theme }) {
               s.swatchRow,
               {
                 paddingVertical:   theme.spacing.s,
-                borderBottomColor: theme.colors.rule,
+                borderBottomColor: theme.colors.lineSoft,
               },
             ]}
           >
@@ -93,28 +97,28 @@ function ThemePanel({ theme }: { theme: Theme }) {
                 s.swatchChip,
                 {
                   backgroundColor: theme.colors[key],
-                  borderColor:     theme.colors.rule,
+                  borderColor:     theme.colors.paperEdge,
                   borderRadius:    theme.radii.s,
                   marginRight:     theme.spacing.m,
                 },
               ]}
             />
-            <Text style={[theme.textVariants.ui, { color: theme.colors.ink, flex: 1 }]}>{key}</Text>
-            <Text style={[theme.textVariants.metaSmall, { color: theme.colors.inkSoft }]}>
+            <Text style={[theme.textVariants.body, { color: theme.colors.ink, flex: 1 }]}>{key}</Text>
+            <Text style={[theme.textVariants.eyebrow, { color: theme.colors.inkSoft }]}>
               {theme.colors[key]}
             </Text>
           </View>
         ))}
       </View>
 
-      <Text style={[theme.textVariants.h3, { color: theme.colors.ink, marginBottom: theme.spacing.s }]}>
+      <Text style={[theme.textVariants.titleSmall, { color: theme.colors.ink, marginBottom: theme.spacing.s }]}>
         Type
       </Text>
       <View>
-        {TYPE_SAMPLES.map(({ key, label, sample }) => (
+        {TYPE_SAMPLES.map(({ key, label: variantLabel, sample }) => (
           <View key={key} style={{ marginBottom: theme.spacing.l }}>
-            <Text style={[theme.textVariants.metaSmall, { color: theme.colors.inkSoft, marginBottom: theme.spacing.xs }]}>
-              {label}
+            <Text style={[theme.textVariants.eyebrow, { color: theme.colors.inkSoft, marginBottom: theme.spacing.xs }]}>
+              {variantLabel}
             </Text>
             <Text style={[theme.textVariants[key], { color: theme.colors.ink }]}>
               {sample}
@@ -123,29 +127,43 @@ function ThemePanel({ theme }: { theme: Theme }) {
         ))}
       </View>
 
-      <Text style={[theme.textVariants.h3, { color: theme.colors.ink, marginTop: theme.spacing.l, marginBottom: theme.spacing.s }]}>
-        Accent
+      <Text style={[theme.textVariants.titleSmall, { color: theme.colors.ink, marginTop: theme.spacing.l, marginBottom: theme.spacing.s }]}>
+        Accent buttons
       </Text>
-      <View style={{ flexDirection: 'row', gap: theme.spacing.s }}>
+      <View style={{ flexDirection: 'row', gap: theme.spacing.s, flexWrap: 'wrap' }}>
         <View
           style={{
-            backgroundColor: theme.colors.accent,
+            backgroundColor:   theme.colors.primary,
             paddingVertical:   theme.spacing.s,
             paddingHorizontal: theme.spacing.l,
             borderRadius:      theme.radii.pill,
           }}
         >
-          <Text style={[theme.textVariants.ui, { color: theme.colors.paper }]}>Begin trip</Text>
+          <Text style={[theme.textVariants.label, { color: theme.colors.paperSoft }]}>Drive</Text>
         </View>
         <View
           style={{
-            backgroundColor: theme.colors.accent2,
+            backgroundColor:   theme.colors.secondaryTint,
+            borderColor:       theme.colors.secondaryTintEdge,
+            borderWidth:       1,
             paddingVertical:   theme.spacing.s,
             paddingHorizontal: theme.spacing.l,
             borderRadius:      theme.radii.pill,
           }}
         >
-          <Text style={[theme.textVariants.ui, { color: theme.colors.paper }]}>Offline</Text>
+          <Text style={[theme.textVariants.label, { color: theme.colors.secondary }]}>+ Add stop</Text>
+        </View>
+        <View
+          style={{
+            backgroundColor:   theme.colors.primaryTint,
+            borderColor:       theme.colors.primaryTintEdge,
+            borderWidth:       1,
+            paddingVertical:   theme.spacing.s,
+            paddingHorizontal: theme.spacing.l,
+            borderRadius:      theme.radii.pill,
+          }}
+        >
+          <Text style={[theme.textVariants.label, { color: theme.colors.primaryDeep }]}>★ 4.8</Text>
         </View>
       </View>
     </View>
@@ -157,20 +175,20 @@ export default function DesignSystemScreen() {
   const sideBySide = width >= 720;
 
   return (
-    <SafeAreaView style={{ flex: 1, backgroundColor: lightTheme.colors.paperDeep }} edges={['top', 'bottom']}>
+    <SafeAreaView style={{ flex: 1, backgroundColor: pineTheme.colors.paperSoft }} edges={['top', 'bottom']}>
       <ScrollView
         contentContainerStyle={{
-          padding:       lightTheme.spacing.l,
+          padding:       pineTheme.spacing.l,
           flexDirection: sideBySide ? 'row' : 'column',
-          gap:           lightTheme.spacing.l,
+          gap:           pineTheme.spacing.l,
         }}
         showsVerticalScrollIndicator={false}
       >
         <View style={{ flex: 1 }}>
-          <ThemePanel theme={lightTheme} />
+          <ThemePanel theme={pineTheme} label="Pine · default (cobalt accent)" />
         </View>
         <View style={{ flex: 1 }}>
-          <ThemePanel theme={darkTheme} />
+          <ThemePanel theme={pineThemeCvdSafe} label="Pine · CVD-safe (amber accent)" />
         </View>
       </ScrollView>
     </SafeAreaView>

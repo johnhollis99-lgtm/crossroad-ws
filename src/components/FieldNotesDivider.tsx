@@ -11,7 +11,7 @@ export function FieldNotesDivider({ testID }: FieldNotesDividerProps) {
   return (
     <View
       testID={testID}
-      style={[styles.line, { backgroundColor: theme.colors.rule }]}
+      style={[styles.line, { backgroundColor: theme.colors.line }]}
     />
   );
 }

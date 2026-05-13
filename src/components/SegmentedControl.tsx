@@ -21,7 +21,6 @@ export function SegmentedControl<T extends string = string>({
   testID,
 }: SegmentedControlProps<T>) {
   const { theme } = useTheme();
-  const radius = 11;
 
   return (
     <View
@@ -29,7 +28,7 @@ export function SegmentedControl<T extends string = string>({
       style={[
         styles.row,
         {
-          borderRadius: radius,
+          borderRadius: theme.radii.control,
           padding:      2,
           backgroundColor: 'transparent',
         },
@@ -49,17 +48,17 @@ export function SegmentedControl<T extends string = string>({
               {
                 paddingVertical:   theme.spacing.s,
                 paddingHorizontal: theme.spacing.m,
-                borderRadius:      radius - 2,
-                backgroundColor:   selected ? theme.colors.ink : 'transparent',
-                borderColor:       selected ? theme.colors.ink : theme.colors.rule,
+                borderRadius:      theme.radii.control - 2,
+                backgroundColor:   selected ? theme.colors.paperWarm : 'transparent',
+                borderColor:       selected ? theme.colors.paperEdge : theme.colors.line,
                 borderWidth:       1,
               },
             ]}
           >
             <Text
               style={[
-                theme.textVariants.ui,
-                { color: selected ? theme.colors.paper : theme.colors.ink, textAlign: 'center' },
+                selected ? theme.textVariants.label : theme.textVariants.body,
+                { color: selected ? theme.colors.ink : theme.colors.inkSoft, textAlign: 'center' },
               ]}
             >
               {opt.label}

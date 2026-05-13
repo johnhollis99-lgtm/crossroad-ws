@@ -1,11 +1,16 @@
 /**
- * Xroad component library — barrel exports.
+ * XRoad component library — barrel exports (Pine).
  *
  * All components consume tokens from src/design/theme.ts via useTheme().
  * No hardcoded hex outside src/design/tokens.ts; no fontFamily/fontSize
- * literals outside theme.textVariants (with one localized exception in
- * Wordmark + PrimaryButton/DangerButton/NarrationCard where the spec
- * explicitly calls for off-ramp sizes that the type ramp does not cover).
+ * literals outside theme.textVariants — Wordmark, PrimaryButton,
+ * DangerButton, NarrationCard, PoiCallout, CoordinatesPill, and PoiMarkerX
+ * each carry one documented exception where the Pine spec calls for an
+ * off-ramp size or paintOrder discipline the ramp doesn't cover.
+ *
+ * `FieldNotesDivider` retains its name for API continuity — it predates
+ * the Pine rename but the visual is now Pine-themed (line color, no
+ * other vestiges).
  */
 
 export { AudienceMark }       from './AudienceMark';
@@ -58,3 +63,49 @@ export type { WaveformProps } from './Waveform';
 
 export { Wordmark }           from './Wordmark';
 export type { WordmarkProps, WordmarkSize, WordmarkTone } from './Wordmark';
+
+// Phase 2 additions
+
+export {
+  IconArrowLeft,
+  IconPlay,
+  IconPause,
+  IconSkipBack,
+  IconSkipFwd,
+  IconVolume,
+  IconVolumeOff,
+  IconMic,
+  IconSparkle,
+  IconCar,
+  IconHike,
+  IconClose,
+  IconHistory,
+  IconNature,
+  IconArchitecture,
+  IconFood,
+  IconMusic,
+  IconArt,
+  IconWeird,
+  IconRoadside,
+  IconFilm,
+  IconScience,
+} from './Icons';
+export type { IconProps } from './Icons';
+
+export { SegmentedTrio } from './SegmentedTrio';
+export type { SegmentedTrioProps, SegmentedTrioOption } from './SegmentedTrio';
+
+export { NarratorCard } from './NarratorCard';
+export type { NarratorCardProps } from './NarratorCard';
+
+export { LabeledSlider } from './LabeledSlider';
+export type { LabeledSliderProps } from './LabeledSlider';
+
+export { PersonaPill } from './PersonaPill';
+export type { PersonaPillProps } from './PersonaPill';
+
+export { StoriesBadge } from './StoriesBadge';
+export type { StoriesBadgeProps } from './StoriesBadge';
+
+export { TripStat } from './TripStat';
+export type { TripStatProps } from './TripStat';

@@ -1,157 +1,119 @@
 /**
- * Xroad design tokens — Field Notes (editorial / NatGeo travel journal).
+ * XRoad design tokens — Pine (dark forest-green + emerald + cobalt).
  *
- * Sole source of color, type, spacing, radius, and elevation values for the
- * new design system. The legacy palette in lib/theme.ts (dark earthy) stays
- * in place for screens that haven't migrated; new screens import from here.
+ * Sole source of color, type, spacing, radius, and shadow values.
+ * Single dark theme; CVD-safe mode swaps the icon `accent` color from
+ * cobalt → amber at the theme-provider level (see theme.ts).
  *
- * Values are exact — do not invent new constants without an update prompt.
+ * No hardcoded hex or fontFamily/fontSize literals outside this file.
  */
 
 import type { TextStyle, ViewStyle } from 'react-native';
 
-// ── COLORS ────────────────────────────────────────────────────────────────
+// ── COLORS (single dark palette) ──────────────────────────────────────────
 
-export const lightColors = {
-  paper:     '#f5efe2',
-  paperDeep: '#ece4d2',
-  ink:       '#1a1814',
-  inkSoft:   '#6b6557',
-  rule:      'rgba(26,24,20,0.18)',
-  accent:    '#c0451d',                           // ink-red — primary CTA, "now playing", route line
-  accent2:   '#3d5a3a',                           // forest — offline / cached / success
-  glassTint:        'rgba(245,239,226,0.7)',      // GlassPill default fill (paper-translucent)
-  glassTintInverse: 'rgba(14,13,10,0.6)',         // GlassPill `dark` fill (ink-translucent)
-} as const;
+export const pineColors = {
+  paper:             '#08160F',   // primary surface — header card, sheet, FAB
+  paperSoft:         '#0F1F18',   // text color on primary-accent backgrounds
+  paperWarm:         '#142922',   // secondary surface — search field, avatar, active tab pill
+  paperEdge:         '#2A4035',   // border / divider on opaque surfaces
 
-export const darkColors = {
-  paper:     '#15130f',
-  paperDeep: '#0c0b09',
-  ink:       '#f0e9d8',
-  inkSoft:   'rgba(240,233,216,0.55)',
-  rule:      'rgba(240,233,216,0.16)',
-  card:      '#1c1914',
-  cardEdge:  'rgba(240,233,216,0.12)',
-  accent:    '#e07a4f',
-  accent2:   '#7ba074',
-  glassTint:        'rgba(28,25,20,0.7)',         // GlassPill default fill in dark (card-translucent)
-  glassTintInverse: 'rgba(240,233,216,0.6)',      // GlassPill `dark`-prop fill in dark (ink-translucent)
+  ink:               '#E8FAEF',   // body text, icon primary stroke
+  inkSoft:           '#9ACCB0',   // secondary text, meta labels
+  inkFaint:          '#5E907C',   // tertiary — decorative only, never content
+
+  line:              'rgba(232,250,239,0.22)',
+  lineSoft:          'rgba(232,250,239,0.10)',
+
+  primary:           '#10B981',   // EMERALD — chips selected, Drive, route stops, rating chip
+  primaryDeep:       '#059669',
+  primaryTint:       'rgba(16,185,129,0.14)',
+  primaryTintEdge:   'rgba(16,185,129,0.28)',
+
+  secondary:         '#60A5FA',   // COBALT — icon accent dots, Add stop pill
+  secondaryDeep:     '#3B82F6',
+  secondaryTint:     'rgba(96,165,250,0.14)',
+  secondaryTintEdge: 'rgba(96,165,250,0.28)',
+
+  cvdSafe:           '#F59E0B',   // amber — replaces icon accent when CVD-safe is on
+
+  danger:            '#E11D48',   // rose — End trip / destructive CTAs
+  dangerDeep:        '#BE123C',
+  dangerTint:        'rgba(225,29,72,0.16)',
 } as const;
 
 // ── TYPOGRAPHY ────────────────────────────────────────────────────────────
 
-// fontFamily strings here must match the keys registered in src/design/fonts.ts.
-// On iOS, "family + fontWeight + fontStyle" resolves to the matching face when
-// every face is registered under the family name. On Android, per-weight
-// family names may be needed — adjust here when font loading goes live.
 export const fontFamilies = {
-  serif:       'Fraunces',
-  serifItalic: 'Fraunces-Italic',
-  sans:        'Inter Tight',
+  serif:       'Instrument Serif',
+  serifItalic: 'Instrument Serif-Italic',
+  sans:        'DM Sans',
   mono:        'JetBrains Mono',
 } as const;
 
 export type TextVariantName =
-  | 'display'
-  | 'h1'
-  | 'h2'
-  | 'h3'
-  | 'body'
-  | 'bodyItalic'
-  | 'button'
-  | 'buttonStrong'
-  | 'ui'
-  | 'uiSmall'
-  | 'meta'
-  | 'metaSmall';
+  | 'display'        // 32 italic serif — feature headlines
+  | 'displaySmall'   // 26 italic serif — route hero "1h 12m"
+  | 'title'          // 22 italic serif — wordmark Road
+  | 'titleSmall'     // 20 italic serif — secondary titles
+  | 'label'          // 14 DM Sans 700 — buttons, tab labels, chip labels
+  | 'body'           // 14 DM Sans 600 — stop titles, primary text
+  | 'meta'           // 12 DM Sans 500 — stop subtitles, distance, sub-labels
+  | 'eyebrow';       // 10 DM Sans 700 uppercase 0.18em — section headers
 
 export const textVariants: Record<TextVariantName, TextStyle> = {
   display: {
-    fontFamily:    fontFamilies.serif,
-    fontWeight:    '500',
-    fontSize:      56,
-    lineHeight:    64,           // 1.15 — clears Fraunces descenders on Android
-    letterSpacing: -1.6,
-  },
-  h1: {
-    fontFamily:    fontFamilies.serif,
-    fontWeight:    '500',
+    fontFamily:    fontFamilies.serifItalic,
+    fontWeight:    '400',
+    fontStyle:     'italic',
     fontSize:      32,
-    lineHeight:    38,           // 1.19 — clears Fraunces descenders on Android
-    letterSpacing: -0.6,
+    lineHeight:    38,
   },
-  h2: {
-    fontFamily:    fontFamilies.serif,
-    fontWeight:    '600',
+  displaySmall: {
+    fontFamily:    fontFamilies.serifItalic,
+    fontWeight:    '400',
+    fontStyle:     'italic',
+    fontSize:      26,
+    lineHeight:    32,
+  },
+  title: {
+    fontFamily:    fontFamilies.serifItalic,
+    fontWeight:    '400',
+    fontStyle:     'italic',
     fontSize:      22,
-    lineHeight:    25.3,         // 1.15
-    letterSpacing: -0.4,
+    lineHeight:    26,
   },
-  h3: {
-    fontFamily:    fontFamilies.serif,
-    fontWeight:    '600',
-    fontSize:      17,
-    lineHeight:    20.4,         // 1.2
-    letterSpacing: -0.3,
+  titleSmall: {
+    fontFamily:    fontFamilies.serifItalic,
+    fontWeight:    '400',
+    fontStyle:     'italic',
+    fontSize:      20,
+    lineHeight:    24,
+  },
+  label: {
+    fontFamily:    fontFamilies.sans,
+    fontWeight:    '700',
+    fontSize:      14,
+    lineHeight:    19,
   },
   body: {
-    fontFamily:    fontFamilies.serif,
-    fontWeight:    '400',
-    fontSize:      15,
-    lineHeight:    22.5,         // 1.5
-  },
-  bodyItalic: {
-    fontFamily:    fontFamilies.serifItalic,
-    fontWeight:    '400',
-    fontStyle:     'italic',
-    fontSize:      15,
-    lineHeight:    22.5,
-  },
-  // Button-label variants bake italic + tightened tracking into the ramp so
-  // PrimaryButton / DangerButton / NarrationCard titles no longer need inline
-  // fontStyle overrides. 16/1.3 lands between body (15) and h3 (17).
-  button: {
-    fontFamily:    fontFamilies.serifItalic,
-    fontWeight:    '500',
-    fontStyle:     'italic',
-    fontSize:      16,
-    lineHeight:    20.8,         // 1.3
-    letterSpacing: -0.2,
-  },
-  buttonStrong: {
-    fontFamily:    fontFamilies.serifItalic,
-    fontWeight:    '600',
-    fontStyle:     'italic',
-    fontSize:      16,
-    lineHeight:    20.8,         // 1.3
-    letterSpacing: -0.2,
-  },
-  ui: {
     fontFamily:    fontFamilies.sans,
-    fontWeight:    '500',
+    fontWeight:    '600',
     fontSize:      14,
-    lineHeight:    19.6,         // 1.4
+    lineHeight:    20,
   },
-  uiSmall: {
+  meta: {
     fontFamily:    fontFamilies.sans,
     fontWeight:    '500',
     fontSize:      12,
-    lineHeight:    16.8,
+    lineHeight:    16,
   },
-  meta: {
-    fontFamily:    fontFamilies.mono,
-    fontWeight:    '400',
+  eyebrow: {
+    fontFamily:    fontFamilies.sans,
+    fontWeight:    '700',
     fontSize:      10,
-    lineHeight:    14,
-    letterSpacing: 1.6,
-    textTransform: 'uppercase',
-  },
-  metaSmall: {
-    fontFamily:    fontFamilies.mono,
-    fontWeight:    '400',
-    fontSize:      9,
-    lineHeight:    12.6,
-    letterSpacing: 1.6,
+    lineHeight:    13,
+    letterSpacing: 1.8,            // 0.18em at 10px
     textTransform: 'uppercase',
   },
 };
@@ -174,33 +136,43 @@ export type SpacingName = keyof typeof spacing;
 // ── RADIUS ────────────────────────────────────────────────────────────────
 
 export const radii = {
-  s:     8,
-  m:    14,
-  l:    18,
-  xl:   26,
-  pill: 999,
+  s:        8,
+  control: 12,    // tab pills, secondary buttons
+  button:  14,    // primary CTAs, Add stop, tab pills (upper bound)
+  segment: 16,    // MapRail segments
+  sheet:   24,    // bottom sheet (all 4 corners when floating)
+  card:    26,    // top header card
+  pill:   999,    // chips, mode toggle, search field, rating chip, FAB
 } as const;
 
 export type RadiusName = keyof typeof radii;
 
-// ── ELEVATION (light mode only — dark mode uses borders, not shadow) ──────
+// ── SHADOW ────────────────────────────────────────────────────────────────
 
-// Translates the CSS shadow shorthand from the spec to RN's shadow* + Android
-// elevation props. Color is the ink hex; alpha is split out into shadowOpacity
-// so Android (which only honors `elevation`) still renders a comparable depth.
-export const elevation: Record<'e1' | 'e2', ViewStyle> = {
-  e1: {
-    shadowColor:   '#1a1814',
-    shadowOffset:  { width: 0, height: 1 },
-    shadowOpacity: 0.06,
-    shadowRadius:  3,
-    elevation:     2,
+// Shadows use straight black (#000000) with alpha — not theme ink — since Pine
+// is dark-only and the spec's CSS shadows are alpha-on-black, not alpha-on-paper.
+// `sheet` uses #141008 (warm-tinted black) to match the spec's `rgba(20,16,8,0.18)`.
+
+export const shadows: Record<'card' | 'control' | 'sheet', ViewStyle> = {
+  card: {
+    shadowColor:   '#000000',
+    shadowOffset:  { width: 0, height: 10 },
+    shadowOpacity: 0.5,
+    shadowRadius:  28,
+    elevation:     12,
   },
-  e2: {
-    shadowColor:   '#1a1814',
-    shadowOffset:  { width: 0, height: 6 },
-    shadowOpacity: 0.12,
-    shadowRadius:  20,
-    elevation:     8,
+  control: {
+    shadowColor:   '#000000',
+    shadowOffset:  { width: 0, height: 4 },
+    shadowOpacity: 0.4,
+    shadowRadius:  14,
+    elevation:     6,
+  },
+  sheet: {
+    shadowColor:   '#141008',
+    shadowOffset:  { width: 0, height: -8 },
+    shadowOpacity: 0.18,
+    shadowRadius:  24,
+    elevation:     10,
   },
 };
