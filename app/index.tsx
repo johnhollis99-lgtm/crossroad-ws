@@ -1373,6 +1373,15 @@ export default function MapScreen() {
         onRegionChangeComplete={handleRegionChangeComplete}
         clusteringEnabled
         minPoints={5}
+        // Pixel-space radius for marker merging (drift 5.94 polish). 80px is
+        // larger than the library's 60px default so clusters absorb more
+        // aggressively at every zoom level; the effect compounds at low zoom
+        // since 80 pixels covers a much wider world-space slice when the
+        // camera is far out. At high zoom, POIs spread far enough apart that
+        // they still resolve to individual X marks. Tune up (100+) if dense
+        // corridors still feel cluttered at mid-zoom, or down (70) if regions
+        // condense too eagerly.
+        radius={80}
         renderCluster={renderCluster}
       >
         {/* Alternative routes — dimmed dashes */}
