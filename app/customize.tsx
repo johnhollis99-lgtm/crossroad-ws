@@ -29,13 +29,14 @@ import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from 'react-native-maps';
 import { useNavigation, useRoute } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
-import { countPOIsAlongRoute, getAvailableNarrators, saveTrip } from '../lib/supabase';
-import type { NarratorRecord } from '../lib/supabase';
+import { countPOIsAlongRoute, getAvailableNarrators, getPOIsAlongRoute, saveTrip } from '../lib/supabase';
+import type { NarratorRecord, POI } from '../lib/supabase';
 import { C } from '../lib/theme';
 import { MapStyleId, MAP_STYLES, loadMapStyle, saveMapStyle } from '../lib/mapStyle';
 import { MapStylePicker } from '../components/MapStylePicker';
 import { XRoadLogo } from '../components/XRoadLogo';
 import { useTripStore } from '../src/store/tripStore';
+import { curateRoutePOIs, type Density } from '../src/lib/curation/curateRoutePOIs';
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
@@ -231,7 +232,52 @@ const sl = StyleSheet.create({
   track: { flex: 1, height: 4, backgroundColor: C.BORDER_SUBTLE, borderRadius: 2, position: 'relative', justifyContent: 'center' },
   fill:  { height: 4, backgroundColor: C.ACCENT, borderRadius: 2, position: 'absolute', left: 0 },
   thumb: { width: 22, height: 22, borderRadius: 11, backgroundColor: C.BG_BASE, borderWidth: 2.5, borderColor: C.ACCENT_TEXT, position: 'absolute', marginLeft: -11, top: -9, elevation: 4, ...Platform.select({ web: { boxShadow: '0 2px 4px rgba(0,0,0,0.4)' }, default: { shadowColor: '#000', shadowOpacity: 0.4, shadowRadius: 4, shadowOffset: { width: 0, height: 2 } } }) },
+  marker: { position: 'absolute', top: -3, width: 2, height: 10, marginLeft: -1, backgroundColor: C.BORDER_STRONG, borderRadius: 1 },
 });
+
+// ── Relevance slider (B4 / drift 5.77) ────────────────────────────────────────
+// 0..100 continuous slider with implicit-only markers at 0/50/70/85/95.
+// Snaps to whole integers. Marker ticks render faintly under the track so
+// users can hit canonical thresholds without a dropdown.
+
+const RELEVANCE_MIN = 0;
+const RELEVANCE_MAX = 100;
+const RELEVANCE_MARKERS = [0, 50, 70, 85, 95] as const;
+
+function RelevanceSlider({ value, onChange }: { value: number; onChange: (v: number) => void }) {
+  const trackWidth = useRef(0);
+  const pct = (value - RELEVANCE_MIN) / (RELEVANCE_MAX - RELEVANCE_MIN);
+
+  const pan = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => true,
+      onMoveShouldSetPanResponder:  () => true,
+      onPanResponderGrant: (e) => snap(e.nativeEvent.locationX),
+      onPanResponderMove:  (e) => snap(e.nativeEvent.locationX),
+    })
+  ).current;
+
+  function snap(x: number) {
+    const ratio = Math.max(0, Math.min(1, x / (trackWidth.current || 1)));
+    const raw   = RELEVANCE_MIN + ratio * (RELEVANCE_MAX - RELEVANCE_MIN);
+    onChange(Math.round(raw));
+  }
+
+  return (
+    <View
+      style={sl.track}
+      onLayout={(e: LayoutChangeEvent) => { trackWidth.current = e.nativeEvent.layout.width; }}
+      {...pan.panHandlers}
+      hitSlop={{ top: 16, bottom: 16 }}
+    >
+      {RELEVANCE_MARKERS.map(m => (
+        <View key={m} style={[sl.marker, { left: `${((m - RELEVANCE_MIN) / (RELEVANCE_MAX - RELEVANCE_MIN)) * 100}%` as any }]} />
+      ))}
+      <View style={[sl.fill, { width: `${pct * 100}%` as any }]} />
+      <View style={[sl.thumb, { left: `${pct * 100}%` as any }]} />
+    </View>
+  );
+}
 
 // ── Create Narrator Modal ─────────────────────────────────────────────────────
 
@@ -404,6 +450,14 @@ export default function CustomizeScreen() {
   const [saving,           setSaving]           = useState(false);
   const [mapStyleId,       setMapStyleId]       = useState<MapStyleId>('dark');
   const [liveStoryCount,   setLiveStoryCount]   = useState<number | null>(routeInfo.story_count);
+  // B3 density (drift 5.75): balanced for driving, dense for hiking by default.
+  const [density,          setDensity]          = useState<Density>(isHiking ? 'dense' : 'balanced');
+  // B4 relevance threshold (drift 5.77): 0..100, default 0 = no filter.
+  const [minRelevance,     setMinRelevance]     = useState<number>(0);
+  // B5 curated count + avg pace for the stats strip. Refreshed on slider /
+  // category / distance / density / relevance changes via the effect below.
+  const [curatedCount,     setCuratedCount]     = useState<number | null>(null);
+  const [avgPaceMin,       setAvgPaceMin]       = useState<number | null>(null);
 
   // Clamp current poiDist if the mode-driven max shrinks beneath it
   // (e.g. user toggles from Drive 20mi → Hike 2mi). Without this the
@@ -414,15 +468,52 @@ export default function CustomizeScreen() {
 
   useEffect(() => { loadMapStyle().then(setMapStyleId); }, []);
 
-  // Recount whenever category selection or corridor distance changes
+  // ── Stats / curation refresh (drift 5.75 / 5.76 / 5.77 / 5.78) ────────────
+  // 150ms debounce per spec B5. Fetches the corridor with significance-desc
+  // sort, runs the pure curation function, and updates the stats strip's
+  // count + pace. Replaces the prior count-only `countPOIsAlongRoute` call.
+  //
+  // Pace divisor (drift 5.81 follow-up): driving uses route duration as-is;
+  // hiking estimates 20 min/mi when the route record has no native hike
+  // duration. Drift 5.85 tracks adding a real hike-duration field.
+  const HIKING_PACE_MIN_PER_MI = 20;
+  const tripDurationMin = isHiking
+    ? routeInfo.distance_mi * HIKING_PACE_MIN_PER_MI
+    : routeInfo.duration_minutes;
+
   useEffect(() => {
-    if (polylineCoords.length < 2) return;
+    if (polylineCoords.length < 2) {
+      setLiveStoryCount(null);
+      setCuratedCount(null);
+      setAvgPaceMin(null);
+      return;
+    }
     setLiveStoryCount(null);
-    const slugs = selectedCats.map(c => CAT_SLUG[c] ?? c.toLowerCase());
-    const mode = isHiking ? 'hiking' : 'driving';
-    countPOIsAlongRoute(polylineCoords, Math.max(0.1, poiDist), mode, slugs.length ? slugs : null)
-      .then(n => setLiveStoryCount(n));
-  }, [selectedCats, poiDist, isHiking]);
+    setCuratedCount(null);
+    const handle = setTimeout(() => {
+      const slugs = selectedCats.map(c => CAT_SLUG[c] ?? c.toLowerCase());
+      const mode = isHiking ? 'hiking' : 'driving';
+      countPOIsAlongRoute(polylineCoords, Math.max(0.1, poiDist), mode, slugs.length ? slugs : null)
+        .then(n => setLiveStoryCount(n));
+      getPOIsAlongRoute(
+        polylineCoords, Math.max(0.1, poiDist), slugs.length ? slugs : null, mode,
+        { sortMode: 'significance_desc', minSignificance: minRelevance, resultLimit: 500 },
+      ).then(rawPOIs => {
+        const r = curateRoutePOIs({
+          rawPOIs,
+          routePolyline: polylineCoords,
+          durationMinutes: tripDurationMin,
+          tripMode: isHiking ? 'hiking' : 'driving',
+          density,
+          minRelevance,
+          activeCategories: slugs,
+        });
+        setCuratedCount(r.count);
+        setAvgPaceMin(r.avgPaceMinutes);
+      });
+    }, 150);
+    return () => clearTimeout(handle);
+  }, [selectedCats, poiDist, isHiking, density, minRelevance, tripDurationMin]); // eslint-disable-line react-hooks/exhaustive-deps
   const handleMapStyleChange = (id: MapStyleId) => { setMapStyleId(id); saveMapStyle(id); };
   const activeMapStyle = MAP_STYLES[mapStyleId];
 
@@ -472,6 +563,8 @@ export default function CustomizeScreen() {
       depth:           selectedDepth,
       categoryFilter:  selectedCats,
       poiDistanceM:    Math.round(poiDist * 1609.34),
+      density,                                  // drift 5.75
+      minRelevance,                             // drift 5.77
       status:          'active',
       startedAt:       new Date().toISOString(),
     };
@@ -503,6 +596,9 @@ export default function CustomizeScreen() {
         corridorMi:     Math.max(0.1, poiDist),
         tone:           'warm',
         voice:          selectedNarrator.slug ?? 'canyon_guide',
+        density,                                // drift 5.75 — drive curates with this
+        minRelevance,                           // drift 5.77 — drive curates with this
+        tripMode:       isHiking ? 'hiking' : 'driving',
       }),
     });
   }, [selectedNarrator, saving, selectedDepth, selectedCats, poiDist, routeInfo, params, navigation]);
@@ -591,6 +687,24 @@ export default function CustomizeScreen() {
             <Text style={[s.contextDim, { color: C.WARNING }]}>
               {liveStoryCount === null ? '…' : liveStoryCount} {liveStoryCount === 1 ? 'story' : 'stories'}
             </Text>
+          </Text>
+        </View>
+
+        {/* ── Stats strip (B5 / drift 5.75) ────────────────────────────────
+            Distance · Duration · Curated POIs · Average pace.
+            Updates 150ms after density / relevance / category / distance
+            changes via the curation effect above. */}
+        <View style={s.statsStrip}>
+          <Text style={s.statsNum}>{fmtMiles(routeInfo.distance_mi)}</Text>
+          <Text style={s.statsDot}>·</Text>
+          <Text style={s.statsNum}>{fmtDuration(Math.round(tripDurationMin))}</Text>
+          <Text style={s.statsDot}>·</Text>
+          <Text style={s.statsNum}>{curatedCount === null ? '…' : curatedCount} POIs</Text>
+          <Text style={s.statsDot}>·</Text>
+          <Text style={s.statsNum}>
+            {avgPaceMin === null || avgPaceMin === 0
+              ? '—'
+              : `1 every ${Math.max(1, Math.round(avgPaceMin))}m`}
           </Text>
         </View>
 
@@ -705,6 +819,37 @@ export default function CustomizeScreen() {
           />
         </View>
 
+        {/* ── Density (B3 / drift 5.75) ───────────────────────────────────── */}
+        <Text style={s.sectionLabel}>Density</Text>
+        <View style={s.densityRow}>
+          {(['sparse', 'balanced', 'dense'] as const).map(d => {
+            const sel = density === d;
+            return (
+              <TouchableOpacity
+                key={d}
+                style={[s.densitySeg, sel && s.densitySegSel]}
+                onPress={() => setDensity(d)}
+                activeOpacity={0.8}
+              >
+                <Text style={[s.densitySegText, sel && s.densitySegTextSel]}>
+                  {d.charAt(0).toUpperCase() + d.slice(1)}
+                </Text>
+              </TouchableOpacity>
+            );
+          })}
+        </View>
+
+        {/* ── Relevance threshold (B4 / drift 5.77) ───────────────────────── */}
+        <View style={s.sliderLabelRow}>
+          <Text style={s.sliderLabelKey}>Min relevance</Text>
+          <Text style={s.sliderLabelVal}>{minRelevance}</Text>
+        </View>
+        <View style={s.sliderRow}>
+          <Text style={s.sliderEdge}>0</Text>
+          <RelevanceSlider value={minRelevance} onChange={setMinRelevance} />
+          <Text style={s.sliderEdge}>100</Text>
+        </View>
+
         {/* ── POI distance slider ───────────────────────────────────────────── */}
         <View style={s.sliderLabelRow}>
           <Text style={s.sliderLabelKey}>POI distance</Text>
@@ -817,4 +962,28 @@ const s = StyleSheet.create({
   // Start trip CTA
   startBtn:     { backgroundColor: C.ACCENT, borderRadius: 14, paddingVertical: 13, alignItems: 'center', marginTop: 16, minHeight: 50 },
   startBtnText: { fontSize: 17, fontWeight: '700', color: C.WHITE },
+
+  // Stats strip (B5 / drift 5.75)
+  statsStrip: {
+    flexDirection: 'row', alignItems: 'baseline', justifyContent: 'space-between',
+    paddingVertical: 10,
+    borderTopWidth: StyleSheet.hairlineWidth, borderBottomWidth: StyleSheet.hairlineWidth,
+    borderColor: C.BORDER_SUBTLE,
+    marginTop: 8,
+  },
+  statsNum: { fontSize: 14, fontWeight: '600', color: C.TEXT_PRIMARY, fontStyle: 'italic' },
+  statsDot: { fontSize: 14, color: C.TEXT_TERTIARY, paddingHorizontal: 6 },
+
+  // Density segmented control (B3 / drift 5.75)
+  densityRow: {
+    flexDirection: 'row', gap: 8, marginBottom: 4,
+  },
+  densitySeg: {
+    flex: 1, paddingVertical: 10, borderRadius: 10,
+    borderWidth: 1.5, borderColor: C.BORDER_SUBTLE,
+    backgroundColor: C.BG_ELEVATED, alignItems: 'center', minHeight: 44,
+  },
+  densitySegSel:     { borderColor: C.ACCENT_BORDER, backgroundColor: C.ACCENT_LIGHT },
+  densitySegText:    { fontSize: 13, fontWeight: '600', color: C.TEXT_SECONDARY },
+  densitySegTextSel: { color: C.ACCENT_TEXT },
 });

@@ -31,6 +31,8 @@ import { MapStyleId, MAP_STYLES, loadMapStyle, saveMapStyle } from '../lib/mapSt
 import { MapStylePicker } from '../components/MapStylePicker';
 import { useSheetSnap } from '../hooks/useSheetSnap';
 import { XRoadLogo } from '../components/XRoadLogo';
+import { haversineM, arcLengthAlongRoute } from '../src/lib/geo';
+import { curateRoutePOIs, type Density } from '../src/lib/curation/curateRoutePOIs';
 
 let ioConnect: ((url: string, opts: object) => any) | null = null;
 try { ioConnect = require('socket.io-client').io; } catch { /* real-time disabled */ }
@@ -84,44 +86,8 @@ function fmtMiles(mi: number | undefined | null): string {
   return mi < 0.1 ? `${Math.round(mi * 5280)} ft` : `${mi.toFixed(1)} mi`;
 }
 
-function haversineM(lat1: number, lon1: number, lat2: number, lon2: number): number {
-  const R = 6371000;
-  const toRad = (d: number) => (d * Math.PI) / 180;
-  const dLat = toRad(lat2 - lat1);
-  const dLon = toRad(lon2 - lon1);
-  const a = Math.sin(dLat / 2) ** 2 + Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
-  return 2 * R * Math.asin(Math.sqrt(a));
-}
-
-// Returns arc-length from route start to the closest projected point on the polyline.
-// Used to give POIs a sequential route position for sorting and distance display.
-function arcLengthAlongRoute(
-  lat: number, lng: number,
-  polyline: Array<{ latitude: number; longitude: number }>,
-): number {
-  if (polyline.length < 2) return 0;
-  let minDist = Infinity;
-  let cumulative = 0;
-  let bestArc = 0;
-  for (let i = 0; i < polyline.length - 1; i++) {
-    const a = polyline[i]!;
-    const b = polyline[i + 1]!;
-    const segLen = haversineM(a.latitude, a.longitude, b.latitude, b.longitude);
-    const dx = b.longitude - a.longitude;
-    const dy = b.latitude - a.latitude;
-    const len2 = dx * dx + dy * dy;
-    const t = len2 > 0
-      ? Math.max(0, Math.min(1, ((lng - a.longitude) * dx + (lat - a.latitude) * dy) / len2))
-      : 0;
-    const dist = haversineM(lat, lng, a.latitude + t * dy, a.longitude + t * dx);
-    if (dist < minDist) {
-      minDist = dist;
-      bestArc = cumulative + t * segLen;
-    }
-    cumulative += segLen;
-  }
-  return bestArc;
-}
+// haversineM + arcLengthAlongRoute lifted to src/lib/geo so the curation
+// function (src/lib/curation/) shares the same implementation.
 
 // ── POI distance slider ───────────────────────────────────────────────────────
 
@@ -442,24 +408,62 @@ export default function Drive() {
       const polyline   = routePreview.polylineCoords ?? [];
       const cats: string[] | null = filters.categoryFilter?.length ? filters.categoryFilter : null;
       const mode = trailMode ? 'hiking' : 'driving';
+      // Curation params come from customize via filters (drift 5.75 / 5.77 / 5.76).
+      const density:      Density = (filters.density as Density) ?? 'balanced';
+      const minRelevance: number  = filters.minRelevance ?? 0;
 
       if (__DEV__) {
         console.info('[drive] fetch:start',
           'polyline=' + polyline.length,
           'corridorMi=' + poiDist,
           'mode=' + mode,
+          'density=' + density,
+          'minRelevance=' + minRelevance,
           'categories=' + (cats?.join(',') ?? 'all'),
         );
       }
 
-      const fetched = await getPOIsAlongRoute(polyline, poiDist, cats, mode);
+      // Pull the corridor sorted by significance DESC so curation's per-bin
+      // pass picks the most-relevant POI in each bin. Server-side LIMIT 500
+      // bounds round-trip size; curation trims further client-side.
+      const fetched = await getPOIsAlongRoute(
+        polyline, poiDist, cats, mode,
+        { sortMode: 'significance_desc', minSignificance: minRelevance, resultLimit: 500 },
+      );
+
+      // B7 (drift 5.74 + 5.76) — curate the fetched corridor down to a
+      // right-sized set. Drive consumes the curated array directly; no
+      // separate slice cap (the 40-marker cap on home is also gone).
+      const durationMin = (routePreview.durationMin as number | undefined) ?? 0;
+      const tripModeForCuration = mode === 'hiking' ? 'hiking' : 'driving';
+      const HIKING_PACE_MIN_PER_MI = 20;
+      const effectiveDuration = durationMin > 0
+        ? durationMin
+        : ((routePreview.distanceMi as number | undefined) ?? 0) *
+          (tripModeForCuration === 'hiking' ? HIKING_PACE_MIN_PER_MI : 1);
+      const curated = curateRoutePOIs({
+        rawPOIs: fetched,
+        routePolyline: polyline,
+        durationMinutes: effectiveDuration,
+        tripMode: tripModeForCuration,
+        density,
+        minRelevance,
+        activeCategories: cats ?? [],
+      });
 
       if (__DEV__) {
-        console.info('[drive] fetch:state-set count=' + fetched.length);
+        console.info('[drive] fetch:state-set',
+          'fetched=' + fetched.length,
+          'curated=' + curated.count,
+          'avgPaceMin=' + curated.avgPaceMinutes.toFixed(1),
+        );
       }
 
-      // Project each POI onto the route polyline to get sequential arc-distance from start.
-      const withArc = fetched.map(p => ({
+      // Project each curated POI onto the route polyline to get
+      // sequential arc-distance from start (used for queue ordering,
+      // map marker draw order, and the drive stats strip's
+      // POIs-ahead computation).
+      const withArc = curated.curatedPOIs.map(p => ({
         poi: p,
         arc: arcLengthAlongRoute(p.lat, p.lng, polyline),
       }));
@@ -479,22 +483,11 @@ export default function Drive() {
   }, [params.routePreview, trailMode, poiDist]);
 
   // ── Diagnostic: render-side observability for corridor POI markers ─────────
-  // Drift 5.64 hypothesis was that Markers read from liveQueue; static check
-  // confirms they read from `pois` (the full corridor fetch). Log emits the
-  // count so hardware test verifies render-time array size matches fetch.
+  // Persistent observability — pois is the curated set (B7). Count here
+  // mirrors curation output for cross-check against `[drive] fetch:state-set`.
   useEffect(() => {
     if (__DEV__) {
       console.info('[drive] render:markers source=pois count=' + pois.length);
-      // One-shot firstPOI shape dump — drop after marker-visibility fix is confirmed live.
-      const first = pois[0];
-      if (first) {
-        console.info('[drive] render:firstPOI',
-          'keys=' + Object.keys(first).join(','),
-          'lat=' + first.lat + '(' + typeof first.lat + ')',
-          'lng=' + first.lng + '(' + typeof first.lng + ')',
-          'coordinate=' + JSON.stringify({ latitude: first.lat, longitude: first.lng }),
-        );
-      }
     }
   }, [pois.length]);
 
@@ -571,6 +564,27 @@ export default function Drive() {
 
   const nextPoiDist      = liveQueue[0]?.distanceMi;
   const storiesAvailable = pois.length > 0 ? pois.length : totalStories;
+
+  // ── Stats strip (B6 / drift 5.78) ────────────────────────────────────────
+  // "POIs ahead · 1 every Xm" — recomputes as user advances along the route.
+  const poisAhead = useMemo(() => {
+    if (!userLocation || pois.length === 0) return pois.length;
+    const userArc = arcLengthAlongRoute(
+      userLocation.latitude, userLocation.longitude,
+      routePreview.polylineCoords ?? [],
+    );
+    let n = 0;
+    for (const p of pois) {
+      const arc = poiArcMapRef.current.get(p.id) ?? 0;
+      if (arc > userArc) n++;
+    }
+    return n;
+  }, [pois, userLocation, routePreview.polylineCoords]);
+
+  const avgPaceAheadMin = useMemo(() => {
+    if (poisAhead === 0) return 0;
+    return Math.max(1, Math.round(Math.max(0, remainingMin) / poisAhead));
+  }, [poisAhead, remainingMin]);
 
   const handleFeedback = async (poiId: string, rating: 'up' | 'down') => {
     setRatedPois(prev => new Set(prev).add(poiId));
@@ -763,6 +777,14 @@ export default function Drive() {
         <View {...sheetPan} style={s.dragHandleWrap}>
           <View style={s.dragHandle} />
           <XRoadLogo size="sm" style={s.driveLogoWrap} />
+        </View>
+
+        {/* ── Stats strip (B6 / drift 5.78) — visible in peek + expanded. */}
+        <View style={s.driveStatsStrip}>
+          <Text style={s.driveStatsText} numberOfLines={1}>
+            {poisAhead} {poisAhead === 1 ? 'POI' : 'POIs'} ahead
+            {poisAhead > 0 ? `  ·  1 every ${avgPaceAheadMin}m` : ''}
+          </Text>
         </View>
 
         {/* ── PEEK: play/pause + skip forward + end trip ────────────── */}
@@ -1069,6 +1091,15 @@ const s = StyleSheet.create({
   dragHandleWrap: { alignItems: 'center', paddingVertical: 10 },
   dragHandle:     { width: 36, height: 4, backgroundColor: C.BORDER_STRONG, borderRadius: 2 },
   sheetMiddle:    { flex: 1 },
+
+  // Drive stats strip (B6 / drift 5.78) — compact single-line under the
+  // drag handle; visible in both peek and expanded sheet states.
+  driveStatsStrip: {
+    alignItems: 'center', paddingTop: 2, paddingBottom: 8,
+    borderBottomWidth: StyleSheet.hairlineWidth, borderColor: C.BORDER_SUBTLE,
+    marginBottom: 6,
+  },
+  driveStatsText: { fontSize: 12, color: C.TEXT_SECONDARY, fontWeight: '600' },
 
   // Peek: minimal controls row
   peekRow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingBottom: 6 },

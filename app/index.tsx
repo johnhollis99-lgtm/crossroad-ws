@@ -44,6 +44,7 @@ import { MapStyleId, MAP_STYLES, loadMapStyle, saveMapStyle } from '../lib/mapSt
 import { MapStylePicker } from '../components/MapStylePicker';
 import { XRoadLogo } from '../components/XRoadLogo';
 import { useTripStore } from '../src/store/tripStore';
+import { curateRoutePOIs } from '../src/lib/curation/curateRoutePOIs';
 
 // ── Route line colors per map style ──────────────────────────────────────────
 const ROUTE_COLOR: Record<string, string> = {
@@ -245,9 +246,58 @@ export default function MapScreen() {
     ? routePOIs
     : routePOIs.filter(poi => activeSlugSet.has(poi.category));
 
+  // ── Curation on home post-route (B7 / drift 5.74 / 5.76) ──────────────────
+  // Home pre-route browse stays uncurated. Post-route uses mode-default
+  // density (balanced for driving, dense for hiking), minRelevance 0. The
+  // user can refine on customize; this is the preview render.
+  const homeCuration = useMemo(() => {
+    if (!selectedRoute || filteredRoutePOIs.length === 0) {
+      return { curated: [] as POI[], extras: [] as POI[] };
+    }
+    const slugs = selectedCategories.map(label => CAT_SLUG[label] ?? label.toLowerCase());
+    const result = curateRoutePOIs({
+      rawPOIs:         filteredRoutePOIs,
+      routePolyline:   selectedRoute.polylineCoords,
+      durationMinutes: selectedRoute.durationMin,
+      tripMode:        activeTripMode,
+      density:         activeTripMode === 'hiking' ? 'dense' : 'balanced',
+      minRelevance:    0,
+      activeCategories: slugs,
+    });
+    const curatedIds = new Set(result.curatedPOIs.map(p => p.id));
+    return {
+      curated: result.curatedPOIs,
+      extras:  filteredRoutePOIs.filter(p => !curatedIds.has(p.id)),
+    };
+  }, [filteredRoutePOIs, selectedRoute, activeTripMode, selectedCategories]);
+
   // Browse mode = no routes selected yet. POIs come from get_nearby_pois,
   // clustered. Post-route mode renders along-corridor POIs uncluttered.
   const browseMode = routes.length === 0;
+
+  // ── Viewport-aware extra reveal (B8 / drift 5.79) ─────────────────────────
+  // When zoomed in past the threshold, supplement the curated set with
+  // non-curated POIs that fall inside the visible region. Rendered dimmed
+  // and smaller; tappable but NOT in the narration queue.
+  const VIEWPORT_REVEAL_DELTA = 0.05; // ~5 km vertical span
+  const VIEWPORT_REVEAL_MAX   = 80;
+  const [mapRegion, setMapRegion] = useState<typeof INITIAL_REGION>(INITIAL_REGION);
+  const visibleExtras = useMemo<POI[]>(() => {
+    if (browseMode) return [];
+    if (mapRegion.latitudeDelta >= VIEWPORT_REVEAL_DELTA) return [];
+    const minLat = mapRegion.latitude - mapRegion.latitudeDelta / 2;
+    const maxLat = mapRegion.latitude + mapRegion.latitudeDelta / 2;
+    const minLng = mapRegion.longitude - mapRegion.longitudeDelta / 2;
+    const maxLng = mapRegion.longitude + mapRegion.longitudeDelta / 2;
+    const inside: POI[] = [];
+    for (const p of homeCuration.extras) {
+      if (p.lat >= minLat && p.lat <= maxLat && p.lng >= minLng && p.lng <= maxLng) {
+        inside.push(p);
+        if (inside.length >= VIEWPORT_REVEAL_MAX) break;
+      }
+    }
+    return inside;
+  }, [browseMode, mapRegion, homeCuration.extras]);
 
   const fetchBrowsePOIs = useCallback(async (region: {
     latitude: number; longitude: number; latitudeDelta: number; longitudeDelta: number;
@@ -281,6 +331,7 @@ export default function MapScreen() {
     latitude: number; longitude: number; latitudeDelta: number; longitudeDelta: number;
   }) => {
     lastRegionRef.current = region;
+    setMapRegion(region); // B8 viewport reveal depends on this
     if (!browseMode) return;
     if (browseFetchTimer.current) clearTimeout(browseFetchTimer.current);
     browseFetchTimer.current = setTimeout(() => {
@@ -303,6 +354,10 @@ export default function MapScreen() {
   }, []);
 
   // ── POI dots for selected route ────────────────────────────────────────────
+  // Mode-aware corridor: driving 1 mi, hiking 0.25 mi (matches customize's
+  // mode-default poiDist). User can override via customize's slider.
+  // Result is fetched significance-desc and capped server-side at 500 rows;
+  // curation downstream picks the right-sized subset for rendering.
   useEffect(() => {
     if (!selectedRoute || selectedRoute.polylineCoords.length < 2) {
       if (__DEV__) {
@@ -314,36 +369,41 @@ export default function MapScreen() {
       setRoutePOIs([]);
       return;
     }
+    const fetchMode = activeTripMode;
+    const corridor = fetchMode === 'hiking' ? 0.25 : 1;
     if (__DEV__) {
       console.info('[home] fetch:start',
         'polyline=' + selectedRoute.polylineCoords.length,
-        'corridorMi=1',
-        'mode=driving',
+        'corridorMi=' + corridor,
+        'mode=' + fetchMode,
         'routeIdx=' + selectedRouteIdx,
       );
     }
     getPOIsAlongRoute(
-      selectedRoute.polylineCoords, 1, null, 'driving'
+      selectedRoute.polylineCoords, corridor, null, fetchMode,
+      { sortMode: 'significance_desc', resultLimit: 500 },
     ).then(pois => {
       if (__DEV__) {
         console.info('[home] fetch:state-set count=' + pois.length);
       }
       setRoutePOIs(pois);
     });
-  }, [selectedRouteIdx, routes]);
+  }, [selectedRouteIdx, routes, activeTripMode]);
 
   // ── Diagnostic: render-side observability for post-route POI markers ───────
   useEffect(() => {
     if (__DEV__ && !browseMode) {
       console.info('[home] render:markers',
-        'source=filteredRoutePOIs',
         'routePOIs=' + routePOIs.length,
         'filtered=' + filteredRoutePOIs.length,
-        'rendered=' + Math.min(filteredRoutePOIs.length, 40),
+        'curated=' + homeCuration.curated.length,
+        'extrasReady=' + homeCuration.extras.length,
+        'extrasVisible=' + visibleExtras.length,
         'activeChips=' + selectedCategories.length,
+        'latDelta=' + mapRegion.latitudeDelta.toFixed(4),
       );
     }
-  }, [routePOIs, filteredRoutePOIs.length, browseMode, selectedCategories.length]);
+  }, [routePOIs, filteredRoutePOIs.length, browseMode, selectedCategories.length, homeCuration.curated.length, homeCuration.extras.length, visibleExtras.length, mapRegion.latitudeDelta]);
 
   // ── Fetch routes ───────────────────────────────────────────────────────────
   // oCoords: explicit origin override — pass null to force GPS, omit to use current state.
@@ -711,6 +771,8 @@ export default function MapScreen() {
       backgroundColor: theme.colors.accent2, borderWidth: 2, borderColor: theme.colors.paper,
     },
     poiDot:        { width: 10, height: 10, borderRadius: 5, backgroundColor: theme.colors.accent,  borderWidth: 1.5, borderColor: theme.colors.paper },
+    // Viewport-reveal extras (B8 / drift 5.79) — dimmed, smaller, paper outline.
+    poiDotExtra:   { width: 8,  height: 8,  borderRadius: 4, backgroundColor: theme.colors.accent,  borderWidth: 1,   borderColor: theme.colors.paper, opacity: 0.5 },
     stopDot:       { width: 10, height: 10, borderRadius: 5, backgroundColor: theme.colors.accent2, borderWidth: 1.5, borderColor: theme.colors.paper },
     stopDotActive: { width: 14, height: 14, borderRadius: 7, backgroundColor: theme.colors.accent2, borderWidth: 2.5, borderColor: theme.colors.paper },
 
@@ -1159,8 +1221,10 @@ export default function MapScreen() {
           </Marker>
         ))}
 
-        {/* Post-route POI dots — capped at 40 (Stage 3 will lift). Never clustered. */}
-        {!browseMode && filteredRoutePOIs.slice(0, 40).map(poi => (
+        {/* Post-route curated POI dots (B7 / drift 5.74) — full opacity,
+            10px. The previous 40-cap is gone; curation handles the cap
+            upstream. Never clustered. */}
+        {!browseMode && homeCuration.curated.map(poi => (
           <Marker
             key={poi.id}
             coordinate={{ latitude: poi.lat, longitude: poi.lng }}
@@ -1168,6 +1232,20 @@ export default function MapScreen() {
             {...({ cluster: false } as any)}
           >
             <View style={s.poiDot} />
+          </Marker>
+        ))}
+
+        {/* Viewport-reveal extras (B8 / drift 5.79) — dimmed, smaller.
+            Renders only when zoomed in past the threshold; tappable but
+            outside the narration queue. */}
+        {!browseMode && visibleExtras.map(poi => (
+          <Marker
+            key={`extra-${poi.id}`}
+            coordinate={{ latitude: poi.lat, longitude: poi.lng }}
+            anchor={{ x: 0.5, y: 0.5 }}
+            {...({ cluster: false } as any)}
+          >
+            <View style={s.poiDotExtra} />
           </Marker>
         ))}
 

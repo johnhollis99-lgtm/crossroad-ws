@@ -1097,6 +1097,155 @@ the hiking flow.
 
 ---
 
+### 5.74 — Drive Marker iteration audit; home 40-slice removed
+
+**Status:** `resolved` (filed-and-fixed this commit).
+
+**Surface:** Spec C4 said "Confirm drive `<Marker>` iterates ALL of `pois`
+(curated set), not slice. Remove any leftover 40-slice. Inline comment
+noting curation handles the cap upstream."
+
+**Audit findings:**
+- `app/drive.tsx:595` was already iterating `pois.map(poi => …)` — no
+  slice cap on drive.
+- The 40-slice lived on `app/index.tsx:1097`'s post-route render
+  (`filteredRoutePOIs.slice(0, 40).map(…)`). That was the visible cap.
+
+**Resolution:**
+- Home post-route now renders `homeCuration.curated.map(…)` (no slice
+  cap). The curation function (drift 5.76) handles the right-sized
+  trimming server-distance-and-density-aware.
+- Drive renders `pois` directly. After commit 3's B7 wire-in, `pois` is
+  the curated set from `curateRoutePOIs`, so the iteration naturally
+  reflects the cap chosen on customize (density + relevance + duration).
+- Inline comment on drive's pois.map block explains the curation
+  upstream (no per-screen cap needed).
+
+**Decided by:** Spec C4. The "leftover 40-slice" lived on home, not
+drive; commit 3 removes it.
+
+---
+
+### 5.75 — Density slider on customize
+
+**Status:** `resolved` (filed-and-fixed this commit). Spec B3.
+
+**Resolution:**
+- Segmented control "Sparse | Balanced | Dense" between CATEGORIES
+  and RELEVANCE on customize.
+- Default per mode: balanced (driving), dense (hiking). Set at state
+  init from `isHiking`. Does not auto-revert on mode toggle.
+- Selection persists in `trips.density` (migration 20260512000001) via
+  the `saveTrip` payload, and ships to drive via the filters JSON nav
+  param so drive's curation pass uses the same density.
+
+**Decided by:** Spec B3.
+
+---
+
+### 5.76 — Curation function (`src/lib/curation/curateRoutePOIs.ts`)
+
+**Status:** `resolved` (filed-and-fixed this commit). Spec B2.
+
+**Surface:** Need a deterministic, unit-tested function that picks a
+"right-sized" subset of corridor POIs given trip mode, density,
+relevance threshold, active categories, and trip duration.
+
+**Resolution:**
+- New module `src/lib/curation/curateRoutePOIs.ts`. Pure, no IO. Imports
+  the shared geometry helpers from `src/lib/geo` (which were lifted
+  from `app/drive.tsx` in this same commit so the curation function and
+  the drive screen share a single arc-length implementation).
+- Algorithm matches spec B2 verbatim: filter categories → filter
+  significance ≥ minRelevance → spatial-bin by arc-length (driving 1 mi,
+  hiking 0.25 mi) → per-bin cap → global cap = floor(duration / divisor)
+  with a floor of 1 → top-significance survivors.
+- Per-bin caps: driving sparse 1 / balanced 2 / dense 3; hiking sparse 2
+  / balanced 5 / dense 10.
+- Global cap divisors: driving sparse 7 / balanced 4 / dense 2; hiking
+  sparse 4 / balanced 2 / dense 1.
+- Returns `{ curatedPOIs, count, avgPaceMinutes }`.
+- 8 unit tests cover: empty input, category-excludes-all,
+  relevance-empties, density-tier-deltas, spatial-spreading
+  (clustered-POIs-don't-crowd-other-bins), hiking-bin-granularity,
+  and avg-pace math. All passing.
+- Jest config extended to include `**/src/**/__tests__/**/*.test.ts`
+  so curation tests are discovered alongside the legacy
+  `lib/__tests__/` tree.
+
+**Decided by:** Spec B2. Algorithm taken verbatim from the spec body.
+
+---
+
+### 5.77 — Relevance threshold slider on customize
+
+**Status:** `resolved` (filed-and-fixed this commit). Spec B4.
+
+**Resolution:**
+- New `RelevanceSlider` component (separate from `PoiSlider` because
+  the 0–100 integer-snap behavior + tick markers don't compose into
+  the mile-step slider cleanly).
+- 0..100 continuous, snaps to integers. Implicit marker ticks at
+  0/50/70/85/95 — rendered as thin vertical lines under the track. No
+  preset buttons; spec says "implicit markers."
+- Value label inline ("Min relevance: 70" — well, the spec writes it
+  that way but the layout uses sliderLabelKey + sliderLabelVal in the
+  same row as POI distance, so the rendered text is "Min relevance"
+  with the value `70` on the right).
+- Default 0 = no filter. Persists in `trips.min_relevance` (migration
+  20260512000001) and ships to drive via filters JSON.
+
+**Decided by:** Spec B4.
+
+---
+
+### 5.78 — Compact stats strip on drive
+
+**Status:** `resolved` (filed-and-fixed this commit). Spec B6.
+
+**Resolution:**
+- Single-line strip rendered inside the bottom sheet, between the drag
+  handle and the peek/expanded conditional. Visible in both sheet
+  states.
+- Format: `{N} POIs ahead · 1 every {M}m`. When `poisAhead === 0`, the
+  pace tail is omitted (no division-by-zero, no "1 every 0m" garbage).
+- "POIs ahead" computes `arc-distance(userLocation) → polyline`, then
+  counts curated POIs whose `poiArcMapRef` entry exceeds the user's
+  arc. Recomputes on each `userLocation` GPS update.
+- Pace uses `remainingMin / poisAhead`, floored at 1m (UI dignity).
+
+**Decided by:** Spec B6.
+
+---
+
+### 5.79 — Viewport-aware reveal on home post-route
+
+**Status:** `resolved` (filed-and-fixed this commit). Spec B8.
+
+**Surface:** Curated set on home post-route is intentionally small
+(per drift 5.76). When the user zooms in far enough to inspect a
+neighborhood, hiding the non-curated POIs feels like missing data.
+B8 reveals the extras at street-level zoom.
+
+**Resolution:**
+- New `mapRegion: typeof INITIAL_REGION` state mirrors `lastRegionRef`
+  (the ref alone doesn't trigger re-renders). Wired into
+  `handleRegionChangeComplete`.
+- `visibleExtras` useMemo: when `latitudeDelta < 0.05` (~5 km vertical
+  span, neighborhood zoom), filter the non-curated POIs by the visible
+  region bounds. Capped at 80 to bound render cost.
+- Render: separate Marker mapping with `s.poiDotExtra` style — 8×8
+  (vs 10×10 curated), `opacity: 0.5`, thinner 1px paper outline. Same
+  ink-red accent. Tappable (Marker default), but NOT in the narration
+  queue — narration only fires for curated set.
+- Inline diagnostic log records `extrasVisible=N latDelta=X.XXXX` so
+  hardware logs surface zoom-triggered reveal behavior.
+
+**Decided by:** Spec B8. Threshold delta of 0.05 chosen from approximate
+"can-read-street-names" zoom; can tune from hardware feedback.
+
+---
+
 ### 5.83 — Roll-the-dice and Create-your-own narrator CTAs removed from customize
 
 **Status:** `resolved` (filed-and-fixed this commit).
