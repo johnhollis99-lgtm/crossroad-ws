@@ -78,7 +78,8 @@ export async function countPOIsAlongRoute(
   polylinePoints: RoutePolylinePoint[],
   corridorMi: number = 15,
   mode?: string,
-  categories?: string[] | null
+  categories?: string[] | null,
+  options: Pick<POIQueryOptions, 'minSignificance'> = {},
 ): Promise<number | null> {
   if (polylinePoints.length < 2) return null;
 
@@ -89,12 +90,15 @@ export async function countPOIsAlongRoute(
     pts.map(p => `${p.longitude} ${p.latitude}`).join(',')
   })`;
 
-  // count:'exact' without head:true → PostgREST sends a POST with body, avoiding GET URL limits
+  // count:'exact' without head:true → PostgREST sends a POST with body, avoiding GET URL limits.
+  // min_significance forwarded from `options` (drift 5.96) so the live count tracks the relevance
+  // slider on customize; default 0 = unfiltered, matching the SQL function's own default.
   const { count, error } = await supabase.rpc('get_corridor_pois', {
     route_geom: wkt,
     corridor_width_miles: corridorMi,
     category_filter: categories?.length ? categories : null,
     mode_filter: mode ?? null,
+    min_significance: options.minSignificance ?? 0,
   }, { count: 'exact' }).limit(0);
 
   if (error) {

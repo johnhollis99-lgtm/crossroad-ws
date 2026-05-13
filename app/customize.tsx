@@ -437,8 +437,18 @@ export default function CustomizeScreen() {
   // ── Category state (drift 5.80) ───────────────────────────────────────────
   // Lifted to the Zustand store so home and customize stay in sync.
   // Empty = include all (B2 curation convention).
-  const selectedCats      = useTripStore(s => s.selectedCategories);
-  const toggleCategory    = useTripStore(s => s.toggleCategory);
+  const selectedCats         = useTripStore(s => s.selectedCategories);
+  const toggleCategoryStore  = useTripStore(s => s.toggleCategory);
+  const toggleCategory       = useCallback((cat: string) => {
+    const nextActive  = !selectedCats.includes(cat);
+    const allActive   = nextActive
+      ? [...selectedCats, cat]
+      : selectedCats.filter(c => c !== cat);
+    if (__DEV__) {
+      console.info('[customize] filter:chip-toggle', { id: cat, nextActive, allActive });
+    }
+    toggleCategoryStore(cat);
+  }, [selectedCats, toggleCategoryStore]);
 
   // ── State ────────────────────────────────────────────────────────────────
   const [narrators,        setNarrators]        = useState<NarratorRecord[]>([]);
@@ -446,14 +456,29 @@ export default function CustomizeScreen() {
   const [selectedNarrator, setSelectedNarrator] = useState<NarratorRecord | null>(null);
   const [selectedDepth,    setSelectedDepth]    = useState<Depth>('ride_along');
   const [catsScrolled,     setCatsScrolled]     = useState(false);
-  const [poiDist,          setPoiDist]          = useState(poiDefault);
+  const [poiDist,          setPoiDistRaw]       = useState(poiDefault);
+  const setPoiDist = useCallback((next: number) => {
+    if (__DEV__) console.info('[customize] filter:slider-change', { which: 'poiDist', value: next });
+    setPoiDistRaw(next);
+  }, []);
   const [saving,           setSaving]           = useState(false);
   const [mapStyleId,       setMapStyleId]       = useState<MapStyleId>('dark');
   const [liveStoryCount,   setLiveStoryCount]   = useState<number | null>(routeInfo.story_count);
   // B3 density (drift 5.75): balanced for driving, dense for hiking by default.
-  const [density,          setDensity]          = useState<Density>(isHiking ? 'dense' : 'balanced');
+  const [density,          setDensityRaw]       = useState<Density>(isHiking ? 'dense' : 'balanced');
   // B4 relevance threshold (drift 5.77): 0..100, default 0 = no filter.
-  const [minRelevance,     setMinRelevance]     = useState<number>(0);
+  const [minRelevance,     setMinRelevanceRaw]  = useState<number>(0);
+  // Diagnostic wrappers (drift 5.96) — emit a transition log on every user
+  // slider/density change so the chip-toggle → rpc-call → rpc-return →
+  // stats-render chain is visible end-to-end in console.
+  const setDensity = useCallback((next: Density) => {
+    if (__DEV__) console.info('[customize] filter:slider-change', { which: 'density', value: next });
+    setDensityRaw(next);
+  }, []);
+  const setMinRelevance = useCallback((next: number) => {
+    if (__DEV__) console.info('[customize] filter:slider-change', { which: 'relevance', value: next });
+    setMinRelevanceRaw(next);
+  }, []);
   // B5 curated count + avg pace for the stats strip. Refreshed on slider /
   // category / distance / density / relevance changes via the effect below.
   const [curatedCount,     setCuratedCount]     = useState<number | null>(null);
@@ -468,7 +493,7 @@ export default function CustomizeScreen() {
 
   useEffect(() => { loadMapStyle().then(setMapStyleId); }, []);
 
-  // ── Stats / curation refresh (drift 5.75 / 5.76 / 5.77 / 5.78) ────────────
+  // ── Stats / curation refresh (drift 5.75 / 5.76 / 5.77 / 5.78 / 5.96) ─────
   // 150ms debounce per spec B5. Fetches the corridor with significance-desc
   // sort, runs the pure curation function, and updates the stats strip's
   // count + pace. Replaces the prior count-only `countPOIsAlongRoute` call.
@@ -476,10 +501,17 @@ export default function CustomizeScreen() {
   // Pace divisor (drift 5.81 follow-up): driving uses route duration as-is;
   // hiking estimates 20 min/mi when the route record has no native hike
   // duration. Drift 5.85 tracks adding a real hike-duration field.
+  //
+  // Race-condition guard (drift 5.96): each effect bumps `filterRequestVersion`
+  // and stores its own version locally. RPC `.then` callbacks compare against
+  // the latest version on resolution and bail if stale — prevents a slow
+  // prior-toggle response from overwriting a fresh-toggle one. Without this,
+  // rapidly toggling chips could leave the stats strip showing a stale count.
   const HIKING_PACE_MIN_PER_MI = 20;
   const tripDurationMin = isHiking
     ? routeInfo.distance_mi * HIKING_PACE_MIN_PER_MI
     : routeInfo.duration_minutes;
+  const filterRequestVersion = useRef(0);
 
   useEffect(() => {
     if (polylineCoords.length < 2) {
@@ -488,17 +520,48 @@ export default function CustomizeScreen() {
       setAvgPaceMin(null);
       return;
     }
+    const myVersion = ++filterRequestVersion.current;
     setLiveStoryCount(null);
     setCuratedCount(null);
     const handle = setTimeout(() => {
       const slugs = selectedCats.map(c => CAT_SLUG[c] ?? c.toLowerCase());
       const mode = isHiking ? 'hiking' : 'driving';
-      countPOIsAlongRoute(polylineCoords, Math.max(0.1, poiDist), mode, slugs.length ? slugs : null)
-        .then(n => setLiveStoryCount(n));
+      const rpcParams = {
+        corridorMi:       Math.max(0.1, poiDist),
+        mode,
+        categories:       slugs.length ? slugs : null,
+        minSignificance:  minRelevance,
+        density,
+        version:          myVersion,
+      };
+      if (__DEV__) {
+        console.info('[customize] filter:rpc-call', rpcParams);
+      }
+      countPOIsAlongRoute(
+        polylineCoords, rpcParams.corridorMi, mode, rpcParams.categories,
+        { minSignificance: minRelevance },
+      ).then(n => {
+        if (myVersion !== filterRequestVersion.current) return; // stale, drop
+        if (__DEV__) {
+          console.info('[customize] filter:rpc-return', { fn: 'countPOIsAlongRoute', count: n, version: myVersion });
+        }
+        setLiveStoryCount(n);
+      }).catch(err => {
+        if (__DEV__) console.warn('[customize] filter:rpc-error', { fn: 'countPOIsAlongRoute', err: String(err) });
+      });
       getPOIsAlongRoute(
-        polylineCoords, Math.max(0.1, poiDist), slugs.length ? slugs : null, mode,
+        polylineCoords, rpcParams.corridorMi, rpcParams.categories, mode,
         { sortMode: 'significance_desc', minSignificance: minRelevance, resultLimit: 500 },
       ).then(rawPOIs => {
+        if (myVersion !== filterRequestVersion.current) return; // stale, drop
+        if (__DEV__) {
+          console.info('[customize] filter:rpc-return', {
+            fn:     'getPOIsAlongRoute',
+            count:  rawPOIs.length,
+            sample: rawPOIs.slice(0, 3).map(p => p.name),
+            version: myVersion,
+          });
+        }
         const r = curateRoutePOIs({
           rawPOIs,
           routePolyline: polylineCoords,
@@ -510,10 +573,21 @@ export default function CustomizeScreen() {
         });
         setCuratedCount(r.count);
         setAvgPaceMin(r.avgPaceMinutes);
+      }).catch(err => {
+        if (__DEV__) console.warn('[customize] filter:rpc-error', { fn: 'getPOIsAlongRoute', err: String(err) });
       });
     }, 150);
     return () => clearTimeout(handle);
   }, [selectedCats, poiDist, isHiking, density, minRelevance, tripDurationMin]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Stats-strip render log — fires every time the curated count value the
+  // strip displays changes. Pairs with filter:rpc-return so the chain
+  // chip-toggle → rpc-call → rpc-return → stats-render is visible in console.
+  useEffect(() => {
+    if (__DEV__) {
+      console.info('[customize] filter:stats-render', { count: curatedCount, avgPaceMin });
+    }
+  }, [curatedCount, avgPaceMin]);
   const handleMapStyleChange = (id: MapStyleId) => { setMapStyleId(id); saveMapStyle(id); };
   const activeMapStyle = MAP_STYLES[mapStyleId];
 
