@@ -32,6 +32,12 @@ export type { KickerProps }   from './Kicker';
 export { ModePillRow }        from './ModePillRow';
 export type { ModePillRowProps, ModePillValue } from './ModePillRow';
 
+export { PoiCallout }         from './PoiCallout';
+export type { PoiCalloutProps, PoiCalloutPoi } from './PoiCallout';
+
+export { PoiMarkerX, usePoiMarkerTracking } from './PoiMarkerX';
+export type { PoiMarkerXProps, PoiMarkerXSize } from './PoiMarkerX';
+
 export { NarrationCard }      from './NarrationCard';
 export type { NarrationCardProps } from './NarrationCard';
 

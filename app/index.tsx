@@ -25,7 +25,7 @@ import {
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
-import MapView, { Callout, Marker, Polyline, PROVIDER_GOOGLE } from 'react-native-maps';
+import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from 'react-native-maps';
 import ClusteredMapView from 'react-native-map-clustering';
 import * as Location from 'expo-location';
 import { useNavigation } from '@react-navigation/native';
@@ -42,7 +42,15 @@ import { computeBadges, computeRouteTags } from '../lib/routeBadges';
 import { useSheetSnap, type SnapPoints } from '../hooks/useSheetSnap';
 import { MapStyleId, MAP_STYLES, loadMapStyle, saveMapStyle } from '../lib/mapStyle';
 import { MapStylePicker } from '../components/MapStylePicker';
-import { CategoryChip, ModePillRow, Wordmark } from '../src/components';
+import {
+  CategoryChip,
+  ModePillRow,
+  PoiCallout,
+  PoiMarkerX,
+  usePoiMarkerTracking,
+  Wordmark,
+} from '../src/components';
+import type { PoiMarkerXSize } from '../src/components';
 import { useTripStore } from '../src/store/tripStore';
 import { curateRoutePOIs } from '../src/lib/curation/curateRoutePOIs';
 
@@ -132,50 +140,43 @@ function decodePolyline(encoded: string): { latitude: number; longitude: number 
   return pts;
 }
 
-// ── POI marker (drift 5.73 reopened) ─────────────────────────────────────────
-// Holds a Marker ref + onPress that explicitly calls showCallout(). When
-// react-native-map-clustering wraps Markers, the native tap → Callout flow
-// can drop the Callout side (the library replaces the Marker subtree with
-// its own internal component for clustering math). The ref-based showCallout
-// is the documented react-native-maps workaround.
+// ── POI marker (drift 5.94 + 5.97) ───────────────────────────────────────────
+// Renders an X-shaped POI marker via the shared PoiMarkerX primitive, wrapped
+// in a react-native-maps Marker. onPress routes through the parent screen so
+// the parent can resolve screen coordinates via mapRef.pointForCoordinate and
+// drive the floating PoiCallout overlay (which lives as a sibling of MapView).
 //
-// Also emits a __DEV__ marker:tap log so hardware can confirm taps fire
-// regardless of whether the callout ends up showing.
-function HomePoiMarker({
-  poi, dotStyle, calloutStyle, calloutTextStyle, screenLabel,
+// The e038f43 ref + showCallout() workaround is gone — we no longer ask
+// react-native-maps' built-in Callout to render; the parent's overlay handles
+// the tooltip directly. tracksViewChanges flips true → false after 1s so the
+// SVG rasterizes once and stops re-snapshotting.
+function HomePoiX({
+  poi, size, screenLabel, onPress,
 }: {
   poi: POI;
-  dotStyle: any;
-  calloutStyle: any;
-  calloutTextStyle: any;
+  size: PoiMarkerXSize;
   screenLabel: 'browse' | 'curated' | 'extra';
+  onPress: (poi: POI, screenLabel: 'browse' | 'curated' | 'extra') => void;
 }) {
-  const markerRef = useRef<Marker>(null);
+  const tracking = usePoiMarkerTracking();
   return (
     <Marker
-      ref={markerRef}
       coordinate={{ latitude: poi.lat, longitude: poi.lng }}
       anchor={{ x: 0.5, y: 0.5 }}
       tappable
-      onPress={() => {
+      tracksViewChanges={tracking}
+      onPress={(e) => {
+        // Halt event so MapView.onPress (which dismisses the overlay) does
+        // NOT also fire on the same gesture.
+        e?.stopPropagation?.();
         if (__DEV__) {
-          console.info('[home] marker:tap',
-            'screen=' + screenLabel,
-            'poi=' + poi.name,
-            'id=' + poi.id,
-          );
+          console.info('[home] marker:tap', { poi: poi.name, id: poi.id, screen: screenLabel });
         }
-        // Explicit showCallout() — see comment above.
-        markerRef.current?.showCallout?.();
+        onPress(poi, screenLabel);
       }}
       {...({ cluster: false } as any)}
     >
-      <View style={dotStyle} />
-      <Callout tooltip>
-        <View style={calloutStyle}>
-          <Text style={calloutTextStyle}>{poi.name}</Text>
-        </View>
-      </Callout>
+      <PoiMarkerX size={size} />
     </Marker>
   );
 }
@@ -291,6 +292,45 @@ export default function MapScreen() {
 
   // Tapped existing stop marker — shows remove callout
   const [pressedStopIdx, setPressedStopIdx] = useState<number | null>(null);
+
+  // Tapped POI marker — drives the floating PoiCallout overlay (drift 5.97).
+  // selectedPoi carries the POI fields plus the computed screen coordinate
+  // (via mapRef.pointForCoordinate); cleared on map-press, pan-end, or unmount.
+  // userInteractedWithMap gates the pan dismissal so the initial
+  // onRegionChangeComplete (which fires on layout) doesn't immediately
+  // dismiss a freshly-set selectedPoi.
+  const [selectedPoi, setSelectedPoi] = useState<
+    (POI & { screenPosition: { x: number; y: number } }) | null
+  >(null);
+  const userInteractedWithMap = useRef(false);
+
+  const handleMarkerPress = useCallback(async (
+    poi: POI,
+    screenLabel: 'browse' | 'curated' | 'extra',
+  ) => {
+    try {
+      const screenPos = await (mapRef.current as any)?.pointForCoordinate?.({
+        latitude:  poi.lat,
+        longitude: poi.lng,
+      });
+      if (!screenPos) return;
+      setSelectedPoi({ ...poi, screenPosition: screenPos });
+      if (__DEV__) {
+        console.info('[home] callout:show', { poi: poi.name, screen: screenLabel, screenPos });
+      }
+    } catch (err) {
+      if (__DEV__) console.warn('[home] callout:show-fail', err);
+    }
+  }, []);
+
+  const dismissCallout = useCallback((reason: 'pan' | 'tap-bg' | 'tap-other-marker' | 'unmount') => {
+    setSelectedPoi(prev => {
+      if (prev && __DEV__) console.info('[home] callout:dismiss', { reason, poi: prev.name });
+      return null;
+    });
+  }, []);
+
+  useEffect(() => () => { dismissCallout('unmount'); }, [dismissCallout]);
 
   // Location search overlay (shared for origin + dest + stop)
   const [locTarget,  setLocTarget]  = useState<'origin' | 'dest' | 'stop' | null>(null);
@@ -436,12 +476,19 @@ export default function MapScreen() {
   }) => {
     lastRegionRef.current = region;
     setMapRegion(region); // B8 viewport reveal depends on this
+    // Dismiss the POI callout on pan-end, but skip the initial layout-driven
+    // event so a callout set immediately after mount isn't immediately wiped.
+    if (userInteractedWithMap.current) {
+      dismissCallout('pan');
+    } else {
+      userInteractedWithMap.current = true;
+    }
     if (!browseMode) return;
     if (browseFetchTimer.current) clearTimeout(browseFetchTimer.current);
     browseFetchTimer.current = setTimeout(() => {
       fetchBrowsePOIs(region);
     }, BROWSE_FETCH_DEBOUNCE_MS);
-  }, [browseMode, fetchBrowsePOIs]);
+  }, [browseMode, fetchBrowsePOIs, dismissCallout]);
 
   const clearRoutes = () => { setRoutes([]); setSelectedRouteIdx(0); setRoutePOIs([]); };
 
@@ -814,6 +861,10 @@ export default function MapScreen() {
   }, [s]);
 
   const handleMapPress = useCallback(async (e: any) => {
+    // Map-background tap dismisses the POI callout, whether or not a pin
+    // was dropped. Fires before the pending-pin work so a fast tap-then-tap
+    // sequence still feels responsive.
+    dismissCallout('tap-bg');
     const coord = e?.nativeEvent?.coordinate ?? e?.coordinate;
     if (!coord) return;
     setPendingPin(coord);
@@ -838,7 +889,7 @@ export default function MapScreen() {
     } finally {
       setPendingPinLoading(false);
     }
-  }, []);
+  }, [dismissCallout]);
 
   const confirmPinAsStop = useCallback(() => {
     if (!pendingPin) return;
@@ -902,46 +953,6 @@ export default function MapScreen() {
     originPinDot: {
       width: 11, height: 11, borderRadius: 6,
       backgroundColor: theme.colors.accent2, borderWidth: 2, borderColor: theme.colors.paper,
-    },
-    // POI dot (drift 5.88) — accessibility bump: 10→18 diameter, 1.5px
-    // paper-cream outline kept, shadow added for depth. iOS uses shadow*
-    // props; Android uses elevation.
-    poiDot: {
-      width: 18, height: 18, borderRadius: 9,
-      backgroundColor: theme.colors.accent,
-      borderWidth: 1.5, borderColor: theme.colors.paper,
-      ...Platform.select({
-        ios: {
-          shadowColor:  '#000',
-          shadowOpacity: 0.25,
-          shadowRadius:  2,
-          shadowOffset:  { width: 0, height: 1 },
-        },
-        android: { elevation: 3 },
-        default: {},
-      }),
-    },
-    // Viewport-reveal extras (B8 / drift 5.79; bumped 5.88) — 8→12 diameter,
-    // 0.5→0.55 opacity, paper outline matches curated.
-    poiDotExtra: {
-      width: 12, height: 12, borderRadius: 6,
-      backgroundColor: theme.colors.accent,
-      borderWidth: 1.5, borderColor: theme.colors.paper,
-      opacity: 0.55,
-    },
-
-    // POI marker callout (drift 5.73 / C2) — paper bg, Fraunces italic 16px name,
-    // 1px ink-red bottom border, 8/12 padding, radius 6.
-    poiCallout: {
-      backgroundColor: theme.colors.paper,
-      paddingVertical: 8, paddingHorizontal: 12,
-      borderRadius: 6,
-      borderBottomWidth: 1, borderBottomColor: theme.colors.accent,
-      maxWidth: 240,
-    },
-    poiCalloutName: {
-      ...theme.textVariants.button, // Fraunces serifItalic 500 16px
-      color: theme.colors.ink,
     },
     stopDot:       { width: 10, height: 10, borderRadius: 5, backgroundColor: theme.colors.accent2, borderWidth: 1.5, borderColor: theme.colors.paper },
     stopDotActive: { width: 14, height: 14, borderRadius: 7, backgroundColor: theme.colors.accent2, borderWidth: 2.5, borderColor: theme.colors.paper },
@@ -1350,45 +1361,42 @@ export default function MapScreen() {
           </Marker>
         )}
 
-        {/* Browse / curated / extras POI markers all route through
-            HomePoiMarker (drift 5.73 reopened). The component carries a
-            Marker ref + explicit onPress(showCallout) workaround for
-            react-native-map-clustering's tap-flow gap, plus a __DEV__
-            marker:tap log for hardware verification. */}
+        {/* Browse / curated / extras POI markers all render an X-shaped
+            marker (drift 5.94) via HomePoiX. Taps surface the floating
+            PoiCallout overlay (drift 5.97) rendered as a sibling of the
+            MapView further down — the built-in react-native-maps Callout
+            is no longer used here (react-native-map-clustering swallows it). */}
         {browseMode && browsePOIs.map(poi => (
-          <HomePoiMarker
+          <HomePoiX
             key={`browse-${poi.id}`}
             poi={poi}
-            dotStyle={s.poiDot}
-            calloutStyle={s.poiCallout}
-            calloutTextStyle={s.poiCalloutName}
+            size="curated"
             screenLabel="browse"
+            onPress={handleMarkerPress}
           />
         ))}
 
         {/* Post-route curated POI dots (B7 / drift 5.74). Cap-by-curation
             upstream — no slice here. */}
         {!browseMode && homeCuration.curated.map(poi => (
-          <HomePoiMarker
+          <HomePoiX
             key={poi.id}
             poi={poi}
-            dotStyle={s.poiDot}
-            calloutStyle={s.poiCallout}
-            calloutTextStyle={s.poiCalloutName}
+            size="curated"
             screenLabel="curated"
+            onPress={handleMarkerPress}
           />
         ))}
 
-        {/* Viewport-reveal extras (B8 / drift 5.79) — dimmed dot, same
-            callout. Renders only when zoomed past the threshold. */}
+        {/* Viewport-reveal extras (B8 / drift 5.79) — smaller X, same
+            callout overlay. Renders only when zoomed past the threshold. */}
         {!browseMode && visibleExtras.map(poi => (
-          <HomePoiMarker
+          <HomePoiX
             key={`extra-${poi.id}`}
             poi={poi}
-            dotStyle={s.poiDotExtra}
-            calloutStyle={s.poiCallout}
-            calloutTextStyle={s.poiCalloutName}
+            size="reveal"
             screenLabel="extra"
+            onPress={handleMarkerPress}
           />
         ))}
 
@@ -1420,6 +1428,17 @@ export default function MapScreen() {
           </Marker>
         )}
       </ClusteredMapView>
+
+      {/* ── POI CALLOUT OVERLAY (drift 5.97) ────────────────────────────── */}
+      {/* Floating cream pill anchored above the tapped X marker. Rendered as
+          a sibling of ClusteredMapView so it bypasses the clusterer's Marker
+          subtree (which silently drops the built-in Callout tap-flow). */}
+      {selectedPoi && (
+        <PoiCallout
+          poi={selectedPoi}
+          screenPosition={selectedPoi.screenPosition}
+        />
+      )}
 
       {/* ── BOTTOM SHEET — route picker (mobile only) ───────────────────── */}
       {!isDesktop && <Animated.View style={[s.sheet, { height: sheetAnim, paddingBottom: insets.bottom + 16 }]}>

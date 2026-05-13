@@ -30,7 +30,7 @@ import { C } from '../lib/theme';
 import { MapStyleId, MAP_STYLES, loadMapStyle, saveMapStyle } from '../lib/mapStyle';
 import { MapStylePicker } from '../components/MapStylePicker';
 import { useSheetSnap } from '../hooks/useSheetSnap';
-import { Wordmark } from '../src/components';
+import { PoiMarkerX, usePoiMarkerTracking, Wordmark } from '../src/components';
 import { haversineM, arcLengthAlongRoute } from '../src/lib/geo';
 import { curateRoutePOIs, type Density } from '../src/lib/curation/curateRoutePOIs';
 
@@ -124,6 +124,35 @@ const sl = StyleSheet.create({
   fill:  { height: 4, backgroundColor: C.ACCENT, borderRadius: 2, position: 'absolute', left: 0 },
   thumb: { width: 22, height: 22, borderRadius: 11, backgroundColor: C.BG_BASE, borderWidth: 2.5, borderColor: C.ACCENT_TEXT, position: 'absolute', marginLeft: -11, top: -9, elevation: 4, ...Platform.select({ web: { boxShadow: '0 2px 4px rgba(0,0,0,0.4)' }, default: { shadowColor: '#000', shadowOpacity: 0.4, shadowRadius: 4, shadowOffset: { width: 0, height: 2 } } }) },
 });
+
+// ── POI marker (drift 5.94) ───────────────────────────────────────────────────
+// Inactive corridor POIs render as ink-red X marks via PoiMarkerX (shared with
+// home). Active = currently-narrating POI keeps the legacy halo + inner-dot
+// visual since it functions as a now-playing indicator distinct from the
+// generic POI marker. tracksViewChanges flips true → false after 1s.
+function DrivePoiMarker({
+  poi, isActive, onPress, activeStyle, activeDotStyle,
+}: {
+  poi: POI;
+  isActive: boolean;
+  onPress: () => void;
+  activeStyle: any;
+  activeDotStyle: any;
+}) {
+  const tracking = usePoiMarkerTracking();
+  return (
+    <Marker
+      coordinate={{ latitude: poi.lat, longitude: poi.lng }}
+      anchor={{ x: 0.5, y: 0.5 }}
+      tracksViewChanges={tracking}
+      onPress={onPress}
+    >
+      {isActive
+        ? <View style={activeStyle}><View style={activeDotStyle} /></View>
+        : <PoiMarkerX size="curated" />}
+    </Marker>
+  );
+}
 
 // ── Main screen ───────────────────────────────────────────────────────────────
 
@@ -646,21 +675,16 @@ export default function Drive() {
             visibility-safe choice. Perf note: 1000-marker corridors re-snapshot
             on each prop change; if pan/zoom jitters at scale, switch to a
             delayed-flip pattern (track=true initially, flip false after mount). */}
-        {pois.map(poi => {
-          const isActive = poi.id === activePoiId;
-          return (
-            <Marker
-              key={poi.id}
-              coordinate={{ latitude: poi.lat, longitude: poi.lng }}
-              anchor={{ x: 0.5, y: 0.5 }}
-              onPress={() => setSelectedPoi(prev => prev?.id === poi.id ? null : poi)}
-            >
-              {isActive
-                ? <View style={s.poiActive}><View style={s.poiActiveDot} /></View>
-                : <View style={s.poiDot} />}
-            </Marker>
-          );
-        })}
+        {pois.map(poi => (
+          <DrivePoiMarker
+            key={poi.id}
+            poi={poi}
+            isActive={poi.id === activePoiId}
+            onPress={() => setSelectedPoi(prev => prev?.id === poi.id ? null : poi)}
+            activeStyle={s.poiActive}
+            activeDotStyle={s.poiActiveDot}
+          />
+        ))}
       </MapView>
 
       {/* ── TOP OVERLAYS ─────────────────────────────────────────────────── */}
@@ -999,29 +1023,9 @@ const s = StyleSheet.create({
   userLocOuter: { width: 22, height: 22, borderRadius: 11, backgroundColor: `${C.ACCENT}33`, alignItems: 'center', justifyContent: 'center' },
   userLocInner: { width: 12, height: 12, borderRadius: 6, backgroundColor: C.ACCENT_TEXT, borderWidth: 2, borderColor: C.BG_BASE },
 
-  // POI markers
-  // POI dot (drift 5.88) — accessibility bump: 10→18 diameter, 1.5px outline
-  // bumped to match home, shadow for depth. C.WARNING_BRIGHT is drive's
-  // current ink-red equivalent — drive screen hasn't been migrated to Field
-  // Notes tokens (legacy C palette). When drive migrates, this will swap to
-  // theme.colors.accent + theme.colors.paper to match home exactly.
-  poiDot: {
-    width: 18, height: 18, borderRadius: 9,
-    backgroundColor: `${C.WARNING_BRIGHT}E6`,
-    borderWidth: 1.5, borderColor: C.BG_BASE,
-    ...Platform.select({
-      ios: {
-        shadowColor:  '#000',
-        shadowOpacity: 0.25,
-        shadowRadius:  2,
-        shadowOffset:  { width: 0, height: 1 },
-      },
-      android: { elevation: 3 },
-      default: {},
-    }),
-  },
-  // Active = the currently-narrating POI. Scaled proportionally to keep
-  // the "halo + inner dot" relationship readable at the new outer size.
+  // POI markers — inactive POIs render via PoiMarkerX (drift 5.94). The
+  // active = currently-narrating halo + inner dot stays as a distinct
+  // now-playing visual.
   poiActive:    { width: 32, height: 32, borderRadius: 16, backgroundColor: `${C.WARNING_BRIGHT}40`, alignItems: 'center', justifyContent: 'center' },
   poiActiveDot: { width: 18, height: 18, borderRadius: 9, backgroundColor: C.WARNING_BRIGHT, borderWidth: 2, borderColor: C.BG_BASE },
 
