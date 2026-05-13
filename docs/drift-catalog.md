@@ -917,6 +917,98 @@ For a user mid-trip, list distances stay frozen at "60 mi to Joshua Tree" even a
 
 ---
 
+### 5.67 — RPC does not expose `significance_score`; no min / sort / limit params
+
+**Status:** `resolved` (filed-and-fixed this commit). Filed in this PR per
+spec request; open + close in the same entry per the user's "open + close"
+directive for spec-cited drift numbers that didn't exist in the catalog.
+
+**Surface:** Pre-curation, `get_corridor_pois` (drift 5.35 confirmed
+`get_route_pois` does not exist — corridor RPC is `get_corridor_pois`)
+and `get_nearby_pois` returned `lat, lng, tags, dist_from_route_m` /
+`distance_m` only. The 0–100 `pois.significance_score` was reachable
+only by a separate `pois.id` → significance lookup, which makes the
+client-side curation algorithm (drift 5.76) round-trip per POI. The
+RPCs also lacked a `min_significance` floor parameter, so dropping
+low-relevance POIs server-side wasn't possible.
+
+**Resolution:**
+- Migration `20260512000002_get_corridor_pois_significance.sql`: patches
+  `get_corridor_pois` to project `significance_score` and accept three
+  new optional params — `min_significance` (default 0; drops POIs
+  below this score), `sort_mode` (`'significance_desc'` for curation,
+  `'distance_asc'` preserves the legacy arc-length default), and
+  `result_limit` (server-side `LIMIT`; default `NULL` = unbounded).
+  Existing 4-arg callers continue working unchanged.
+- Migration `20260512000003_get_nearby_pois_significance.sql`: same
+  shape on `get_nearby_pois`. The `DO $$ … DROP FUNCTION …` block above
+  the create handles the multiple overloads that have accreted across
+  20260504000016 (`p_include_children` add) and 20260504000017
+  (confidence-score filter add).
+- `lib/supabase.ts`: `POI` interface gains `significance_score?: number`;
+  a new `POIQueryOptions` interface carries the three new params;
+  `getPOIsAlongRoute` / `getNearbyPOIs` accept an optional 5th `options`
+  arg. All existing 4-arg call sites unaffected.
+
+**Spec note:** the spec body named `get_route_pois`. That function has
+never existed in this repo (drift 5.35). The migration patches the real
+RPC name (`get_corridor_pois`), surfaced as a premise note in the commit
+message.
+
+**Test:** apply migrations, then `SELECT * FROM get_corridor_pois(<wkt>,
+1, NULL, 'driving', 70, 'significance_desc', 50)` returns ≤50 rows,
+sorted by `significance_score DESC`, all with `significance_score >= 70`
+and `significance_score` populated on every row.
+
+**Decided by:** Spec drift 5.67. Open-and-closed in one entry per the
+session directive ("Open + close in the same entries" for non-existent
+spec-cited drift numbers).
+
+---
+
+### 5.71 — Zustand session store didn't exist; cross-screen state ad-hoc'd through nav params
+
+**Status:** `resolved` (filed-and-fixed this commit). Filing this even
+though the spec didn't name a number for the foundation work; the
+foundation is load-bearing for 5.80 (category chip sync) and 5.82
+(mode selector), so future debugging needs a catalog entry to point at.
+
+**Surface:** Before this commit, `home → customize → drive` passed all
+shared state through `navigation.navigate('customize', { … })` JSON
+strings — fine for one-shot navigation payloads (route polyline, saved
+trip id) but awkward for state that needs to flow both directions
+(category chip sync between home and customize) or survive a screen
+unmount (active trip mode). Past instructions placed `useTripStore` as
+the convention but no file existed to hang `import` statements off.
+
+**Resolution:**
+- Added `zustand` `^5.0.2` to `package.json` dependencies. User needs to
+  `npm install` after pull.
+- Created `src/store/tripStore.ts` with Zustand + `persist` middleware
+  backed by `AsyncStorage` (already a project dep). State shape:
+  `activeTripMode: 'driving' | 'hiking'` (default `'driving'`),
+  `selectedCategories: string[]` (default `[]`). Actions:
+  `setActiveTripMode`, `setSelectedCategories`, `toggleCategory`,
+  `clearSelectedCategories`. AsyncStorage key `xroad.tripStore`,
+  `version: 1`. `partialize` includes only the two persisted fields —
+  setters / migrations are recreated on each app launch.
+- Trip-bound settings (`density`, `min_relevance`) stay on the `trips`
+  table per the user's "extend trips table; don't create
+  user_session_prefs" directive (drift 5.75 / 5.77 migration adds
+  those columns).
+
+**Test:** Toggle Drive/Hike on home → cold restart app → toggle remains
+selected. Select chips on home → navigate to customize → chips reflect
+selected → toggle one off on customize → return to home → that one is
+unselected.
+
+**Decided by:** User direction on foundation: "Store: Zustand …
+persist with AsyncStorage middleware … Don't add a parallel state
+library." Filed under the next-free integer (5.71) since the spec
+skipped 5.71 between my 5.70 and the spec's 5.72.
+
+---
+
 ### 5.70 — Home post-route `fetch:start` fires 4+ times per route selection
 
 **Status:** `noted` — note only; address later. Non-blocking.

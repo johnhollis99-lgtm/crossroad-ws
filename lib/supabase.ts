@@ -33,11 +33,23 @@ export interface POI {
   lat: number;
   lng: number;
   tags: string[];
+  /** 0–100 integer-point scale; surfaced by get_corridor_pois / get_nearby_pois after migration 20260512000002/03. */
+  significance_score?: number;
   dist_from_route_m?: number;
   distance_m?: number;
   /** Narration cache: "{mode}-{depth}-{voice_id}" → audio_url. Populated by server after generation. */
   narration_cache?: Record<string, string>;
   source_type?: string;
+}
+
+/** Curation-tunable RPC params (added 20260512000002 / 20260512000003). */
+export interface POIQueryOptions {
+  /** Drop POIs with significance_score < this value. Default 0 = no filter. */
+  minSignificance?: number;
+  /** 'significance_desc' for curation; 'distance_asc' (legacy default) for sequential order. */
+  sortMode?: 'significance_desc' | 'distance_asc';
+  /** Server-side LIMIT. Default unset = unbounded. */
+  resultLimit?: number;
 }
 
 export interface RoutePolylinePoint {
@@ -105,7 +117,8 @@ export async function getPOIsAlongRoute(
   polylinePoints: RoutePolylinePoint[],
   corridorMi: number,
   categories: string[] | null = null,
-  mode?: string
+  mode?: string,
+  options: POIQueryOptions = {},
 ): Promise<POI[]> {
   if (polylinePoints.length < 2) return [];
 
@@ -136,6 +149,9 @@ export async function getPOIsAlongRoute(
     corridor_width_miles: corridorMi,
     category_filter: categories,
     mode_filter: mode ?? null,
+    min_significance: options.minSignificance ?? 0,
+    sort_mode: options.sortMode ?? 'distance_asc',
+    result_limit: options.resultLimit ?? null,
   });
 
   if (__DEV__) {
@@ -160,7 +176,8 @@ export async function getNearbyPOIs(
   lng: number,
   radiusM: number = 800,
   categories: string[] | null = null,
-  mode?: string
+  mode?: string,
+  options: POIQueryOptions = {},
 ): Promise<POI[]> {
   const { data, error } = await supabase.rpc('get_nearby_pois', {
     user_lat: lat,
@@ -168,6 +185,9 @@ export async function getNearbyPOIs(
     radius_m: radiusM,
     categories,
     mode_filter: mode ?? null,
+    min_significance: options.minSignificance ?? 0,
+    sort_mode: options.sortMode ?? 'distance_asc',
+    result_limit: options.resultLimit ?? null,
   });
 
   if (error) {
@@ -238,6 +258,8 @@ export async function getAvailableNarrators(userId?: string): Promise<NarratorRe
 }
 
 // ── Save a trip session with narrator + filter configuration ─────────────
+export type TripDensity = 'sparse' | 'balanced' | 'dense';
+
 export async function saveTrip(params: {
   routeName?: string;
   origin?: string;
@@ -250,6 +272,10 @@ export async function saveTrip(params: {
   depth: string;
   categoryFilter: string[];
   poiDistanceM: number;
+  /** Curation density preference; columns added in 20260512000001. */
+  density?: TripDensity;
+  /** Minimum significance_score 0–100; columns added in 20260512000001. */
+  minRelevance?: number;
   status?: string;
   startedAt?: string;
 }): Promise<{ id: string } | null> {
@@ -268,6 +294,8 @@ export async function saveTrip(params: {
       depth:            params.depth,
       category_filter:  params.categoryFilter,
       poi_distance_m:   params.poiDistanceM,
+      density:          params.density ?? 'balanced',
+      min_relevance:    params.minRelevance ?? 0,
       status:           params.status ?? 'pending',
       started_at:       params.startedAt ?? null,
     })
