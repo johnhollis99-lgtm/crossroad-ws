@@ -151,6 +151,16 @@ function decodePolyline(encoded: string): { latitude: number; longitude: number 
 // react-native-maps' built-in Callout to render; the parent's overlay handles
 // the tooltip directly. tracksViewChanges flips true → false after 1s so the
 // SVG rasterizes once and stops re-snapshotting.
+//
+// No `cluster: false` here — these markers must be visible to
+// react-native-map-clustering so browse-mode (clusteringEnabled=true) can
+// aggregate them into bubbles at low zoom. The flag was carried over from
+// the e038f43 Callout-workaround era and obsoleted by the drift-5.94 rewrite
+// (callouts no longer go through react-native-maps' built-in Callout); leaving
+// it in suppressed cluster condensing across browse, curated, and extras
+// surfaces. Post-route surfaces don't cluster either way because
+// clusteringEnabled is false when browseMode is false, so removing the flag
+// is safe for all three call sites.
 function HomePoiX({
   poi, size, screenLabel, onPress,
 }: {
@@ -175,7 +185,6 @@ function HomePoiX({
         }
         onPress(poi, screenLabel);
       }}
-      {...({ cluster: false } as any)}
     >
       <PoiMarkerX size={size} />
     </Marker>
