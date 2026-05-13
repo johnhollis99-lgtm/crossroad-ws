@@ -669,9 +669,13 @@ export default function CustomizeScreen() {
       </View>
 
       {/* ── BOTTOM SHEET — scrollable ────────────────────────────────────── */}
+      {/* C3 / drift 5.69 (correct-file fix): explicit paddingBottom on the
+          scroll content so the Start trip CTA always clears the Android
+          system nav by ≥16px above insets.bottom. Replaces the prior
+          `<View height={40+insets.bottom}/>` sibling spacer pattern. */}
       <ScrollView
         style={s.sheet}
-        contentContainerStyle={s.sheetContent}
+        contentContainerStyle={[s.sheetContent, { paddingBottom: insets.bottom + 16 }]}
         showsVerticalScrollIndicator={false}
         keyboardShouldPersistTaps="handled"
       >
@@ -871,8 +875,8 @@ export default function CustomizeScreen() {
           <Text style={s.startBtnText}>{saving ? 'Starting…' : 'Start trip'}</Text>
         </TouchableOpacity>
 
-        {/* Absorbs Android system-nav inset so the CTA clears the back-gesture / 3-button bar. */}
-        <View style={{ height: 40 + insets.bottom }} />
+        {/* (Prior `<View height={40+insets.bottom}/>` removed — see C3 above:
+            contentContainerStyle.paddingBottom now carries the gesture-zone buffer.) */}
       </ScrollView>
 
       {/* CreateNarratorModal not rendered (drift 5.83) — kept in module

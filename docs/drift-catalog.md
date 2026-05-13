@@ -1246,6 +1246,131 @@ B8 reveals the extras at street-level zoom.
 
 ---
 
+### 5.69a (correction) — customize Start trip CTA — correct-file fix
+
+**Status:** `resolved` (filed-and-fixed this commit). Correction to the
+original 5.69 entry filed in `ee2f921`, which targeted home / drive /
+trail CTAs but did not include `app/customize.tsx`'s Start trip CTA.
+
+**Surface:** The customize.tsx Start trip CTA used a sibling spacer
+pattern `<View style={{ height: 40 + insets.bottom }} />` after the
+button to push it clear of the Android nav. On the user's hardware
+this still rendered the CTA inside the gesture zone — likely an
+interaction between the ScrollView's `contentContainerStyle.paddingBottom: 16`
+and the spacer that pushed the visible-button position higher than the
+spacer height. (Theory; the symptom is enough to justify the change
+without deep-diving the layout.)
+
+**Resolution:**
+- Removed the `<View height={40+insets.bottom}/>` spacer.
+- Applied `paddingBottom: insets.bottom + 16` directly to the ScrollView
+  `contentContainerStyle` so the buffer is unambiguously rendered below
+  the last child (the Start trip CTA).
+- The pattern now mirrors home's sheet (`paddingBottom: insets.bottom + 16`
+  on the Animated.View) and trail's btnBar (`paddingBottom: 16` inside
+  the SafeAreaView edges={'bottom'} wrapper).
+
+**Decided by:** Spec C3.
+
+---
+
+### 5.72 — Cluster bubble visual spec + delayed tracksViewChanges flip
+
+**Status:** `resolved` (filed-and-fixed this commit). Spec C1.
+
+**Surface:** Browse-mode clusters on home rendered with paper bg + ink
+rule border + accent count (legacy "cream paper" treatment). User spec
+calls for filled ink-red circles with paper outlines and a smaller
+diameter ramp. Also the prior renderCluster set `tracksViewChanges={false}`
+on the cluster Marker — same root cause as drift 5.66 (the View child
+hadn't rasterized before the bitmap snapshot fired), so clusters could
+render invisibly under certain re-render conditions.
+
+**Resolution:**
+- Cluster style updates: `clusterBubble.backgroundColor = theme.colors.accent`,
+  `borderColor = theme.colors.paper`. `clusterText.color = theme.colors.paper`
+  (paper / cream count text). Diameters dropped from 40/56/72 → 28/36/44,
+  steps at 50 and 500 (was 10 and 50).
+- New `ClusterMarker` module-level component holds per-instance
+  `tracking` state. Starts `true` so the bitmap snapshot fires after the
+  Fraunces-italic count rasterizes; flips `false` 1s post-mount via
+  setTimeout to bound re-snapshot cost when many clusters share the
+  viewport (state-wide zoom).
+- `renderCluster` now returns `<ClusterMarker … />` instead of inlining
+  the Marker — cleaner separation, hooks usage stays legal.
+
+**Decided by:** Spec C1.
+
+---
+
+### 5.73 — POI marker tap callouts on home
+
+**Status:** `resolved` (filed-and-fixed this commit). Spec C2 (home
+surfaces only; drive deferred — see deviation note below).
+
+**Surface:** Tapping a POI dot on home pre-route or post-route did
+nothing visible; user had no way to see which POI is at a coordinate
+without committing to the route + customize + drive flow.
+
+**Resolution:**
+- Added `<Callout tooltip>` as a child of every POI Marker on home:
+  browse-mode dots, post-route curated dots, viewport-reveal extras.
+- Callout content: `<View style={s.poiCallout}><Text style={s.poiCalloutName}>{poi.name}</Text></View>`.
+- Style: paper bg, Fraunces italic 16px name (`theme.textVariants.button`),
+  ink-red 1px bottom border, 8×12 padding, radius 6, max-width 240.
+- `tooltip` mode renders the View raw without the platform's native
+  callout bubble chrome.
+
+**Deviation (drive):** drive.tsx already has a custom `selectedPoi`
+overlay rendering POI name + category + tag chips. That overlay is
+richer than the spec'd Callout and lives outside the Marker tree. Adding
+`<Callout>` to drive's Markers would create dual UI on tap. Drive
+deferred to a follow-up that consolidates the two patterns — either
+replace the custom overlay with a richer Callout, or keep the overlay
+and skip Callout entirely. Hiking screens also deferred per the spec
+("Hiking screens later.").
+
+**Decided by:** Spec C2.
+
+---
+
+### 5.85 — Hiking duration uses flat 20 min/mi assumption
+
+**Status:** `noted` — fix deferred. Filed for visibility.
+
+**Surface:** When the user toggles to Hike on the home pill, the route
+record (from Google Directions or Mapbox) still carries `duration_minutes`
+computed as a driving duration. Customize's stats strip and the curation
+function both need a *hiking* duration to compute the global cap and the
+pace divisor.
+
+**Workaround in customize / drive:** when in hiking mode, both
+screens compute `effectiveDuration = distance_mi * 20 min/mi`. A
+hiker doing 5 mi at 20 min/mi = 100 min — reasonable for a
+moderate trail but ignores elevation, surface type, group size, and
+the user's pace history. The number is good enough for curation
+math (the global cap is coarse-grained) but bad for any UI that
+quotes a precise time.
+
+**Real fix:** add a `hike_duration_min` field on the route record,
+populated by:
+- Google Directions doesn't return walking time for trail polylines
+  outside city sidewalks. Need a separate `mode=walking` query for
+  short urban segments, or a server-side estimator for backcountry.
+- Better: compute from the elevation profile (already fetched by the
+  Google Elevation API integration sketched in CLAUDE.md's "Vehicle
+  routing roadmap" section) using Naismith's rule (1 hr per 3 mi flat
+  + 1 hr per 600 m ascent).
+
+**Out of scope** for the curation arc; tracked here so the 20 min/mi
+assumption doesn't get forgotten when the hiking flow gets its full
+v1 treatment.
+
+**Decided by:** Surfaced during commit 3 (curation). Flagged here
+rather than left as an unattributed hardcoded constant.
+
+---
+
 ### 5.83 — Roll-the-dice and Create-your-own narrator CTAs removed from customize
 
 **Status:** `resolved` (filed-and-fixed this commit).

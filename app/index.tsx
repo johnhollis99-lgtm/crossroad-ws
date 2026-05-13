@@ -25,7 +25,7 @@ import {
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
-import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from 'react-native-maps';
+import MapView, { Callout, Marker, Polyline, PROVIDER_GOOGLE } from 'react-native-maps';
 import ClusteredMapView from 'react-native-map-clustering';
 import * as Location from 'expo-location';
 import { useNavigation } from '@react-navigation/native';
@@ -130,6 +130,42 @@ function decodePolyline(encoded: string): { latitude: number; longitude: number 
     pts.push({ latitude: lat / 1e5, longitude: lng / 1e5 });
   }
   return pts;
+}
+
+// ── Cluster marker (drift 5.72 / C1) ─────────────────────────────────────────
+// Renders a single cluster bubble at a coordinate. tracksViewChanges begins
+// true so the native bitmap snapshot picks up the View child after
+// rasterization (drift 5.66 root cause); flips false 1s post-mount to bound
+// re-snapshot cost when many clusters are on screen. Per-instance state.
+function ClusterMarker({
+  coordinate, count, onPress, styles,
+}: {
+  coordinate: { latitude: number; longitude: number };
+  count: number;
+  onPress: () => void;
+  styles: any;
+}) {
+  const [tracking, setTracking] = useState(true);
+  useEffect(() => {
+    const t = setTimeout(() => setTracking(false), 1000);
+    return () => clearTimeout(t);
+  }, []);
+  const sizeStyle =
+    count < 50  ? styles.clusterBubble28 :
+    count < 500 ? styles.clusterBubble36 :
+                  styles.clusterBubble44;
+  return (
+    <Marker
+      coordinate={coordinate}
+      onPress={onPress}
+      anchor={{ x: 0.5, y: 0.5 }}
+      tracksViewChanges={tracking}
+    >
+      <View style={[styles.clusterBubble, sizeStyle]}>
+        <Text style={styles.clusterText}>{count}</Text>
+      </View>
+    </Marker>
+  );
 }
 
 function formatDuration(min: number): string {
@@ -656,27 +692,24 @@ export default function MapScreen() {
     if (destination) fetchRoute(destination, destCoords ?? undefined, updated);
   };
 
-  // Cluster bubble — Field Notes paper bg, ink-rule border, accent count.
-  // Tapping zooms in so the cluster breaks apart. Sizes step at 10 and 50.
+  // Cluster bubble (drift 5.72 / C1) — ink-red accent fill, paper outline,
+  // Fraunces italic count. Sizes step at 50 and 500.
+  //
+  // tracksViewChanges starts true so the bitmap snapshot captures after
+  // the View child rasterizes (same root cause as the per-marker 5.66
+  // invisibility), then flips false 1s post-mount to drop re-snapshot
+  // cost at scale. Per-cluster state because the flip is per-instance.
   const renderCluster = useCallback((cluster: any) => {
     const { id, geometry, onPress, properties } = cluster;
     const count: number = properties?.point_count ?? 0;
-    const sizeStyle =
-      count < 10 ? s.clusterBubble40 :
-      count < 50 ? s.clusterBubble56 :
-                   s.clusterBubble72;
     return (
-      <Marker
+      <ClusterMarker
         key={`cluster-${id}`}
         coordinate={{ longitude: geometry.coordinates[0], latitude: geometry.coordinates[1] }}
+        count={count}
         onPress={onPress}
-        anchor={{ x: 0.5, y: 0.5 }}
-        tracksViewChanges={false}
-      >
-        <View style={[s.clusterBubble, sizeStyle]}>
-          <Text style={s.clusterText}>{count}</Text>
-        </View>
-      </Marker>
+        styles={s}
+      />
     );
   }, [s]);
 
@@ -773,6 +806,20 @@ export default function MapScreen() {
     poiDot:        { width: 10, height: 10, borderRadius: 5, backgroundColor: theme.colors.accent,  borderWidth: 1.5, borderColor: theme.colors.paper },
     // Viewport-reveal extras (B8 / drift 5.79) — dimmed, smaller, paper outline.
     poiDotExtra:   { width: 8,  height: 8,  borderRadius: 4, backgroundColor: theme.colors.accent,  borderWidth: 1,   borderColor: theme.colors.paper, opacity: 0.5 },
+
+    // POI marker callout (drift 5.73 / C2) — paper bg, Fraunces italic 16px name,
+    // 1px ink-red bottom border, 8/12 padding, radius 6.
+    poiCallout: {
+      backgroundColor: theme.colors.paper,
+      paddingVertical: 8, paddingHorizontal: 12,
+      borderRadius: 6,
+      borderBottomWidth: 1, borderBottomColor: theme.colors.accent,
+      maxWidth: 240,
+    },
+    poiCalloutName: {
+      ...theme.textVariants.button, // Fraunces serifItalic 500 16px
+      color: theme.colors.ink,
+    },
     stopDot:       { width: 10, height: 10, borderRadius: 5, backgroundColor: theme.colors.accent2, borderWidth: 1.5, borderColor: theme.colors.paper },
     stopDotActive: { width: 14, height: 14, borderRadius: 7, backgroundColor: theme.colors.accent2, borderWidth: 2.5, borderColor: theme.colors.paper },
 
@@ -1108,17 +1155,18 @@ export default function MapScreen() {
       borderWidth: 1, borderColor: theme.colors.cardEdge,
       alignItems: 'center', justifyContent: 'center',
     },
-    // Cluster bubble — cream paper bg, ink rule border, accent count.
-    // 'button' variant = Fraunces serifItalic 500 16px — closest match to spec.
+    // Cluster bubble (drift 5.72 / C1) — ink-red accent fill, paper outline,
+    // Fraunces italic count in paper. Diameters step at 50 and 500.
+    // 'button' variant = Fraunces serifItalic 500 16px.
     clusterBubble: {
       alignItems: 'center', justifyContent: 'center',
-      backgroundColor: theme.colors.paper,
-      borderWidth: 1, borderColor: theme.colors.rule,
+      backgroundColor: theme.colors.accent,
+      borderWidth: 1, borderColor: theme.colors.paper,
     },
-    clusterBubble40: { width: 40, height: 40, borderRadius: 20 },
-    clusterBubble56: { width: 56, height: 56, borderRadius: 28 },
-    clusterBubble72: { width: 72, height: 72, borderRadius: 36 },
-    clusterText:     { ...theme.textVariants.button, color: theme.colors.accent },
+    clusterBubble28: { width: 28, height: 28, borderRadius: 14 },
+    clusterBubble36: { width: 36, height: 36, borderRadius: 18 },
+    clusterBubble44: { width: 44, height: 44, borderRadius: 22 },
+    clusterText:     { ...theme.textVariants.button, color: theme.colors.paper },
 
     chipRowWrap: { position: 'relative' },
     chipFadeLeft:  { position: 'absolute', left: 0,  top: 0, bottom: 0, width: 20 },
@@ -1210,7 +1258,10 @@ export default function MapScreen() {
             an empty bitmap when tracksViewChanges={false} fires before the View
             child has rendered, leaving the marker invisible. Default true keeps
             the dots visible at the (acceptable) cost of re-snapshots on prop
-            changes. See drift catalog 5.66 for the diagnosis. */}
+            changes. See drift catalog 5.66 for the diagnosis.
+            Callout child (drift 5.73 / C2): paper bg, Fraunces italic 16px name,
+            ink-red 1px bottom border. tooltip=true so the spec styling renders
+            instead of the platform's native callout chrome. */}
         {browseMode && browsePOIs.map(poi => (
           <Marker
             key={`browse-${poi.id}`}
@@ -1218,6 +1269,11 @@ export default function MapScreen() {
             anchor={{ x: 0.5, y: 0.5 }}
           >
             <View style={s.poiDot} />
+            <Callout tooltip>
+              <View style={s.poiCallout}>
+                <Text style={s.poiCalloutName}>{poi.name}</Text>
+              </View>
+            </Callout>
           </Marker>
         ))}
 
@@ -1232,6 +1288,11 @@ export default function MapScreen() {
             {...({ cluster: false } as any)}
           >
             <View style={s.poiDot} />
+            <Callout tooltip>
+              <View style={s.poiCallout}>
+                <Text style={s.poiCalloutName}>{poi.name}</Text>
+              </View>
+            </Callout>
           </Marker>
         ))}
 
@@ -1246,6 +1307,11 @@ export default function MapScreen() {
             {...({ cluster: false } as any)}
           >
             <View style={s.poiDotExtra} />
+            <Callout tooltip>
+              <View style={s.poiCallout}>
+                <Text style={s.poiCalloutName}>{poi.name}</Text>
+              </View>
+            </Callout>
           </Marker>
         ))}
 
