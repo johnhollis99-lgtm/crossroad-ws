@@ -1334,6 +1334,54 @@ and skip Callout entirely. Hiking screens also deferred per the spec
 
 ---
 
+### 5.87 — Home bottom sheet snap regression after mode-pill landed
+
+**Status:** `resolved` (filed-and-fixed this commit).
+
+**Surface:** After `b62bf22` added the Drive/Hike mode pill on home (drift
+5.82), the bottom sheet's `expanded` snap point covered the search pill
+and chips: the sheet's drag handle sat behind the search bar, and the
+user could not drag the sheet back to peek. SNAP_PTS was a module-level
+constant (`expanded: Math.round(SCREEN_H * 0.85)`) computed before the
+mode pill increased the top header's real height. The 15% from-top
+clearance the constant assumed was no longer enough.
+
+**Resolution:**
+- Replaced the module-level `SNAP_PTS` constant with a `useMemo`'d
+  `snapPoints: SnapPoints` inside the screen, depending on a new
+  `headerHeight` state.
+- `headerHeight` is measured via `onLayout` on the existing top
+  `SafeAreaView` wrapper (which encloses dev nav row + logo + mode pill +
+  search pill + chip row). 220px fallback before the first layout pass
+  so the initial paint has a sane sheet height. ≥1px change triggers a
+  recompute; sub-pixel jitter is ignored.
+- `expanded = max(SCREEN_H * 0.40, SCREEN_H - headerHeight - 16)` — the
+  `* 0.40` floor guarantees a usable expanded view even on hypothetical
+  taller-header layouts; the `headerHeight + 16` term is the real
+  constraint that surfaces the search pill and drag handle.
+- `default = min(SCREEN_H * 0.38, expanded)` so the default snap can
+  never exceed the expanded snap (defensive — would freeze the sheet).
+- `peek` unchanged at `SCREEN_H * 0.18`.
+- `useSheetSnap` already reads `ptsRef.current = points` every render, so
+  dynamic snap points propagate to the PanResponder on next interaction
+  without reinitializing the hook (verified by reading
+  `hooks/useSheetSnap.ts`).
+- Module-level `SNAP_PTS` constant retained: still used by the
+  `fitToCoordinates` map-fit hint at line ~563 (`bottom: SNAP_PTS.default
+  + 40`) as a coarse "leave room for the sheet" approximation. That's a
+  one-time pad value not worth threading dynamic state through.
+
+**Test:** Mount home → expanded snap leaves search pill, mode pill, and
+chip row fully visible. Drag handle at the top of the sheet sits ≥16px
+below the chip row's bottom edge on Android + iOS regardless of safe
+area top. Mode pill takes up its real ~40px of header without
+overflowing the snap point.
+
+**Decided by:** User-filed hardware regression after `b62bf22`. The
+mode-pill's added height wasn't reflected in the SNAP_PTS constant.
+
+---
+
 ### 5.86 — Migration 20260512000003 used a SELECT alias inside an ORDER BY CASE expression
 
 **Status:** `resolved` (filed-and-fixed this commit).

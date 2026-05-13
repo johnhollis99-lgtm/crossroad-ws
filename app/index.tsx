@@ -39,7 +39,7 @@ import {
 import type { POI, RecentLocation } from '../lib/supabase';
 import { useTheme } from '../src/design/theme';
 import { computeBadges, computeRouteTags } from '../lib/routeBadges';
-import { useSheetSnap } from '../hooks/useSheetSnap';
+import { useSheetSnap, type SnapPoints } from '../hooks/useSheetSnap';
 import { MapStyleId, MAP_STYLES, loadMapStyle, saveMapStyle } from '../lib/mapStyle';
 import { MapStylePicker } from '../components/MapStylePicker';
 import { XRoadLogo } from '../components/XRoadLogo';
@@ -253,8 +253,28 @@ export default function MapScreen() {
 
   const { width: winW }                         = useWindowDimensions();
   const isDesktop                               = Platform.OS === 'web' && winW > DESKTOP_BP;
+
+  // Dynamic snap points (drift 5.87) — `expanded` must leave room for the
+  // top header (safe area + mode pill + logo + search pill + chip row + buffer),
+  // otherwise the sheet's drag handle sits behind the search pill on Android
+  // and the user can't drag the sheet back down. We measure the SafeAreaView
+  // wrapper's height on layout and recompute snap points reactively. Fallback
+  // estimate (220) is used before layout fires so the first paint is sane.
+  const HEADER_BUFFER_PX = 16;
+  const [headerHeight, setHeaderHeight] = useState<number>(220);
+  const snapPoints = useMemo<SnapPoints>(() => {
+    const maxExpanded = Math.max(
+      Math.round(SCREEN_H * 0.40),
+      SCREEN_H - headerHeight - HEADER_BUFFER_PX,
+    );
+    return {
+      peek:     Math.round(SCREEN_H * 0.18),
+      default:  Math.min(Math.round(SCREEN_H * 0.38), maxExpanded),
+      expanded: maxExpanded,
+    };
+  }, [headerHeight]);
   const { anim: sheetAnim, panHandlers: sheetPan, snapTo: snapSheet, level: snapLevel } =
-    useSheetSnap(SNAP_PTS, 'peek');
+    useSheetSnap(snapPoints, 'peek');
 
   const [mapStyleId, setMapStyleId] = useState<MapStyleId>('dark');
 
@@ -1460,7 +1480,15 @@ export default function MapScreen() {
 
       {/* ── SEARCH PILL + CHIPS — mobile ────────────────────────────────── */}
       {!isDesktop && (
-        <SafeAreaView style={s.topSafe} pointerEvents="box-none">
+        <SafeAreaView
+          style={s.topSafe}
+          pointerEvents="box-none"
+          onLayout={e => {
+            const h = e.nativeEvent.layout.height;
+            // Avoid spurious re-renders on sub-pixel layout changes.
+            if (Math.abs(h - headerHeight) > 1) setHeaderHeight(h);
+          }}
+        >
           {__DEV__ && (
             <View style={s.devNavRow}>
               <TouchableOpacity
