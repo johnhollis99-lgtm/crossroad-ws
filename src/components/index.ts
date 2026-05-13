@@ -26,6 +26,9 @@ export type { GlassPillProps } from './GlassPill';
 export { Kicker }             from './Kicker';
 export type { KickerProps }   from './Kicker';
 
+export { ModePillRow }        from './ModePillRow';
+export type { ModePillRowProps, ModePillValue } from './ModePillRow';
+
 export { NarrationCard }      from './NarrationCard';
 export type { NarrationCardProps } from './NarrationCard';
 

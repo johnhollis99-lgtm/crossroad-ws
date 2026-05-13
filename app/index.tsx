@@ -42,7 +42,7 @@ import { computeBadges, computeRouteTags } from '../lib/routeBadges';
 import { useSheetSnap, type SnapPoints } from '../hooks/useSheetSnap';
 import { MapStyleId, MAP_STYLES, loadMapStyle, saveMapStyle } from '../lib/mapStyle';
 import { MapStylePicker } from '../components/MapStylePicker';
-import { Wordmark } from '../src/components';
+import { ModePillRow, Wordmark } from '../src/components';
 import { useTripStore } from '../src/store/tripStore';
 import { curateRoutePOIs } from '../src/lib/curation/curateRoutePOIs';
 
@@ -973,27 +973,9 @@ export default function MapScreen() {
     topSafe:  { position: 'absolute', top: 0, left: 0, right: 0 },
     logoWrap: { alignItems: 'center', paddingVertical: 4 },
 
-    // Drive | Hike mode pill (drift 5.82) — paper bg, ink-red active fill.
-    modePillRow: { alignItems: 'center', paddingTop: 6, paddingBottom: 2 },
-    modePill: {
-      flexDirection: 'row',
-      height: 32, borderRadius: 16,
-      backgroundColor: theme.colors.paper,
-      borderWidth: 1, borderColor: theme.colors.rule,
-      overflow: 'hidden',
-    },
-    modePillSeg: {
-      paddingHorizontal: 16, height: '100%',
-      alignItems: 'center', justifyContent: 'center',
-      minWidth: 72,
-    },
-    modePillSegActive: { backgroundColor: theme.colors.accent },
-    modePillDivider:   { width: 1, backgroundColor: theme.colors.rule },
-    modePillText: {
-      ...theme.textVariants.metaSmall,
-      color: theme.colors.ink, letterSpacing: 1,
-    },
-    modePillTextActive: { color: theme.colors.paper },
+    // Drive | Hike-or-Walk row outer wrapper (drift 5.93). Vertical padding
+    // only; horizontal padding + pill geometry live inside ModePillRow itself.
+    modePillRow: { paddingTop: 6, paddingBottom: 2 },
     devNavRow: {
       position: 'absolute', top: 4, right: 20,
       flexDirection: 'row', gap: 8, zIndex: 100,
@@ -1595,30 +1577,16 @@ export default function MapScreen() {
             <Wordmark size="m" background="pill" />
           </View>
 
-          {/* Drive | Hike mode selector (drift 5.82). Persists via tripStore. */}
+          {/* Drive | Hike-or-Walk mode selector (drift 5.93). Persists via tripStore.
+              Tapping Hike/Walk navigates to /hiking — no separate /walk route. */}
           <View style={s.modePillRow}>
-            <View style={s.modePill}>
-              <TouchableOpacity
-                style={[s.modePillSeg, activeTripMode === 'driving' && s.modePillSegActive]}
-                onPress={() => setActiveTripMode('driving')}
-                activeOpacity={0.8}
-                hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
-              >
-                <Text style={[s.modePillText, activeTripMode === 'driving' && s.modePillTextActive]}>DRIVE</Text>
-              </TouchableOpacity>
-              <View style={s.modePillDivider} />
-              <TouchableOpacity
-                style={[s.modePillSeg, activeTripMode === 'hiking' && s.modePillSegActive]}
-                onPress={() => {
-                  setActiveTripMode('hiking');
-                  navigation.navigate('hiking');
-                }}
-                activeOpacity={0.8}
-                hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
-              >
-                <Text style={[s.modePillText, activeTripMode === 'hiking' && s.modePillTextActive]}>HIKE</Text>
-              </TouchableOpacity>
-            </View>
+            <ModePillRow
+              value={activeTripMode}
+              onChange={(next) => {
+                setActiveTripMode(next);
+                if (next === 'hiking') navigation.navigate('hiking');
+              }}
+            />
           </View>
 
           <TouchableOpacity
