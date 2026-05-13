@@ -998,9 +998,30 @@ const s = StyleSheet.create({
   userLocInner: { width: 12, height: 12, borderRadius: 6, backgroundColor: C.ACCENT_TEXT, borderWidth: 2, borderColor: C.BG_BASE },
 
   // POI markers
-  poiDot:       { width: 10, height: 10, borderRadius: 5, backgroundColor: `${C.WARNING_BRIGHT}B3`, borderWidth: 1.5, borderColor: C.BG_BASE },
-  poiActive:    { width: 22, height: 22, borderRadius: 11, backgroundColor: `${C.WARNING_BRIGHT}40`, alignItems: 'center', justifyContent: 'center' },
-  poiActiveDot: { width: 12, height: 12, borderRadius: 6, backgroundColor: C.WARNING_BRIGHT, borderWidth: 2, borderColor: C.BG_BASE },
+  // POI dot (drift 5.88) — accessibility bump: 10→18 diameter, 1.5px outline
+  // bumped to match home, shadow for depth. C.WARNING_BRIGHT is drive's
+  // current ink-red equivalent — drive screen hasn't been migrated to Field
+  // Notes tokens (legacy C palette). When drive migrates, this will swap to
+  // theme.colors.accent + theme.colors.paper to match home exactly.
+  poiDot: {
+    width: 18, height: 18, borderRadius: 9,
+    backgroundColor: `${C.WARNING_BRIGHT}E6`,
+    borderWidth: 1.5, borderColor: C.BG_BASE,
+    ...Platform.select({
+      ios: {
+        shadowColor:  '#000',
+        shadowOpacity: 0.25,
+        shadowRadius:  2,
+        shadowOffset:  { width: 0, height: 1 },
+      },
+      android: { elevation: 3 },
+      default: {},
+    }),
+  },
+  // Active = the currently-narrating POI. Scaled proportionally to keep
+  // the "halo + inner dot" relationship readable at the new outer size.
+  poiActive:    { width: 32, height: 32, borderRadius: 16, backgroundColor: `${C.WARNING_BRIGHT}40`, alignItems: 'center', justifyContent: 'center' },
+  poiActiveDot: { width: 18, height: 18, borderRadius: 9, backgroundColor: C.WARNING_BRIGHT, borderWidth: 2, borderColor: C.BG_BASE },
 
   // Overlays
   overlayTL: {

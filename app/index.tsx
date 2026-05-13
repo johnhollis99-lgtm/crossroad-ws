@@ -199,9 +199,9 @@ function ClusterMarker({
     return () => clearTimeout(t);
   }, []);
   const sizeStyle =
-    count < 50  ? styles.clusterBubble28 :
-    count < 500 ? styles.clusterBubble36 :
-                  styles.clusterBubble44;
+    count < 50  ? styles.clusterBubble36 :
+    count < 500 ? styles.clusterBubble44 :
+                  styles.clusterBubble52;
   return (
     <Marker
       coordinate={coordinate}
@@ -871,9 +871,32 @@ export default function MapScreen() {
       width: 11, height: 11, borderRadius: 6,
       backgroundColor: theme.colors.accent2, borderWidth: 2, borderColor: theme.colors.paper,
     },
-    poiDot:        { width: 10, height: 10, borderRadius: 5, backgroundColor: theme.colors.accent,  borderWidth: 1.5, borderColor: theme.colors.paper },
-    // Viewport-reveal extras (B8 / drift 5.79) — dimmed, smaller, paper outline.
-    poiDotExtra:   { width: 8,  height: 8,  borderRadius: 4, backgroundColor: theme.colors.accent,  borderWidth: 1,   borderColor: theme.colors.paper, opacity: 0.5 },
+    // POI dot (drift 5.88) — accessibility bump: 10→18 diameter, 1.5px
+    // paper-cream outline kept, shadow added for depth. iOS uses shadow*
+    // props; Android uses elevation.
+    poiDot: {
+      width: 18, height: 18, borderRadius: 9,
+      backgroundColor: theme.colors.accent,
+      borderWidth: 1.5, borderColor: theme.colors.paper,
+      ...Platform.select({
+        ios: {
+          shadowColor:  '#000',
+          shadowOpacity: 0.25,
+          shadowRadius:  2,
+          shadowOffset:  { width: 0, height: 1 },
+        },
+        android: { elevation: 3 },
+        default: {},
+      }),
+    },
+    // Viewport-reveal extras (B8 / drift 5.79; bumped 5.88) — 8→12 diameter,
+    // 0.5→0.55 opacity, paper outline matches curated.
+    poiDotExtra: {
+      width: 12, height: 12, borderRadius: 6,
+      backgroundColor: theme.colors.accent,
+      borderWidth: 1.5, borderColor: theme.colors.paper,
+      opacity: 0.55,
+    },
 
     // POI marker callout (drift 5.73 / C2) — paper bg, Fraunces italic 16px name,
     // 1px ink-red bottom border, 8/12 padding, radius 6.
@@ -1223,18 +1246,19 @@ export default function MapScreen() {
       borderWidth: 1, borderColor: theme.colors.cardEdge,
       alignItems: 'center', justifyContent: 'center',
     },
-    // Cluster bubble (drift 5.72 / C1) — ink-red accent fill, paper outline,
-    // Fraunces italic count in paper. Diameters step at 50 and 500.
-    // 'button' variant = Fraunces serifItalic 500 16px.
+    // Cluster bubble (drift 5.72 / C1, bumped 5.88) — ink-red accent fill,
+    // paper outline, Fraunces italic 600 count in paper. Diameters bumped
+    // for accessibility: 28→36, 36→44, 44→52. Steps at 50 and 500 unchanged.
+    // 'buttonStrong' = Fraunces serifItalic 600 16px (button variant is 500).
     clusterBubble: {
       alignItems: 'center', justifyContent: 'center',
       backgroundColor: theme.colors.accent,
       borderWidth: 1, borderColor: theme.colors.paper,
     },
-    clusterBubble28: { width: 28, height: 28, borderRadius: 14 },
     clusterBubble36: { width: 36, height: 36, borderRadius: 18 },
     clusterBubble44: { width: 44, height: 44, borderRadius: 22 },
-    clusterText:     { ...theme.textVariants.button, color: theme.colors.paper },
+    clusterBubble52: { width: 52, height: 52, borderRadius: 26 },
+    clusterText:     { ...theme.textVariants.buttonStrong, color: theme.colors.paper },
 
     chipRowWrap: { position: 'relative' },
     chipFadeLeft:  { position: 'absolute', left: 0,  top: 0, bottom: 0, width: 20 },

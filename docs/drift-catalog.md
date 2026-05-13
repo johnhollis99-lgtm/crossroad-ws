@@ -1359,6 +1359,57 @@ stays unchanged. The fix is purely tap-flow.
 
 ---
 
+### 5.88 — POI marker + cluster bubble accessibility size bump
+
+**Status:** `resolved` (filed-and-fixed this commit).
+
+**Surface:** User accessibility request — POI markers across all maps
+read too small and faint, especially for low-vision users. The 10px
+curated dot + 8px viewport-extra dot + 28/36/44 cluster bubble ramp
+shipped via drifts 5.66, 5.79, and 5.72 respectively, and were sized
+for visual density rather than touch / read accessibility.
+
+**Resolution (home — `app/index.tsx`):**
+- Curated POI dot: 10 → 18 diameter. Same `theme.colors.accent` fill,
+  `theme.colors.paper` 1.5px outline (preserved). Added drop shadow:
+  iOS `shadowOpacity 0.25 / radius 2 / offset (0,1)`, Android `elevation 3`.
+  The shadow gives the dots depth so they pop against either light or
+  dark map tiles.
+- Viewport-reveal extras: 8 → 12 diameter, 0.5 → 0.55 opacity. Outline
+  bumped to 1.5px to match curated (was 1px). Still no shadow on extras
+  — keeps the curated-vs-extras visual hierarchy.
+- Cluster bubble: 28/36/44 → 36/44/52 diameter ramp (steps at 50 and
+  500 unchanged). Count text switched from `theme.textVariants.button`
+  (Fraunces serifItalic 500) to `theme.textVariants.buttonStrong`
+  (Fraunces serifItalic 600) for the bolder weight the user spec'd.
+- `ClusterMarker`'s size-style lookup updated to point at the renamed
+  `clusterBubble36/44/52` entries.
+
+**Resolution (drive — `app/drive.tsx`):**
+- Corridor POI dot: 10 → 18 diameter, 1.5px outline preserved, same
+  shadow recipe as home. Fill stays at `${C.WARNING_BRIGHT}E6` (alpha
+  bumped from B3=70% to E6=90% to read better at the larger size).
+  Drive uses the legacy `C.*` palette since the screen hasn't yet been
+  migrated to Field Notes tokens — when that lands the fill will swap
+  to `theme.colors.accent`. Documented inline.
+- Active (currently-narrating) POI scaled proportionally to keep the
+  "halo + inner dot" readability: 22 → 32 outer, 12 → 18 inner. Halo
+  alpha stays at 40 (25%).
+
+**Out of scope (deferred to Stage 2):** hiking / trail screens. Their
+maps haven't been touched yet and have their own palette layer; the
+size bump can ride along when those screens get their pass.
+
+**Shadow note:** `Platform.select({ ios: { shadow* }, android: {
+elevation } })` is the canonical RN cross-platform shadow pattern.
+react-native-maps' Marker treats the bitmap-rasterized child as the
+visual surface, so the shadow is captured in the bitmap on first
+snapshot — no re-render cost at scale once the marker has settled.
+
+**Decided by:** User accessibility request.
+
+---
+
 ### 5.87 — Home bottom sheet snap regression after mode-pill landed
 
 **Status:** `resolved` (filed-and-fixed this commit).
