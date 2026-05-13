@@ -48,10 +48,8 @@ import {
   ModePillRow,
   PoiCallout,
   PoiMarkerX,
-  usePoiMarkerTracking,
   Wordmark,
 } from '../src/components';
-import type { PoiMarkerXSize } from '../src/components';
 import { useTripStore } from '../src/store/tripStore';
 import { curateRoutePOIs } from '../src/lib/curation/curateRoutePOIs';
 
@@ -141,55 +139,20 @@ function decodePolyline(encoded: string): { latitude: number; longitude: number 
   return pts;
 }
 
-// ── POI marker (drift 5.94 + 5.97) ───────────────────────────────────────────
-// Renders an X-shaped POI marker via the shared PoiMarkerX primitive, wrapped
-// in a react-native-maps Marker. onPress routes through the parent screen so
-// the parent can resolve screen coordinates via mapRef.pointForCoordinate and
-// drive the floating PoiCallout overlay (which lives as a sibling of MapView).
+// ── POI marker integration with react-native-map-clustering ──────────────────
+// The clusterer's `isMarker()` helper (node_modules/react-native-map-clustering/
+// lib/helpers.js:6) tests `child.props.coordinate` on the direct JSX child of
+// <ClusteredMapView>. Function-component wrappers around <Marker> hide that
+// prop from React.Children.toArray and the clusterer silently drops them.
 //
-// The e038f43 ref + showCallout() workaround is gone — we no longer ask
-// react-native-maps' built-in Callout to render; the parent's overlay handles
-// the tooltip directly. tracksViewChanges flips true → false after 1s so the
-// SVG rasterizes once and stops re-snapshotting.
-//
-// No `cluster: false` here — these markers must be visible to
-// react-native-map-clustering so browse-mode (clusteringEnabled=true) can
-// aggregate them into bubbles at low zoom. The flag was carried over from
-// the e038f43 Callout-workaround era and obsoleted by the drift-5.94 rewrite
-// (callouts no longer go through react-native-maps' built-in Callout); leaving
-// it in suppressed cluster condensing across browse, curated, and extras
-// surfaces. Post-route surfaces don't cluster either way because
-// clusteringEnabled is false when browseMode is false, so removing the flag
-// is safe for all three call sites.
-function HomePoiX({
-  poi, size, screenLabel, onPress,
-}: {
-  poi: POI;
-  size: PoiMarkerXSize;
-  screenLabel: 'browse' | 'curated' | 'extra';
-  onPress: (poi: POI, screenLabel: 'browse' | 'curated' | 'extra') => void;
-}) {
-  const tracking = usePoiMarkerTracking();
-  return (
-    <Marker
-      coordinate={{ latitude: poi.lat, longitude: poi.lng }}
-      anchor={{ x: 0.5, y: 0.5 }}
-      tappable
-      tracksViewChanges={tracking}
-      onPress={(e) => {
-        // Halt event so MapView.onPress (which dismisses the overlay) does
-        // NOT also fire on the same gesture.
-        e?.stopPropagation?.();
-        if (__DEV__) {
-          console.info('[home] marker:tap', { poi: poi.name, id: poi.id, screen: screenLabel });
-        }
-        onPress(poi, screenLabel);
-      }}
-    >
-      <PoiMarkerX size={size} />
-    </Marker>
-  );
-}
+// So POI markers below are inlined as <Marker> elements directly under
+// <ClusteredMapView>, with <PoiMarkerX> as the visual child. A single shared
+// `initialTracking` state in MapScreen drives the tracksViewChanges flip for
+// every POI marker at once (start true so the native bitmap snapshot picks
+// up the SVG child after rasterization, flip false at 1s to bound
+// re-snapshot cost when many markers are on screen). One timer for all
+// markers is simpler and sufficient — the clusterer needs the first frame
+// to register positions, not per-marker isolation.
 
 // ── Cluster marker (drift 5.72 / C1) ─────────────────────────────────────────
 // Renders a single cluster bubble at a coordinate. tracksViewChanges begins
@@ -304,6 +267,18 @@ export default function MapScreen() {
   // refreshed inside onRegionChangeComplete so the pill stays glued to the
   // pin as the user pans / zooms.
   const [pendingPinScreenPos, setPendingPinScreenPos] = useState<{ x: number; y: number } | null>(null);
+
+  // Shared tracksViewChanges flag for inline POI markers — start true so the
+  // first render captures the SVG bitmap, flip false at 1s to stop the
+  // native re-snapshot churn. One state for all markers in this screen;
+  // the clusterer's first-pass registration only needs the initial frame
+  // to be view-tracking-true (drift 5.94 follow-up — see the
+  // PoiMarkerX-integration comment block at the top of the file).
+  const [initialTracking, setInitialTracking] = useState(true);
+  useEffect(() => {
+    const t = setTimeout(() => setInitialTracking(false), 1000);
+    return () => clearTimeout(t);
+  }, []);
 
   // Tapped existing stop marker — shows remove callout
   const [pressedStopIdx, setPressedStopIdx] = useState<number | null>(null);
@@ -1424,43 +1399,69 @@ export default function MapScreen() {
           </Marker>
         )}
 
-        {/* Browse / curated / extras POI markers all render an X-shaped
-            marker (drift 5.94) via HomePoiX. Taps surface the floating
-            PoiCallout overlay (drift 5.97) rendered as a sibling of the
-            MapView further down — the built-in react-native-maps Callout
-            is no longer used here (react-native-map-clustering swallows it). */}
+        {/* Browse / curated / extras POI markers are inlined as <Marker>
+            elements (drift 5.94) so react-native-map-clustering's
+            isMarker(child) helper — which inspects `child.props.coordinate`
+            on the direct JSX child — sees them as cluster-eligible. A
+            function-component wrapper would hide the coordinate prop and
+            the clusterer would silently drop the marker. Taps route to
+            handleMarkerPress, which drives the sibling-of-MapView
+            PoiCallout overlay (drift 5.97). */}
         {browseMode && browsePOIs.map(poi => (
-          <HomePoiX
+          <Marker
             key={`browse-${poi.id}`}
-            poi={poi}
-            size="curated"
-            screenLabel="browse"
-            onPress={handleMarkerPress}
-          />
+            coordinate={{ latitude: poi.lat, longitude: poi.lng }}
+            anchor={{ x: 0.5, y: 0.5 }}
+            tappable
+            tracksViewChanges={initialTracking}
+            onPress={(e) => {
+              // Halt so MapView.onPress (which would dismiss the overlay)
+              // doesn't also fire on the same gesture.
+              e?.stopPropagation?.();
+              if (__DEV__) console.info('[home] marker:tap', { poi: poi.name, id: poi.id, screen: 'browse' });
+              handleMarkerPress(poi, 'browse');
+            }}
+          >
+            <PoiMarkerX size="curated" />
+          </Marker>
         ))}
 
         {/* Post-route curated POI dots (B7 / drift 5.74). Cap-by-curation
             upstream — no slice here. */}
         {!browseMode && homeCuration.curated.map(poi => (
-          <HomePoiX
+          <Marker
             key={poi.id}
-            poi={poi}
-            size="curated"
-            screenLabel="curated"
-            onPress={handleMarkerPress}
-          />
+            coordinate={{ latitude: poi.lat, longitude: poi.lng }}
+            anchor={{ x: 0.5, y: 0.5 }}
+            tappable
+            tracksViewChanges={initialTracking}
+            onPress={(e) => {
+              e?.stopPropagation?.();
+              if (__DEV__) console.info('[home] marker:tap', { poi: poi.name, id: poi.id, screen: 'curated' });
+              handleMarkerPress(poi, 'curated');
+            }}
+          >
+            <PoiMarkerX size="curated" />
+          </Marker>
         ))}
 
         {/* Viewport-reveal extras (B8 / drift 5.79) — smaller X, same
             callout overlay. Renders only when zoomed past the threshold. */}
         {!browseMode && visibleExtras.map(poi => (
-          <HomePoiX
+          <Marker
             key={`extra-${poi.id}`}
-            poi={poi}
-            size="reveal"
-            screenLabel="extra"
-            onPress={handleMarkerPress}
-          />
+            coordinate={{ latitude: poi.lat, longitude: poi.lng }}
+            anchor={{ x: 0.5, y: 0.5 }}
+            tappable
+            tracksViewChanges={initialTracking}
+            onPress={(e) => {
+              e?.stopPropagation?.();
+              if (__DEV__) console.info('[home] marker:tap', { poi: poi.name, id: poi.id, screen: 'extra' });
+              handleMarkerPress(poi, 'extra');
+            }}
+          >
+            <PoiMarkerX size="reveal" />
+          </Marker>
         ))}
 
         {/* Stop dots — teal, tappable to remove. Never clustered. */}
