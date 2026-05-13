@@ -43,6 +43,7 @@ import { useSheetSnap } from '../hooks/useSheetSnap';
 import { MapStyleId, MAP_STYLES, loadMapStyle, saveMapStyle } from '../lib/mapStyle';
 import { MapStylePicker } from '../components/MapStylePicker';
 import { XRoadLogo } from '../components/XRoadLogo';
+import { useTripStore } from '../src/store/tripStore';
 
 // ── Route line colors per map style ──────────────────────────────────────────
 const ROUTE_COLOR: Record<string, string> = {
@@ -188,9 +189,15 @@ export default function MapScreen() {
   const [browsePOIs,       setBrowsePOIs]       = useState<POI[]>([]);
   const browseFetchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastRegionRef    = useRef(INITIAL_REGION);
-  // Category chip filter
-  const [activeCatChips, setActiveCatChips] = useState<Set<string>>(new Set());
-  const [chipsScrolled,  setChipsScrolled]  = useState(false);
+  // Category chip filter — sourced from Zustand session store (drift 5.80).
+  // Both home and customize read/write the same `selectedCategories` array.
+  const selectedCategories = useTripStore(s => s.selectedCategories);
+  const toggleCategory     = useTripStore(s => s.toggleCategory);
+  const [chipsScrolled, setChipsScrolled] = useState(false);
+
+  // Active trip mode (Drive | Hike) — drift 5.82. Persisted in Zustand.
+  const activeTripMode    = useTripStore(s => s.activeTripMode);
+  const setActiveTripMode = useTripStore(s => s.setActiveTripMode);
 
   // Pending pin (map-tap to drop a stop)
   const [pendingPin,        setPendingPin]        = useState<{ latitude: number; longitude: number } | null>(null);
@@ -226,9 +233,17 @@ export default function MapScreen() {
 
   const selectedRoute = routes[selectedRouteIdx] ?? null;
   const badges        = computeBadges(routes);
-  const filteredRoutePOIs = activeCatChips.size === 0
+  // Translate display-label chip selections to DB slugs once per render.
+  // poi.category comes back as a slug from get_corridor_pois; selectedCategories
+  // holds chip labels ('History', 'Nature', …) for parity with customize.tsx's
+  // chip row. Empty = include all.
+  const activeSlugSet = useMemo(
+    () => new Set(selectedCategories.map(label => CAT_SLUG[label] ?? label.toLowerCase())),
+    [selectedCategories],
+  );
+  const filteredRoutePOIs = selectedCategories.length === 0
     ? routePOIs
-    : routePOIs.filter(poi => activeCatChips.has(CAT_SLUG[poi.category] ?? poi.category));
+    : routePOIs.filter(poi => activeSlugSet.has(poi.category));
 
   // Browse mode = no routes selected yet. POIs come from get_nearby_pois,
   // clustered. Post-route mode renders along-corridor POIs uncluttered.
@@ -325,20 +340,10 @@ export default function MapScreen() {
         'routePOIs=' + routePOIs.length,
         'filtered=' + filteredRoutePOIs.length,
         'rendered=' + Math.min(filteredRoutePOIs.length, 40),
-        'activeChips=' + activeCatChips.size,
+        'activeChips=' + selectedCategories.length,
       );
-      // One-shot firstPOI shape dump — drop after marker-visibility fix is confirmed live.
-      const first = filteredRoutePOIs[0];
-      if (first) {
-        console.info('[home] render:firstPOI',
-          'keys=' + Object.keys(first).join(','),
-          'lat=' + first.lat + '(' + typeof first.lat + ')',
-          'lng=' + first.lng + '(' + typeof first.lng + ')',
-          'coordinate=' + JSON.stringify({ latitude: first.lat, longitude: first.lng }),
-        );
-      }
     }
-  }, [routePOIs, filteredRoutePOIs.length, browseMode, activeCatChips.size]);
+  }, [routePOIs, filteredRoutePOIs.length, browseMode, selectedCategories.length]);
 
   // ── Fetch routes ───────────────────────────────────────────────────────────
   // oCoords: explicit origin override — pass null to force GPS, omit to use current state.
@@ -735,6 +740,28 @@ export default function MapScreen() {
     // Top safe area + search
     topSafe:  { position: 'absolute', top: 0, left: 0, right: 0 },
     logoWrap: { alignItems: 'center', paddingVertical: 4 },
+
+    // Drive | Hike mode pill (drift 5.82) — paper bg, ink-red active fill.
+    modePillRow: { alignItems: 'center', paddingTop: 6, paddingBottom: 2 },
+    modePill: {
+      flexDirection: 'row',
+      height: 32, borderRadius: 16,
+      backgroundColor: theme.colors.paper,
+      borderWidth: 1, borderColor: theme.colors.rule,
+      overflow: 'hidden',
+    },
+    modePillSeg: {
+      paddingHorizontal: 16, height: '100%',
+      alignItems: 'center', justifyContent: 'center',
+      minWidth: 72,
+    },
+    modePillSegActive: { backgroundColor: theme.colors.accent },
+    modePillDivider:   { width: 1, backgroundColor: theme.colors.rule },
+    modePillText: {
+      ...theme.textVariants.metaSmall,
+      color: theme.colors.ink, letterSpacing: 1,
+    },
+    modePillTextActive: { color: theme.colors.paper },
     devNavRow: {
       position: 'absolute', top: 4, right: 20,
       flexDirection: 'row', gap: 8, zIndex: 100,
@@ -1311,6 +1338,33 @@ export default function MapScreen() {
           <View style={s.logoWrap} pointerEvents="none">
             <XRoadLogo size="sm" />
           </View>
+
+          {/* Drive | Hike mode selector (drift 5.82). Persists via tripStore. */}
+          <View style={s.modePillRow}>
+            <View style={s.modePill}>
+              <TouchableOpacity
+                style={[s.modePillSeg, activeTripMode === 'driving' && s.modePillSegActive]}
+                onPress={() => setActiveTripMode('driving')}
+                activeOpacity={0.8}
+                hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+              >
+                <Text style={[s.modePillText, activeTripMode === 'driving' && s.modePillTextActive]}>DRIVE</Text>
+              </TouchableOpacity>
+              <View style={s.modePillDivider} />
+              <TouchableOpacity
+                style={[s.modePillSeg, activeTripMode === 'hiking' && s.modePillSegActive]}
+                onPress={() => {
+                  setActiveTripMode('hiking');
+                  navigation.navigate('hiking');
+                }}
+                activeOpacity={0.8}
+                hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+              >
+                <Text style={[s.modePillText, activeTripMode === 'hiking' && s.modePillTextActive]}>HIKE</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+
           <TouchableOpacity
             style={s.searchPill}
             onPress={() => openLocOverlay('dest')}
@@ -1347,16 +1401,12 @@ export default function MapScreen() {
               }}
             >
               {CAT_CHIPS.map(chip => {
-                const active = activeCatChips.has(chip);
+                const active = selectedCategories.includes(chip);
                 return (
                   <TouchableOpacity
                     key={chip}
                     style={[s.chip, active && s.chipActive]}
-                    onPress={() => setActiveCatChips(prev => {
-                      const next = new Set(prev);
-                      active ? next.delete(chip) : next.add(chip);
-                      return next;
-                    })}
+                    onPress={() => toggleCategory(chip)}
                     activeOpacity={0.8}
                   >
                     <Text style={[s.chipText, active && s.chipTextActive]}>{chip}</Text>
@@ -1544,16 +1594,12 @@ export default function MapScreen() {
             contentContainerStyle={s.chipRow}
           >
             {CAT_CHIPS.map(chip => {
-              const active = activeCatChips.has(chip);
+              const active = selectedCategories.includes(chip);
               return (
                 <TouchableOpacity
                   key={chip}
                   style={[s.chip, active && s.chipActive]}
-                  onPress={() => setActiveCatChips(prev => {
-                    const next = new Set(prev);
-                    active ? next.delete(chip) : next.add(chip);
-                    return next;
-                  })}
+                  onPress={() => toggleCategory(chip)}
                   activeOpacity={0.8}
                 >
                   <Text style={[s.chipText, active && s.chipTextActive]}>{chip}</Text>

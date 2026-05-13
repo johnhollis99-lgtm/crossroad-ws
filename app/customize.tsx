@@ -12,7 +12,6 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import {
   Alert,
-  Animated,
   KeyboardAvoidingView,
   LayoutChangeEvent,
   Modal,
@@ -36,6 +35,7 @@ import { C } from '../lib/theme';
 import { MapStyleId, MAP_STYLES, loadMapStyle, saveMapStyle } from '../lib/mapStyle';
 import { MapStylePicker } from '../components/MapStylePicker';
 import { XRoadLogo } from '../components/XRoadLogo';
+import { useTripStore } from '../src/store/tripStore';
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
@@ -68,10 +68,14 @@ const CAT_SLUG: Record<string, string> = {
   'Science':      'geology',
 };
 
-const POI_MIN     = 0;
-const POI_MAX     = 20;
-const POI_STEP    = 0.5;
-const POI_DEFAULT = 1;
+// POI slider range depends on trip mode (drift 5.81). Driving covers
+// regional / interstate corridors, hiking covers single-trail corridors.
+const POI_MIN          = 0;
+const POI_MAX_DRIVING  = 20;
+const POI_MAX_HIKING   = 2;
+const POI_STEP         = 0.5;
+const POI_DEFAULT_DRV  = 1;
+const POI_DEFAULT_HIKE = 0.5;
 
 const SERVER_URL = (process.env.EXPO_PUBLIC_SERVER_URL ?? 'http://localhost:3001');
 
@@ -189,9 +193,11 @@ function fmtMiles(mi: number): string {
 
 // ── POI distance slider ───────────────────────────────────────────────────────
 
-function PoiSlider({ value, onChange }: { value: number; onChange: (v: number) => void }) {
+function PoiSlider({ value, onChange, max }: { value: number; onChange: (v: number) => void; max: number }) {
   const trackWidth = useRef(0);
-  const pct = (value - POI_MIN) / (POI_MAX - POI_MIN);
+  const maxRef = useRef(max);
+  maxRef.current = max;
+  const pct = (value - POI_MIN) / (max - POI_MIN);
 
   const pan = useRef(
     PanResponder.create({
@@ -204,7 +210,7 @@ function PoiSlider({ value, onChange }: { value: number; onChange: (v: number) =
 
   function snap(x: number) {
     const ratio = Math.max(0, Math.min(1, x / (trackWidth.current || 1)));
-    const raw   = POI_MIN + ratio * (POI_MAX - POI_MIN);
+    const raw   = POI_MIN + ratio * (maxRef.current - POI_MIN);
     onChange(Math.round(raw / POI_STEP) * POI_STEP);
   }
 
@@ -373,21 +379,38 @@ export default function CustomizeScreen() {
   const midIdx = Math.floor(polylineCoords.length / 2);
   const midPoint = polylineCoords[midIdx] ?? { latitude: 34.05, longitude: -118.24 };
 
+  // ── Trip-mode awareness (drift 5.81) ─────────────────────────────────────
+  // Read activeTripMode from the Zustand store. Drives POI slider range,
+  // density default (B3), and the pace divisor used by the stats strip
+  // when it lands in commit 3.
+  const activeTripMode = useTripStore(s => s.activeTripMode);
+  const isHiking       = activeTripMode === 'hiking';
+  const poiMax         = isHiking ? POI_MAX_HIKING : POI_MAX_DRIVING;
+  const poiDefault     = isHiking ? POI_DEFAULT_HIKE : POI_DEFAULT_DRV;
+
+  // ── Category state (drift 5.80) ───────────────────────────────────────────
+  // Lifted to the Zustand store so home and customize stay in sync.
+  // Empty = include all (B2 curation convention).
+  const selectedCats      = useTripStore(s => s.selectedCategories);
+  const toggleCategory    = useTripStore(s => s.toggleCategory);
+
   // ── State ────────────────────────────────────────────────────────────────
   const [narrators,        setNarrators]        = useState<NarratorRecord[]>([]);
   const [loadingNarrators, setLoadingNarrators] = useState(true);
   const [selectedNarrator, setSelectedNarrator] = useState<NarratorRecord | null>(null);
   const [selectedDepth,    setSelectedDepth]    = useState<Depth>('ride_along');
-  const [selectedCats,     setSelectedCats]     = useState<string[]>(DEFAULT_CATEGORIES);
   const [catsScrolled,     setCatsScrolled]     = useState(false);
-  const [poiDist,          setPoiDist]          = useState(POI_DEFAULT);
-  const [rollingDice,      setRollingDice]      = useState(false);
-  const [showCreate,       setShowCreate]       = useState(false);
+  const [poiDist,          setPoiDist]          = useState(poiDefault);
   const [saving,           setSaving]           = useState(false);
   const [mapStyleId,       setMapStyleId]       = useState<MapStyleId>('dark');
   const [liveStoryCount,   setLiveStoryCount]   = useState<number | null>(routeInfo.story_count);
 
-  const diceAnim = useRef(new Animated.Value(0)).current;
+  // Clamp current poiDist if the mode-driven max shrinks beneath it
+  // (e.g. user toggles from Drive 20mi → Hike 2mi). Without this the
+  // slider thumb would render past the track end.
+  useEffect(() => {
+    if (poiDist > poiMax) setPoiDist(poiMax);
+  }, [poiMax]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => { loadMapStyle().then(setMapStyleId); }, []);
 
@@ -396,9 +419,10 @@ export default function CustomizeScreen() {
     if (polylineCoords.length < 2) return;
     setLiveStoryCount(null);
     const slugs = selectedCats.map(c => CAT_SLUG[c] ?? c.toLowerCase());
-    countPOIsAlongRoute(polylineCoords, Math.max(0.1, poiDist), 'driving', slugs)
+    const mode = isHiking ? 'hiking' : 'driving';
+    countPOIsAlongRoute(polylineCoords, Math.max(0.1, poiDist), mode, slugs.length ? slugs : null)
       .then(n => setLiveStoryCount(n));
-  }, [selectedCats, poiDist]);
+  }, [selectedCats, poiDist, isHiking]);
   const handleMapStyleChange = (id: MapStyleId) => { setMapStyleId(id); saveMapStyle(id); };
   const activeMapStyle = MAP_STYLES[mapStyleId];
 
@@ -418,47 +442,9 @@ export default function CustomizeScreen() {
       .finally(() => setLoadingNarrators(false));
   }, []);
 
-  // ── Roll the dice ─────────────────────────────────────────────────────────
-  const handleRollDice = useCallback(async () => {
-    if (rollingDice) return;
-    setRollingDice(true);
-    diceAnim.setValue(0);
-    Animated.timing(diceAnim, { toValue: 1, duration: 700, useNativeDriver: true }).start();
-    try {
-      const res = await fetch(`${SERVER_URL}/api/narrators/generate`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          mode: 'random',
-          user_id: '00000000-0000-0000-0000-000000000000',
-          depth: selectedDepth,
-          categories: selectedCats,
-          content_rating: 'everyone',
-        }),
-      });
-      const json = await res.json();
-      if (res.ok && json.narrator) {
-        const tagged = { ...json.narrator as NarratorRecord, source: 'custom' as const };
-        setNarrators(prev => {
-          const withoutPrev = prev.filter(n => n.source !== 'custom' || n.is_preset);
-          return [...withoutPrev, tagged];
-        });
-        setSelectedNarrator(tagged);
-      }
-    } catch (e) {
-      console.error('[Customize] roll dice:', e);
-    } finally {
-      setRollingDice(false);
-    }
-  }, [rollingDice, selectedDepth, selectedCats, diceAnim]);
-
-  // ── Toggle category ───────────────────────────────────────────────────────
-  const toggleCat = useCallback((cat: string) =>
-    setSelectedCats(prev =>
-      prev.includes(cat) ? prev.filter(c => c !== cat) : [...prev, cat]
-    ), []);
-
   // ── Start trip ────────────────────────────────────────────────────────────
+  // Note: Roll-the-dice + Create-your-own narrator flows removed per
+  // drift 5.83. The 4 narrator cards are the supported selection surface.
   const handleStartTrip = useCallback(async () => {
     if (saving) return;
 
@@ -466,12 +452,9 @@ export default function CustomizeScreen() {
       Alert.alert('Select a narrator', 'Choose a narrator before starting your trip.');
       return;
     }
-    if (selectedCats.length === 0) {
-      Alert.alert('Select categories', 'Pick at least one story category.');
-      return;
-    }
-    if (poiDist < POI_MIN || poiDist > POI_MAX) {
-      Alert.alert('Invalid distance', `POI distance must be between ${POI_MIN} and ${POI_MAX} miles.`);
+    // Empty categories = include all (B2 curation convention) — no alert here.
+    if (poiDist < POI_MIN || poiDist > poiMax) {
+      Alert.alert('Invalid distance', `POI distance must be between ${POI_MIN} and ${poiMax} miles.`);
       return;
     }
 
@@ -527,8 +510,6 @@ export default function CustomizeScreen() {
   // ── Narrator grid: chunk into rows of 2 ──────────────────────────────────
   const narratorRows: NarratorRecord[][] = [];
   for (let i = 0; i < narrators.length; i += 2) narratorRows.push(narrators.slice(i, i + 2));
-
-  const diceRotate = diceAnim.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '720deg'] });
 
   // ── Render ────────────────────────────────────────────────────────────────
   return (
@@ -675,27 +656,9 @@ export default function CustomizeScreen() {
           </View>
         )}
 
-        <View style={s.actionRow}>
-          <TouchableOpacity
-            style={[s.actionBtn, rollingDice && { opacity: 0.65 }]}
-            onPress={handleRollDice}
-            disabled={rollingDice}
-            activeOpacity={0.8}
-          >
-            <Animated.Text style={[s.actionIcon, { transform: [{ rotate: diceRotate }] }]}>⚀</Animated.Text>
-            <Text style={s.actionText}>{rollingDice ? 'Rolling…' : 'Roll the dice'}</Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            style={s.actionBtn}
-            onPress={() => setShowCreate(true)}
-            activeOpacity={0.8}
-          >
-            <Text style={s.actionIcon}>✏️</Text>
-            <Text style={s.actionText}>Create your own</Text>
-          </TouchableOpacity>
-        </View>
-
+        {/* Roll-the-dice + Create-your-own removed per drift 5.83.
+            CreateNarratorModal definition remains in this file as a carrier
+            item against future re-enablement; it is not rendered here. */}
 
         {/* ── Categories ───────────────────────────────────────────────────── */}
         <Text style={s.sectionLabel}>Categories</Text>
@@ -716,7 +679,7 @@ export default function CustomizeScreen() {
                 <TouchableOpacity
                   key={cat}
                   style={[s.pill, on && s.pillOn]}
-                  onPress={() => toggleCat(cat)}
+                  onPress={() => toggleCategory(cat)}
                   activeOpacity={0.8}
                 >
                   <Text style={[s.pillText, on && s.pillTextOn]}>{cat}</Text>
@@ -749,8 +712,8 @@ export default function CustomizeScreen() {
         </View>
         <View style={s.sliderRow}>
           <Text style={s.sliderEdge}>{fmtMiles(POI_MIN)}</Text>
-          <PoiSlider value={poiDist} onChange={setPoiDist} />
-          <Text style={s.sliderEdge}>{fmtMiles(POI_MAX)}</Text>
+          <PoiSlider value={poiDist} onChange={setPoiDist} max={poiMax} />
+          <Text style={s.sliderEdge}>{fmtMiles(poiMax)}</Text>
         </View>
 
         {/* ── Start trip CTA ────────────────────────────────────────────────── */}
@@ -767,16 +730,8 @@ export default function CustomizeScreen() {
         <View style={{ height: 40 + insets.bottom }} />
       </ScrollView>
 
-      <CreateNarratorModal
-        visible={showCreate}
-        onClose={() => setShowCreate(false)}
-        onCreated={narrator => {
-          setNarrators(prev => [...prev, narrator]);
-          setSelectedNarrator(narrator);
-        }}
-        depth={selectedDepth}
-        categories={selectedCats}
-      />
+      {/* CreateNarratorModal not rendered (drift 5.83) — kept in module
+          as a carrier for future re-enablement. */}
     </View>
   );
 }

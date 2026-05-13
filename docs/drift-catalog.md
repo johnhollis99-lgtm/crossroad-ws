@@ -1009,6 +1009,128 @@ skipped 5.71 between my 5.70 and the spec's 5.72.
 
 ---
 
+### 5.80 — Category chip state synced via Zustand session store
+
+**Status:** `resolved` (filed-and-fixed this commit).
+
+**Surface:** Pre-sync, home (`app/index.tsx`) held `activeCatChips: Set<string>`
+locally and customize (`app/customize.tsx`) held `selectedCats: string[]`
+locally. Tapping "Nature" on home did not reflect on customize. The
+filter logic on home was additionally buggy — `activeCatChips.has(CAT_SLUG[poi.category] ?? poi.category)`
+was checking slugs against a Set of display labels, so the filter would
+never match (drift 5.84 in queue for follow-up: validate post-A4 that
+the home filter now works correctly with the slug-set memo).
+
+**Resolution:**
+- Both screens now consume `selectedCategories: string[]` and
+  `toggleCategory(cat: string)` from `useTripStore`. Single source of
+  truth. Tap "Nature" on home → switch to customize → "Nature" chip is
+  already active. Persisted via the store's AsyncStorage adapter, so
+  selection survives app restart.
+- Home's filter now memo-builds a slug Set from `selectedCategories.map(label => CAT_SLUG[label] ?? label.toLowerCase())`
+  and tests `slugSet.has(poi.category)`. Compares slugs to slugs.
+- Empty selection = include all (B2 curation convention). The previous
+  customize default of pre-selecting `['History','Nature','Food','Roadside']`
+  is removed — first launches show all chips unselected.
+
+**Decided by:** Spec A4. User chose Zustand + persist over per-screen
+state (drift 5.71). The empty-as-all convention came from the spec's
+B2 algorithm description.
+
+---
+
+### 5.81 — Customize is trip-mode-aware (driving vs hiking defaults)
+
+**Status:** `resolved` (filed-and-fixed this commit).
+
+**Surface:** Pre-this-commit, `customize.tsx` hardcoded `POI_MIN=0,
+POI_MAX=20, POI_DEFAULT=1` regardless of trip mode. A user toggling to
+Hike on home would still see a 20-mile slider on customize — the wrong
+unit for trail corridors.
+
+**Resolution:**
+- Reads `activeTripMode` from the tripStore. Computes `isHiking`,
+  `poiMax`, `poiDefault` locally.
+- `POI_MAX_DRIVING = 20`, `POI_MAX_HIKING = 2`. `POI_DEFAULT_DRV = 1`,
+  `POI_DEFAULT_HIKE = 0.5`.
+- `PoiSlider` accepts a `max` prop (with a ref capture so the pan handler
+  picks up live changes without recreating the PanResponder).
+- A `useEffect` clamps `poiDist` if `poiMax` drops below it (Drive → Hike
+  toggle while distance was at 20 mi). Without the clamp the slider
+  thumb would render past the track end.
+- `countPOIsAlongRoute` and the trip-mode field on save get the right
+  mode literal ('driving' or 'hiking') instead of the hardcoded 'driving'.
+
+**Out of scope (deferred to B3 in commit 3):** density-per-mode defaults
+(balanced for driving, dense for hiking) and the pace divisor in the
+stats strip (route duration ÷ distance for driving; ~20 min/mi assumed
+for hiking pending a real hike-duration field — drift 5.85 will track
+the assumption).
+
+**Decided by:** Spec A2.
+
+---
+
+### 5.82 — Mode selector pill on home (Drive | Hike)
+
+**Status:** `resolved` (filed-and-fixed this commit).
+
+**Surface:** Home had no surfaced toggle between driving and hiking
+flows. The Hiking screen (`app/hiking.tsx`) was reachable only through
+navigation that doesn't exist on the current home layout (no entry
+point post-Field Notes migration). Users effectively had no way into
+the hiking flow.
+
+**Resolution:**
+- Added a two-segment pill (`Drive | Hike`) on home's mobile top safe
+  area, between the XRoad logo and the search pill. Field Notes
+  treatment: paper background, ink-red active fill, JetBrains Mono
+  metaSmall uppercase ~11px, height 32, ~72px per segment.
+- Tap "Drive": setActiveTripMode('driving'); stay on home (current
+  behavior). Tap "Hike": setActiveTripMode('hiking') and
+  `navigation.navigate('hiking')`. The active selection persists in the
+  tripStore so coming back from hiking → home renders the right pill
+  state.
+- Desktop layout unchanged (mobile-only per CLAUDE.md hard rule).
+
+**Decided by:** Spec A1.
+
+---
+
+### 5.83 — Roll-the-dice and Create-your-own narrator CTAs removed from customize
+
+**Status:** `resolved` (filed-and-fixed this commit).
+
+**Surface:** Customize had two extra CTAs below the narrator grid:
+"🎲 Roll the dice" (random narrator generation via `/api/narrators/generate`
+mode=random) and "✏️ Create your own" (custom narrator generation via
+the same endpoint mode=custom, opening `CreateNarratorModal`). Spec
+A3 calls for both to be dropped — the 4 preset narrator cards are the
+supported selection surface.
+
+**Resolution:**
+- Removed the `<View style={s.actionRow}>` block containing both
+  TouchableOpacities.
+- Removed `rollingDice` / `setRollingDice` state, `diceAnim` Animated
+  ref, `handleRollDice` useCallback.
+- Removed `showCreate` / `setShowCreate` state. The
+  `<CreateNarratorModal />` JSX is no longer rendered.
+- The `CreateNarratorModal` function definition stays in `customize.tsx`
+  as a carrier item against future re-enablement (spec calls it out
+  explicitly as "deferred, carrier item"). `handleRollDice` similarly
+  removed — re-enablement would need to bring it back from git history,
+  but spec posture is that this is fine since the carrier modal is the
+  load-bearing piece.
+- `Animated` import dropped from `react-native` import block (no other
+  consumers).
+- Style entries `actionRow / actionBtn / actionIcon / actionText` left in
+  the `s` StyleSheet — orphan but harmless, and a small future-friendly
+  hook if the row comes back. No render impact.
+
+**Decided by:** Spec A3.
+
+---
+
 ### 5.70 — Home post-route `fetch:start` fires 4+ times per route selection
 
 **Status:** `noted` — note only; address later. Non-blocking.
