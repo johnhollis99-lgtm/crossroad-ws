@@ -294,20 +294,31 @@ export default function MapScreen() {
   const [pressedStopIdx, setPressedStopIdx] = useState<number | null>(null);
 
   // Tapped POI marker — drives the floating PoiCallout overlay (drift 5.97).
-  // selectedPoi carries the POI fields plus the computed screen coordinate
-  // (via mapRef.pointForCoordinate); cleared on map-press, pan-end, or unmount.
-  // userInteractedWithMap gates the pan dismissal so the initial
-  // onRegionChangeComplete (which fires on layout) doesn't immediately
-  // dismiss a freshly-set selectedPoi.
+  // Sticky selection: tap a marker to show; tap the SAME marker to hide;
+  // tap a DIFFERENT marker to switch. Pan / zoom repositions the callout
+  // (via onRegionChangeComplete) but does NOT dismiss. Map-background tap
+  // is a no-op for this overlay.
   const [selectedPoi, setSelectedPoi] = useState<
     (POI & { screenPosition: { x: number; y: number } }) | null
   >(null);
-  const userInteractedWithMap = useRef(false);
+
+  const dismissCallout = useCallback((reason: 'tap-same' | 'unmount') => {
+    setSelectedPoi(prev => {
+      if (prev && __DEV__) console.info('[home] callout:dismiss', { reason, poi: prev.name });
+      return null;
+    });
+  }, []);
 
   const handleMarkerPress = useCallback(async (
     poi: POI,
     screenLabel: 'browse' | 'curated' | 'extra',
   ) => {
+    // Same-marker re-tap toggles off. Different-marker tap falls through
+    // and replaces selectedPoi (the existing switch behavior).
+    if (selectedPoi?.id === poi.id) {
+      dismissCallout('tap-same');
+      return;
+    }
     try {
       const screenPos = await (mapRef.current as any)?.pointForCoordinate?.({
         latitude:  poi.lat,
@@ -321,14 +332,7 @@ export default function MapScreen() {
     } catch (err) {
       if (__DEV__) console.warn('[home] callout:show-fail', err);
     }
-  }, []);
-
-  const dismissCallout = useCallback((reason: 'pan' | 'tap-bg' | 'tap-other-marker' | 'unmount') => {
-    setSelectedPoi(prev => {
-      if (prev && __DEV__) console.info('[home] callout:dismiss', { reason, poi: prev.name });
-      return null;
-    });
-  }, []);
+  }, [selectedPoi, dismissCallout]);
 
   useEffect(() => () => { dismissCallout('unmount'); }, [dismissCallout]);
 
@@ -471,24 +475,33 @@ export default function MapScreen() {
     fetchBrowsePOIs(lastRegionRef.current);
   }, [browseMode, fetchBrowsePOIs]);
 
-  const handleRegionChangeComplete = useCallback((region: {
+  const handleRegionChangeComplete = useCallback(async (region: {
     latitude: number; longitude: number; latitudeDelta: number; longitudeDelta: number;
   }) => {
     lastRegionRef.current = region;
     setMapRegion(region); // B8 viewport reveal depends on this
-    // Dismiss the POI callout on pan-end, but skip the initial layout-driven
-    // event so a callout set immediately after mount isn't immediately wiped.
-    if (userInteractedWithMap.current) {
-      dismissCallout('pan');
-    } else {
-      userInteractedWithMap.current = true;
+    // Reposition the POI callout (if any) so it stays glued to its POI as
+    // the user pans/zooms. NOT a dismiss — the selection is sticky.
+    if (selectedPoi) {
+      try {
+        const screenPos = await (mapRef.current as any)?.pointForCoordinate?.({
+          latitude:  selectedPoi.lat,
+          longitude: selectedPoi.lng,
+        });
+        if (screenPos) {
+          setSelectedPoi(prev => (prev ? { ...prev, screenPosition: screenPos } : null));
+        }
+      } catch {
+        // pointForCoordinate can throw if the map handle is gone (e.g. mid-unmount);
+        // swallow — the callout will redraw on the next region change.
+      }
     }
     if (!browseMode) return;
     if (browseFetchTimer.current) clearTimeout(browseFetchTimer.current);
     browseFetchTimer.current = setTimeout(() => {
       fetchBrowsePOIs(region);
     }, BROWSE_FETCH_DEBOUNCE_MS);
-  }, [browseMode, fetchBrowsePOIs, dismissCallout]);
+  }, [browseMode, fetchBrowsePOIs, selectedPoi]);
 
   const clearRoutes = () => { setRoutes([]); setSelectedRouteIdx(0); setRoutePOIs([]); };
 
@@ -861,10 +874,10 @@ export default function MapScreen() {
   }, [s]);
 
   const handleMapPress = useCallback(async (e: any) => {
-    // Map-background tap dismisses the POI callout, whether or not a pin
-    // was dropped. Fires before the pending-pin work so a fast tap-then-tap
-    // sequence still feels responsive.
-    dismissCallout('tap-bg');
+    // Map-background tap drops a pending-pin (stop candidate). The POI
+    // callout overlay is intentionally NOT dismissed here — the selection
+    // is sticky and only toggles off via a same-marker re-tap (drift 5.97
+    // follow-up).
     const coord = e?.nativeEvent?.coordinate ?? e?.coordinate;
     if (!coord) return;
     setPendingPin(coord);
@@ -889,7 +902,7 @@ export default function MapScreen() {
     } finally {
       setPendingPinLoading(false);
     }
-  }, [dismissCallout]);
+  }, []);
 
   const confirmPinAsStop = useCallback(() => {
     if (!pendingPin) return;
