@@ -1,8 +1,12 @@
 /**
- * Drive | Hike-or-Walk mode selector. Two equal-flex pills in a row; active
- * pill fills with ink-red and shows paper-cream label + icons (constants so
- * the contrast holds in both light and dark schemes), inactive pill is an
- * outlined chip whose stroke + label follow the active theme's ink color.
+ * Drive | Hike-or-Walk mode selector. Two equal-flex pills in a row.
+ *
+ * Colors are LIGHT-THEME CONSTANTS regardless of the active system scheme —
+ * the mode pill row is treated as a branded chip, like the Wordmark pill, so
+ * it reads identically against any map background in both light and dark
+ * mode. Active pill fills with ink-red and shows paper-cream label + icons;
+ * inactive pill is a cream chip outlined in ink. Both carry an e2 drop
+ * shadow to lift them off map overlays.
  *
  * The visible Hike pill label reads "Hike / Walk" to broaden the mode beyond
  * pure hiking. The underlying state value space stays 'driving' | 'hiking' —
@@ -10,10 +14,10 @@
  */
 
 import React from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import Svg, { Circle, Path } from 'react-native-svg';
 
-import { lightTheme, useTheme } from '../design/theme';
+import { lightTheme } from '../design/theme';
 
 export type ModePillValue = 'driving' | 'hiking';
 
@@ -93,17 +97,24 @@ function WalkerIcon({ color }: IconProps) {
   );
 }
 
-export function ModePillRow({ value, onChange, testID }: ModePillRowProps) {
-  const { theme } = useTheme();
+// Both pills carry the same drop shadow. iOS pulls the shadow values from
+// lightTheme.elevation.e2 (the canonical token); Android uses elevation: 4
+// since the e2 token's elevation: 8 over-darkens these chip-sized surfaces
+// (matches the Wordmark pill's Platform-specific override).
+const PILL_SHADOW = Platform.OS === 'android'
+  ? ({ elevation: 4 } as const)
+  : lightTheme.elevation.e2;
 
+export function ModePillRow({ value, onChange, testID }: ModePillRowProps) {
   const driveActive = value === 'driving';
   const hikeActive  = value === 'hiking';
 
-  // Active state colors are locked to light-mode paper-cream so the contrast
-  // against the ink-red fill is preserved when the system flips to dark mode.
+  // All four roles are locked to light-mode constants — the pill row is
+  // a branded chip, not a theme-aware surface.
   const activeFg   = lightTheme.colors.paper;
-  const activeBg   = theme.colors.accent;
-  const inactiveFg = theme.colors.ink;
+  const activeBg   = lightTheme.colors.accent;
+  const inactiveFg = lightTheme.colors.ink;
+  const inactiveBg = lightTheme.colors.paper;
 
   const driveFg = driveActive ? activeFg : inactiveFg;
   const hikeFg  = hikeActive  ? activeFg : inactiveFg;
@@ -120,7 +131,8 @@ export function ModePillRow({ value, onChange, testID }: ModePillRowProps) {
           styles.pill,
           driveActive
             ? { backgroundColor: activeBg, borderWidth: 0 }
-            : { backgroundColor: 'transparent', borderWidth: 1, borderColor: inactiveFg },
+            : { backgroundColor: inactiveBg, borderWidth: 1, borderColor: inactiveFg },
+          PILL_SHADOW,
         ]}
       >
         <CarIcon color={driveFg} />
@@ -130,7 +142,7 @@ export function ModePillRow({ value, onChange, testID }: ModePillRowProps) {
             styles.label,
             {
               color:      driveFg,
-              fontFamily: theme.fontFamilies.serifItalic,
+              fontFamily: lightTheme.fontFamilies.serifItalic,
               fontWeight: driveActive ? '600' : '500',
             },
           ]}
@@ -149,7 +161,8 @@ export function ModePillRow({ value, onChange, testID }: ModePillRowProps) {
           styles.pill,
           hikeActive
             ? { backgroundColor: activeBg, borderWidth: 0 }
-            : { backgroundColor: 'transparent', borderWidth: 1, borderColor: inactiveFg },
+            : { backgroundColor: inactiveBg, borderWidth: 1, borderColor: inactiveFg },
+          PILL_SHADOW,
         ]}
       >
         <MountainIcon color={hikeFg} />
@@ -159,7 +172,7 @@ export function ModePillRow({ value, onChange, testID }: ModePillRowProps) {
             styles.label,
             {
               color:      hikeFg,
-              fontFamily: theme.fontFamilies.serifItalic,
+              fontFamily: lightTheme.fontFamilies.serifItalic,
               fontWeight: hikeActive ? '600' : '500',
             },
           ]}
