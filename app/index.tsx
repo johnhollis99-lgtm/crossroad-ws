@@ -1372,7 +1372,8 @@ export default function MapScreen() {
         initialRegion={INITIAL_REGION}
         onPress={handleMapPress}
         onRegionChangeComplete={handleRegionChangeComplete}
-        clusteringEnabled={browseMode}
+        clusteringEnabled
+        minPoints={5}
         renderCluster={renderCluster}
       >
         {/* Alternative routes — dimmed dashes */}
