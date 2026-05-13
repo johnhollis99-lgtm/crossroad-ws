@@ -509,6 +509,38 @@ export default function MapScreen() {
     }
   }, [routePOIs, filteredRoutePOIs.length, browseMode, selectedCategories.length, homeCuration.curated.length, homeCuration.extras.length, visibleExtras.length, mapRegion.latitudeDelta]);
 
+  // ── Diagnostic (drift 5.89) — one-shot per curation result ─────────────────
+  // Dumps top10 / bottom5 / stats so user can decide whether the obscure-POI
+  // tail comes from broken significance scoring (top picks aren't actually
+  // famous) or too-permissive min_relevance default (tail is dragging in
+  // noise). Diagnostic only this commit — defaults are NOT changed here.
+  // Drop after the user reviews logs and picks a tuning direction.
+  useEffect(() => {
+    if (!__DEV__ || browseMode) return;
+    const list = homeCuration.curated;
+    if (list.length === 0) return;
+    const summary = (p: POI) => ({
+      name:               p.name,
+      significance_score: p.significance_score ?? null,
+      dist_from_route_m:  p.dist_from_route_m ?? null,
+      category:           p.category,
+    });
+    const scores = list
+      .map(p => p.significance_score)
+      .filter((s): s is number => typeof s === 'number');
+    const stats = {
+      total_curated: list.length,
+      min_score:     scores.length ? Math.min(...scores) : null,
+      max_score:     scores.length ? Math.max(...scores) : null,
+      avg_score:     scores.length
+        ? Math.round(scores.reduce((a, b) => a + b, 0) / scores.length * 10) / 10
+        : null,
+    };
+    console.info('[home] curation:top10', list.slice(0, 10).map(summary));
+    console.info('[home] curation:bottom5', list.slice(-5).map(summary));
+    console.info('[home] curation:stats', stats);
+  }, [homeCuration.curated, browseMode]);
+
   // ── Fetch routes ───────────────────────────────────────────────────────────
   // oCoords: explicit origin override — pass null to force GPS, omit to use current state.
   // Needed because setOriginCoords is async; callers that just set it must pass the new

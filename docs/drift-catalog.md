@@ -1359,6 +1359,59 @@ stays unchanged. The fix is purely tap-flow.
 
 ---
 
+### 5.89 — Default curation surfaces obscure POIs; needs diagnosis before tuning
+
+**Status:** `noted` — diagnostic-only this commit; tuning deferred to a
+follow-up after the user reviews logs.
+
+**Surface:** User report — at default settings (driving / balanced /
+min_relevance=0), the curated set on home post-route includes obscure
+or low-significance POIs alongside known landmarks. Two competing
+hypotheses (not mutually exclusive):
+
+- **(a) Scoring is broken** — `significance_score` may not actually rank
+  the most famous places highest. Pageview attribution, source-base
+  pinning, and the score-clamp residue cleanup (CLAUDE.md 5.07 era)
+  could all individually leave bad-data tails. The recompute script
+  hasn't been re-run since the editorial-venue audit in 2026-05-07.
+- **(b) `min_relevance=0` is too permissive** — even with
+  significance-DESC sort, the curation algorithm's spatial-bin + global-cap
+  passes can pull in low-score POIs to fill bins that have no
+  high-significance candidate nearby. Bumping the default to 30 / 50
+  / 70 would trim the tail at the cost of empty bins in sparser regions.
+
+**Resolution (diagnostic-only):** one-shot `__DEV__` log on home,
+fired when `homeCuration.curated` changes, dumping:
+
+- `[home] curation:top10` — first 10 of curated (already
+  significance-DESC sorted, per `curateRoutePOIs` step 6). Each entry:
+  `{ name, significance_score, dist_from_route_m, category }`.
+- `[home] curation:bottom5` — last 5 of curated. Same shape.
+- `[home] curation:stats` — `{ total_curated, min_score, max_score,
+  avg_score }`. `avg_score` rounded to 1 decimal.
+
+If `top10` is dominated by tourist anchors and `bottom5` is plausible
+mid-tier (40–60), the scoring is fine and the fix is to raise the
+default min_relevance. If `top10` already shows weirdness (e.g. an
+obscure POI outranking a famous landmark), scoring is broken and the
+fix is upstream — re-run `recompute-significance.ts` and/or audit the
+breakdown weights. If `bottom5` consists of POIs near 0 score, the
+`min_relevance=0` default is the immediate cause.
+
+**Out of scope this commit:** no default values changed; no scoring
+weights touched. Pure observability.
+
+**Cleanup:** drop the `curation:top10 / bottom5 / stats` block after the
+user reviews logs and picks a tuning direction. The pipeline-level
+logs (`fetch:start`, `state-set`, `render:markers`) stay as long-term
+observability per session discipline.
+
+**Decided by:** User-filed observation. Diagnostic-only posture per
+the spec: "DO NOT change defaults in this commit. Diagnostic only.
+User reviews logs, then decides tuning direction in next round."
+
+---
+
 ### 5.88 — POI marker + cluster bubble accessibility size bump
 
 **Status:** `resolved` (filed-and-fixed this commit).
