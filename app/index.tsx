@@ -132,6 +132,54 @@ function decodePolyline(encoded: string): { latitude: number; longitude: number 
   return pts;
 }
 
+// ── POI marker (drift 5.73 reopened) ─────────────────────────────────────────
+// Holds a Marker ref + onPress that explicitly calls showCallout(). When
+// react-native-map-clustering wraps Markers, the native tap → Callout flow
+// can drop the Callout side (the library replaces the Marker subtree with
+// its own internal component for clustering math). The ref-based showCallout
+// is the documented react-native-maps workaround.
+//
+// Also emits a __DEV__ marker:tap log so hardware can confirm taps fire
+// regardless of whether the callout ends up showing.
+function HomePoiMarker({
+  poi, dotStyle, calloutStyle, calloutTextStyle, screenLabel,
+}: {
+  poi: POI;
+  dotStyle: any;
+  calloutStyle: any;
+  calloutTextStyle: any;
+  screenLabel: 'browse' | 'curated' | 'extra';
+}) {
+  const markerRef = useRef<Marker>(null);
+  return (
+    <Marker
+      ref={markerRef}
+      coordinate={{ latitude: poi.lat, longitude: poi.lng }}
+      anchor={{ x: 0.5, y: 0.5 }}
+      tappable
+      onPress={() => {
+        if (__DEV__) {
+          console.info('[home] marker:tap',
+            'screen=' + screenLabel,
+            'poi=' + poi.name,
+            'id=' + poi.id,
+          );
+        }
+        // Explicit showCallout() — see comment above.
+        markerRef.current?.showCallout?.();
+      }}
+      {...({ cluster: false } as any)}
+    >
+      <View style={dotStyle} />
+      <Callout tooltip>
+        <View style={calloutStyle}>
+          <Text style={calloutTextStyle}>{poi.name}</Text>
+        </View>
+      </Callout>
+    </Marker>
+  );
+}
+
 // ── Cluster marker (drift 5.72 / C1) ─────────────────────────────────────────
 // Renders a single cluster bubble at a coordinate. tracksViewChanges begins
 // true so the native bitmap snapshot picks up the View child after
@@ -1273,66 +1321,46 @@ export default function MapScreen() {
           </Marker>
         )}
 
-        {/* Browse-mode POI dots — clustered. */}
-        {/* tracksViewChanges omitted: react-native-maps 1.20.1 + Android snapshots
-            an empty bitmap when tracksViewChanges={false} fires before the View
-            child has rendered, leaving the marker invisible. Default true keeps
-            the dots visible at the (acceptable) cost of re-snapshots on prop
-            changes. See drift catalog 5.66 for the diagnosis.
-            Callout child (drift 5.73 / C2): paper bg, Fraunces italic 16px name,
-            ink-red 1px bottom border. tooltip=true so the spec styling renders
-            instead of the platform's native callout chrome. */}
+        {/* Browse / curated / extras POI markers all route through
+            HomePoiMarker (drift 5.73 reopened). The component carries a
+            Marker ref + explicit onPress(showCallout) workaround for
+            react-native-map-clustering's tap-flow gap, plus a __DEV__
+            marker:tap log for hardware verification. */}
         {browseMode && browsePOIs.map(poi => (
-          <Marker
+          <HomePoiMarker
             key={`browse-${poi.id}`}
-            coordinate={{ latitude: poi.lat, longitude: poi.lng }}
-            anchor={{ x: 0.5, y: 0.5 }}
-          >
-            <View style={s.poiDot} />
-            <Callout tooltip>
-              <View style={s.poiCallout}>
-                <Text style={s.poiCalloutName}>{poi.name}</Text>
-              </View>
-            </Callout>
-          </Marker>
+            poi={poi}
+            dotStyle={s.poiDot}
+            calloutStyle={s.poiCallout}
+            calloutTextStyle={s.poiCalloutName}
+            screenLabel="browse"
+          />
         ))}
 
-        {/* Post-route curated POI dots (B7 / drift 5.74) — full opacity,
-            10px. The previous 40-cap is gone; curation handles the cap
-            upstream. Never clustered. */}
+        {/* Post-route curated POI dots (B7 / drift 5.74). Cap-by-curation
+            upstream — no slice here. */}
         {!browseMode && homeCuration.curated.map(poi => (
-          <Marker
+          <HomePoiMarker
             key={poi.id}
-            coordinate={{ latitude: poi.lat, longitude: poi.lng }}
-            anchor={{ x: 0.5, y: 0.5 }}
-            {...({ cluster: false } as any)}
-          >
-            <View style={s.poiDot} />
-            <Callout tooltip>
-              <View style={s.poiCallout}>
-                <Text style={s.poiCalloutName}>{poi.name}</Text>
-              </View>
-            </Callout>
-          </Marker>
+            poi={poi}
+            dotStyle={s.poiDot}
+            calloutStyle={s.poiCallout}
+            calloutTextStyle={s.poiCalloutName}
+            screenLabel="curated"
+          />
         ))}
 
-        {/* Viewport-reveal extras (B8 / drift 5.79) — dimmed, smaller.
-            Renders only when zoomed in past the threshold; tappable but
-            outside the narration queue. */}
+        {/* Viewport-reveal extras (B8 / drift 5.79) — dimmed dot, same
+            callout. Renders only when zoomed past the threshold. */}
         {!browseMode && visibleExtras.map(poi => (
-          <Marker
+          <HomePoiMarker
             key={`extra-${poi.id}`}
-            coordinate={{ latitude: poi.lat, longitude: poi.lng }}
-            anchor={{ x: 0.5, y: 0.5 }}
-            {...({ cluster: false } as any)}
-          >
-            <View style={s.poiDotExtra} />
-            <Callout tooltip>
-              <View style={s.poiCallout}>
-                <Text style={s.poiCalloutName}>{poi.name}</Text>
-              </View>
-            </Callout>
-          </Marker>
+            poi={poi}
+            dotStyle={s.poiDotExtra}
+            calloutStyle={s.poiCallout}
+            calloutTextStyle={s.poiCalloutName}
+            screenLabel="extra"
+          />
         ))}
 
         {/* Stop dots — teal, tappable to remove. Never clustered. */}

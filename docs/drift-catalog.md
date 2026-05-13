@@ -1305,8 +1305,11 @@ render invisibly under certain re-render conditions.
 
 ### 5.73 — POI marker tap callouts on home
 
-**Status:** `resolved` (filed-and-fixed this commit). Spec C2 (home
-surfaces only; drive deferred — see deviation note below).
+**Status:** `resolved` — **reopened-and-fixed this commit**. Original
+landed in `ac2e7a6` with `<Callout tooltip>` as a Marker child, but
+hardware re-test showed taps did not surface the callout — the `<Callout>`
+JSX was in the tree but never rendered as a bubble. Drive deferral
+(unchanged) remains correct.
 
 **Surface:** Tapping a POI dot on home pre-route or post-route did
 nothing visible; user had no way to see which POI is at a coordinate
@@ -1330,7 +1333,29 @@ replace the custom overlay with a richer Callout, or keep the overlay
 and skip Callout entirely. Hiking screens also deferred per the spec
 ("Hiking screens later.").
 
-**Decided by:** Spec C2.
+**Re-fix (this commit):** the failure mode on hardware was tap-flow
+related, not styling. `react-native-map-clustering` 4.0.0 replaces
+unclustered Markers with its own subtree for the clustering math, and
+that subtree silently drops the `<Callout>` child's default tap-→-show
+behavior. Two layers added to recover it:
+
+1. **Explicit ref + `showCallout()`.** Wrapped browse / curated / extras
+   Markers in a new `HomePoiMarker` component that holds a Marker `ref`
+   and an `onPress` that calls `markerRef.current?.showCallout?.()`. This
+   is the documented react-native-maps workaround for libraries that
+   intercept the tap → callout flow. `tappable` prop set to true to
+   ensure the tap fires at all under the clustering wrapper.
+2. **`marker:tap` diagnostic log.** Each tap emits
+   `[home] marker:tap screen={browse|curated|extra} poi=<name> id=<id>`
+   under `__DEV__`. If callouts still don't render on hardware, the log
+   confirms whether the tap is being received at all — which then routes
+   the next diagnosis to either the JS handler chain (no log) or the
+   native bitmap snapshot path (log fires, no bubble).
+
+The `<Callout tooltip>` child + `s.poiCallout` styling from `ac2e7a6`
+stays unchanged. The fix is purely tap-flow.
+
+**Decided by:** Spec C2 (initial) + user-filed hardware reopen.
 
 ---
 
