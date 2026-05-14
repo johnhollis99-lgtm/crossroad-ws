@@ -24,7 +24,6 @@ import {
   View,
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
-import { LinearGradient } from 'expo-linear-gradient';
 import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from 'react-native-maps';
 import ClusteredMapView from 'react-native-map-clustering';
 import Svg, {
@@ -49,23 +48,12 @@ import { useSheetSnap, type SnapPoints } from '../hooks/useSheetSnap';
 import { MapStyleId, MAP_STYLES, loadMapStyle, saveMapStyle } from '../lib/mapStyle';
 import { MapStylePicker } from '../components/MapStylePicker';
 import {
-  CategoryChip,
   CoordinatesPill,
-  IconArchitecture,
-  IconFilm,
-  IconFood,
-  IconHistory,
-  IconMusic,
-  IconNature,
-  IconRoadside,
-  IconScience,
-  IconWeird,
   ModePillRow,
   PoiCallout,
   PoiMarkerX,
   Wordmark,
 } from '../src/components';
-import type { IconProps } from '../src/components';
 import { useTripStore } from '../src/store/tripStore';
 import { curateRoutePOIs } from '../src/lib/curation/curateRoutePOIs';
 
@@ -83,20 +71,12 @@ const ROUTE_ALT_COLOR: Record<string, string> = {
   standard:  'rgba(20,90,210,0.28)',
 };
 
-// ── Category chips ────────────────────────────────────────────────────────────
-const CAT_CHIPS = ['History','Nature','Architecture','Food','Music','Weird','Roadside','Film','Science'] as const;
-
-const CATEGORY_ICONS: Record<string, React.ComponentType<IconProps>> = {
-  'History':      IconHistory,
-  'Nature':       IconNature,
-  'Architecture': IconArchitecture,
-  'Food':         IconFood,
-  'Music':        IconMusic,
-  'Weird':        IconWeird,
-  'Roadside':     IconRoadside,
-  'Film':         IconFilm,
-  'Science':      IconScience,
-};
+// ── Category slug mapping ─────────────────────────────────────────────────────
+// UI labels ≠ DB slugs. Home's `selectedCategories` (Zustand) is set by the
+// customize screen's chip grid; home consumes the same state to filter its
+// route-POI overlay and `get_corridor_pois` RPC params. The chip rail
+// previously rendered at the top of the home screen was removed — customize
+// is now the sole UI for category selection app-wide.
 const CAT_SLUG: Record<string,string> = {
   History:'history', Nature:'nature', Architecture:'architecture',
   Food:'food_drink', Music:'local_culture', Weird:'hidden_gems',
@@ -535,11 +515,10 @@ export default function MapScreen() {
   const [browsePOIs,       setBrowsePOIs]       = useState<POI[]>([]);
   const browseFetchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastRegionRef    = useRef(INITIAL_REGION);
-  // Category chip filter — sourced from Zustand session store (drift 5.80).
-  // Both home and customize read/write the same `selectedCategories` array.
+  // Category filter — sourced from Zustand session store (drift 5.80).
+  // The customize screen's chip grid is the sole UI for setting this; home
+  // consumes it to filter route-POI overlay and `get_corridor_pois` params.
   const selectedCategories = useTripStore(s => s.selectedCategories);
-  const toggleCategory     = useTripStore(s => s.toggleCategory);
-  const [chipsScrolled, setChipsScrolled] = useState(false);
 
   // Active trip mode (Drive | Hike) — drift 5.82. Persisted in Zustand.
   const activeTripMode    = useTripStore(s => s.activeTripMode);
@@ -1666,10 +1645,6 @@ export default function MapScreen() {
     // cleanly inside a tight circle, no italic lean). includeFontPadding +
     // textAlignVertical handle Android's built-in font-padding so centered
     // numerals don't sit a hair high in the bubble.
-    chipRowWrap: { position: 'relative' },
-    chipFadeLeft:  { position: 'absolute', left: 0,  top: 0, bottom: 0, width: 20 },
-    chipFadeRight: { position: 'absolute', right: 0, top: 0, bottom: 0, width: 20 },
-    chipRow: { paddingHorizontal: 12, paddingVertical: 2, gap: 8, flexDirection: 'row' },
   }), [theme]);
 
   // ── Render ─────────────────────────────────────────────────────────────────
@@ -2051,54 +2026,6 @@ export default function MapScreen() {
               }
             </TouchableOpacity>
           </View>
-          <View style={s.chipRowWrap}>
-            <ScrollView
-              horizontal
-              showsHorizontalScrollIndicator={false}
-              contentContainerStyle={s.chipRow}
-              scrollEventThrottle={60}
-              onScroll={e => {
-                const scrolled = e.nativeEvent.contentOffset.x > 0;
-                if (scrolled !== chipsScrolled) setChipsScrolled(scrolled);
-              }}
-            >
-              {CAT_CHIPS.map(chip => {
-                const isActive = selectedCategories.includes(chip);
-                const Icon = CATEGORY_ICONS[chip];
-                return (
-                  <CategoryChip
-                    key={chip}
-                    label={chip}
-                    active={isActive}
-                    onToggle={() => toggleCategory(chip)}
-                    icon={Icon ? (
-                      <Icon
-                        size={14}
-                        color={isActive ? theme.colors.paperSoft : theme.colors.ink}
-                        accent={isActive ? theme.colors.paperSoft : theme.colors.accent}
-                      />
-                    ) : undefined}
-                  />
-                );
-              })}
-            </ScrollView>
-            {chipsScrolled && (
-              <LinearGradient
-                pointerEvents="none"
-                colors={[theme.colors.paper, 'transparent']}
-                start={{ x: 0, y: 0 }}
-                end={{ x: 1, y: 0 }}
-                style={s.chipFadeLeft}
-              />
-            )}
-            <LinearGradient
-              pointerEvents="none"
-              colors={['transparent', theme.colors.paper]}
-              start={{ x: 0, y: 0 }}
-              end={{ x: 1, y: 0 }}
-              style={s.chipFadeRight}
-            />
-          </View>
         </SafeAreaView>
       )}
 
@@ -2256,31 +2183,6 @@ export default function MapScreen() {
               <Text style={{ fontSize: 13 }}>👤</Text>
             </View>
           </TouchableOpacity>
-          <ScrollView
-            horizontal
-            showsHorizontalScrollIndicator={false}
-            contentContainerStyle={s.chipRow}
-          >
-            {CAT_CHIPS.map(chip => {
-              const isActive = selectedCategories.includes(chip);
-              const Icon = CATEGORY_ICONS[chip];
-              return (
-                <CategoryChip
-                  key={chip}
-                  label={chip}
-                  active={isActive}
-                  onToggle={() => toggleCategory(chip)}
-                  icon={Icon ? (
-                    <Icon
-                      size={14}
-                      color={isActive ? theme.colors.paperSoft : theme.colors.ink}
-                      accent={isActive ? theme.colors.paperSoft : theme.colors.accent}
-                    />
-                  ) : undefined}
-                />
-              );
-            })}
-          </ScrollView>
         </View>
       )}
 
