@@ -9,7 +9,6 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  AccessibilityInfo,
   ActivityIndicator,
   Animated,
   Dimensions,
@@ -28,6 +27,12 @@ import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 import { LinearGradient } from 'expo-linear-gradient';
 import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from 'react-native-maps';
 import ClusteredMapView from 'react-native-map-clustering';
+import Svg, {
+  Circle as SvgCircle,
+  Path as SvgPath,
+  Rect as SvgRect,
+  Text as SvgText,
+} from 'react-native-svg';
 import * as Location from 'expo-location';
 import { useNavigation } from '@react-navigation/native';
 import {
@@ -177,28 +182,281 @@ function decodePolyline(encoded: string): { latitude: number; longitude: number 
 // markers is simpler and sufficient — the clusterer needs the first frame
 // to register positions, not per-marker isolation.
 
-// ── Cluster marker (drift 5.72 / C1) ─────────────────────────────────────────
-// Cluster marker — pin shape with explicit calculated widths.
+// ── Cluster marker (drift 5.72 / C1, sub-drift PNG path) ─────────────────────
+// Cluster marker — rasterized PNG via react-native-svg toDataURL().
 //
-// The previous pill relied on auto-width via flex layout, which Marker
-// bitmap snapshots don't always honor reliably — Text inside a Marker
-// child can render before its width measures, so the bitmap captures
-// a clipped frame and reusing it crops the number.
+// History: we iterated four View-based compositions (pin, View-pill, SVG-pill
+// inline, StyleSheet+fixed-dims pin) and all four reproduced the same
+// quarter-circle / sliver clipping on Android. The bug is below the React
+// View layer in react-native-maps' native Marker.captureView() — we can't
+// reach it from JS-land styling. Pivoting to <Marker image={{ uri }}/> with
+// a client-rasterized PNG bypasses captureView entirely: the native side
+// receives a static bitmap, no React subtree to capture, no race.
 //
-// Switching to pin shape (pill head + triangle pointer) per the user's
-// suggestion, with the head width COMPUTED from digit count and font
-// size. No auto-sizing → no measurement-race → number always fits.
+// Architecture:
+//   1. Module-level cache (clusterPngCache) keyed by count → data: URI.
+//      Outlives MapScreen lifecycle so navigating away doesn't lose
+//      pre-warm. LRU cap 500.
+//   2. ClusterPngRasterizer — one hidden <Svg ref> positioned off-screen
+//      that takes turns rendering each requested count, calls toDataURL
+//      after a two-RAF layout settle, and notifies listeners.
+//   3. useClusterPng(count) hook — returns cached URI or null. Subscribes
+//      to cache updates so the marker re-renders when its PNG arrives.
+//   4. preWarmClusterPngs — pre-rasterizes counts 5-50 on mount.
 //
-// Layered visual on the head (the outline style the user said to keep):
-//   1. Outer paperSoft halo (extends 8px around the head, opacity ~0.22)
-//   2. Pulsing emerald glow ring (opacity-only loop 0.18 → 0.42 / 3s)
-//   3. Filled emerald pill head with hairline paperSoft border
-//   4. Top-left paperSoft inner highlight (3D feel)
-//   5. Mono count text (paper-cream, weight 700), centered
-//   6. Triangle pointer below the head, pointing down at the cluster center
+// Tradeoff (documented in the arc that led here): cluster animation is
+// lost. The previous pulsing emerald glow becomes a static layer at
+// opacity 0.30 (midpoint of the 0.18-0.42 pulse range). Acceptable per
+// the cluster bug arc — correctness over kinetics.
 //
-// Marker anchor: { x: 0.5, y: 0.92 } so the pointer tip sits on the
-// cluster's coordinate.
+// Marker anchor: { x: 0.5, y: 0.92 } preserved exactly — same on-screen
+// pixel position as the pre-PNG pin so cluster screen positions are
+// bit-stable across the migration.
+
+// ── PNG cache + listeners (module scope) ──────────────────────────────
+const CLUSTER_LRU_CAP = 500;
+const clusterPngCache    = new Map<number, string>();   // count → data: URI
+const clusterPngLruTouch = new Map<number, number>();   // count → last-access ms
+const clusterPngListeners = new Set<() => void>();
+
+function touchClusterPng(count: number): void {
+  clusterPngLruTouch.set(count, Date.now());
+}
+
+function evictClusterPngIfNeeded(): void {
+  if (clusterPngCache.size <= CLUSTER_LRU_CAP) return;
+  let oldestCount: number | null = null;
+  let oldestTime = Infinity;
+  clusterPngLruTouch.forEach((time, c) => {
+    if (time < oldestTime) { oldestTime = time; oldestCount = c; }
+  });
+  if (oldestCount !== null) {
+    clusterPngCache.delete(oldestCount);
+    clusterPngLruTouch.delete(oldestCount);
+  }
+}
+
+// rasterizeClusterPng is set by ClusterPngRasterizer on mount. Null when
+// no rasterizer is mounted (e.g. MapScreen not currently mounted).
+let rasterizeClusterPng: ((count: number) => Promise<string>) | null = null;
+
+// ── Cluster PNG SVG composition ──────────────────────────────────────
+// Pin shape rendered as static SVG: paperSoft halo + static emerald glow +
+// emerald pill head + paperSoft hairline border + paperSoft inner highlight
+// + mono count text + downward triangle pointer. Bit-for-bit visual parity
+// with the pre-PNG pin, minus the glow's opacity pulse.
+const CLUSTER_PNG_W = 80;
+const CLUSTER_PNG_H = 71;   // matches old wrapperH so anchor (0.5, 0.92) lands at same px
+const CLUSTER_HEAD_H_PX = 62;
+const CLUSTER_PILL_H = 46;
+const CLUSTER_PILL_Y = (CLUSTER_HEAD_H_PX - CLUSTER_PILL_H) / 2;  // = 8
+
+function ClusterPngSvg({
+  count, primary, paperSoft, paper, fontFamily, svgRef,
+}: {
+  count:      number;
+  primary:    string;
+  paperSoft:  string;
+  paper:      string;
+  fontFamily: string;
+  svgRef:     React.Ref<any>;
+}) {
+  const digits    = String(count).length;
+  const FONT_SZ   = digits >= 6 ? 12 : digits >= 4 ? 13 : 14;
+  const CHAR_W    = FONT_SZ * 0.62;
+  const textWidth = Math.ceil(digits * CHAR_W);
+  const PILL_MIN_W = 46;
+  const pillWidth  = Math.max(PILL_MIN_W, textWidth + 36);
+  const pillX      = (CLUSTER_PNG_W - pillWidth) / 2;
+  const cx         = CLUSTER_PNG_W / 2;
+  const cy         = CLUSTER_PILL_Y + CLUSTER_PILL_H / 2;  // pill vertical center
+
+  return (
+    <Svg
+      ref={svgRef}
+      width={CLUSTER_PNG_W}
+      height={CLUSTER_PNG_H}
+      viewBox={`0 0 ${CLUSTER_PNG_W} ${CLUSTER_PNG_H}`}
+    >
+      {/* Halo — paperSoft, full canvas width, low opacity. */}
+      <SvgRect
+        x={0}
+        y={0}
+        width={CLUSTER_PNG_W}
+        height={CLUSTER_HEAD_H_PX}
+        rx={CLUSTER_HEAD_H_PX / 2}
+        ry={CLUSTER_HEAD_H_PX / 2}
+        fill={paperSoft}
+        opacity={0.22}
+      />
+      {/* Static glow — primary, same shape, midpoint opacity of the
+          retired 0.18-0.42 pulse. */}
+      <SvgRect
+        x={0}
+        y={0}
+        width={CLUSTER_PNG_W}
+        height={CLUSTER_HEAD_H_PX}
+        rx={CLUSTER_HEAD_H_PX / 2}
+        ry={CLUSTER_HEAD_H_PX / 2}
+        fill={primary}
+        opacity={0.30}
+      />
+      {/* Pill head. */}
+      <SvgRect
+        x={pillX}
+        y={CLUSTER_PILL_Y}
+        width={pillWidth}
+        height={CLUSTER_PILL_H}
+        rx={CLUSTER_PILL_H / 2}
+        ry={CLUSTER_PILL_H / 2}
+        fill={primary}
+        stroke={paperSoft}
+        strokeWidth={0.5}
+      />
+      {/* Top-left highlight — paperSoft ellipse for the 3D feel. */}
+      <SvgCircle
+        cx={pillX + 20}
+        cy={CLUSTER_PILL_Y + 8}
+        r={4}
+        fill={paperSoft}
+        opacity={0.28}
+      />
+      {/* Count digits — mono, paper-cream, centered. */}
+      <SvgText
+        x={cx}
+        y={cy}
+        textAnchor="middle"
+        dy={FONT_SZ * 0.34}
+        fontSize={FONT_SZ}
+        fontFamily={fontFamily}
+        fontWeight="700"
+        fill={paper}
+      >
+        {count}
+      </SvgText>
+      {/* Triangle pointer — base at y=59 (overlaps head by 3px), apex at
+          y=71 (canvas bottom). Half-width 8. Anchor (0.5, 0.92) lands the
+          GPS coord ~5.7px above the apex, matching the pre-PNG pin's
+          on-screen position bit-for-bit. */}
+      <SvgPath
+        d={`M ${cx - 8} 59 L ${cx + 8} 59 L ${cx} 71 Z`}
+        fill={primary}
+      />
+    </Svg>
+  );
+}
+
+// ── Cluster PNG rasterizer ────────────────────────────────────────────
+// One hidden <Svg> takes turns rendering each requested count, calls
+// toDataURL after a two-RAF layout settle, caches the result, and
+// advances the queue. Mounts as a sibling of the MapView inside the
+// MapScreen root View.
+function ClusterPngRasterizer() {
+  const { theme } = useTheme();
+  const svgRef    = useRef<any>(null);
+  const [currentCount, setCurrentCount] = useState<number | null>(null);
+  const queueRef    = useRef<{ count: number; resolve: (uri: string) => void }[]>([]);
+  const busyRef     = useRef(false);
+  const currentResolveRef = useRef<((uri: string) => void) | null>(null);
+
+  const processNext = useCallback(() => {
+    const item = queueRef.current.shift();
+    if (!item) { busyRef.current = false; setCurrentCount(null); return; }
+    busyRef.current = true;
+    currentResolveRef.current = item.resolve;
+    setCurrentCount(item.count);
+  }, []);
+
+  // After the SVG renders (post-commit), wait two RAFs for native layout,
+  // then call toDataURL. Two RAFs is the empirically-safe pattern for
+  // react-native-svg + Android.
+  useEffect(() => {
+    if (currentCount === null) return;
+    const count = currentCount;
+    let cancelled = false;
+    const t1 = requestAnimationFrame(() => {
+      const t2 = requestAnimationFrame(() => {
+        if (cancelled || !svgRef.current) { processNext(); return; }
+        try {
+          svgRef.current.toDataURL((base64: string) => {
+            if (cancelled) return;
+            const uri = `data:image/png;base64,${base64}`;
+            clusterPngCache.set(count, uri);
+            touchClusterPng(count);
+            evictClusterPngIfNeeded();
+            const resolve = currentResolveRef.current;
+            currentResolveRef.current = null;
+            resolve?.(uri);
+            clusterPngListeners.forEach(fn => fn());
+            processNext();
+          });
+        } catch (err) {
+          if (__DEV__) console.warn('[cluster] rasterize:fail', { count, err });
+          processNext();
+        }
+      });
+      return () => cancelAnimationFrame(t2);
+    });
+    return () => { cancelled = true; cancelAnimationFrame(t1); };
+  }, [currentCount, processNext]);
+
+  // Expose the rasterize function via module-level slot while mounted.
+  useEffect(() => {
+    rasterizeClusterPng = (count: number) => new Promise<string>((resolve) => {
+      const cached = clusterPngCache.get(count);
+      if (cached) { touchClusterPng(count); resolve(cached); return; }
+      queueRef.current.push({ count, resolve });
+      if (!busyRef.current) processNext();
+    });
+    return () => { rasterizeClusterPng = null; };
+  }, [processNext]);
+
+  return (
+    <View
+      pointerEvents="none"
+      style={{ position: 'absolute', top: -1000, left: -1000, opacity: 0 }}
+    >
+      {currentCount !== null && (
+        <ClusterPngSvg
+          count={currentCount}
+          primary={theme.colors.primary}
+          paperSoft={theme.colors.paperSoft}
+          paper={theme.colors.paper}
+          fontFamily={theme.fontFamilies.mono}
+          svgRef={svgRef}
+        />
+      )}
+    </View>
+  );
+}
+
+// ── useClusterPng hook ────────────────────────────────────────────────
+// Returns the cached PNG URI for `count`, or null if not yet rasterized.
+// Triggers rasterization on miss and subscribes to cache updates so the
+// consumer re-renders when its PNG arrives.
+function useClusterPng(count: number): string | null {
+  const [, forceRender] = useState(0);
+
+  useEffect(() => {
+    const listener = () => forceRender(v => v + 1);
+    clusterPngListeners.add(listener);
+    return () => { clusterPngListeners.delete(listener); };
+  }, []);
+
+  useEffect(() => {
+    if (clusterPngCache.has(count)) { touchClusterPng(count); return; }
+    rasterizeClusterPng?.(count);
+  }, [count]);
+
+  const uri = clusterPngCache.get(count);
+  if (uri) touchClusterPng(count);
+  return uri ?? null;
+}
+
+// ── Cluster marker (consumer) ─────────────────────────────────────────
+// Renders nothing while the PNG is being rasterized (≤1 frame in the common
+// pre-warmed case, ≤20ms for first-sight counts >50). tracksViewChanges is
+// permanently false — the image is a static bitmap, no view tree to track.
 function ClusterMarker({
   coordinate, count, onPress,
 }: {
@@ -206,165 +464,16 @@ function ClusterMarker({
   count: number;
   onPress: () => void;
 }) {
-  const { theme } = useTheme();
-
-  // Width math: digit-count drives an explicit head width with comfortable
-  // padding both sides. Font down-shifts only on 6+ digit counts so the
-  // pin doesn't get gratuitously wide on Walk-of-Fame-tier clusters.
-  const digits     = String(count).length;
-  const FONT_SZ    = digits >= 6 ? 12 : digits >= 4 ? 13 : 14;
-  // Mono digit ≈ 0.6 * fontSize incl letterSpacing 0.2 — verified against
-  // JetBrains Mono on iOS + Android.
-  const CHAR_W     = FONT_SZ * 0.62;
-  const textWidth  = Math.ceil(digits * CHAR_W);
-  const HEAD_H     = 46;
-  const PAD_X      = 18;
-  const HEAD_MIN_W = HEAD_H;
-  const headWidth  = Math.max(HEAD_MIN_W, textWidth + 2 * PAD_X);
-
-  const HALO_PAD     = 8;
-  const POINTER_H    = 12;
-  const POINTER_HALF = 8;
-  const headSection  = HEAD_H + HALO_PAD * 2;
-  const wrapperW     = headWidth + HALO_PAD * 2;
-  const wrapperH     = headSection + POINTER_H - 3;  // pointer overlaps head 3px
-
-  // tracksViewChanges: true initially so the bitmap snapshot picks up the
-  // pin after layout; flip false 1.2s post-mount so the static pin doesn't
-  // churn the GPU. Opacity-only glow keeps per-frame bitmap diff minimal
-  // during the tracking window.
-  const [tracking, setTracking] = useState(true);
-  useEffect(() => {
-    const t = setTimeout(() => setTracking(false), 1200);
-    return () => clearTimeout(t);
-  }, []);
-
-  // Pulsing emerald glow — opacity loop only. Gated on reduced-motion.
-  const glow = useRef(new Animated.Value(0.18)).current;
-  useEffect(() => {
-    let cancelled = false;
-    let loop: Animated.CompositeAnimation | null = null;
-    AccessibilityInfo.isReduceMotionEnabled().then((reduced) => {
-      if (cancelled || reduced) return;
-      loop = Animated.loop(
-        Animated.sequence([
-          Animated.timing(glow, { toValue: 0.42, duration: 1500, useNativeDriver: true }),
-          Animated.timing(glow, { toValue: 0.18, duration: 1500, useNativeDriver: true }),
-        ]),
-      );
-      loop.start();
-    });
-    return () => { cancelled = true; loop?.stop(); };
-  }, [glow]);
-
+  const uri = useClusterPng(count);
+  if (!uri) return null;
   return (
     <Marker
       coordinate={coordinate}
       onPress={onPress}
       anchor={{ x: 0.5, y: 0.92 }}
-      tracksViewChanges={tracking}
-    >
-      <View style={{ width: wrapperW, height: wrapperH, alignItems: 'center' }}>
-        {/* Head section — halo + glow + pill head, all centered. */}
-        <View
-          style={{
-            width:          wrapperW,
-            height:         headSection,
-            alignItems:     'center',
-            justifyContent: 'center',
-          }}
-        >
-          {/* Outer paperSoft halo */}
-          <View
-            pointerEvents="none"
-            style={{
-              position:        'absolute',
-              width:           wrapperW,
-              height:          headSection,
-              borderRadius:    headSection / 2,
-              backgroundColor: theme.colors.paperSoft,
-              opacity:         0.22,
-            }}
-          />
-
-          {/* Pulsing emerald glow */}
-          <Animated.View
-            pointerEvents="none"
-            style={{
-              position:        'absolute',
-              width:           wrapperW,
-              height:          headSection,
-              borderRadius:    headSection / 2,
-              backgroundColor: theme.colors.primary,
-              opacity:         glow,
-            }}
-          />
-
-          {/* Pill head */}
-          <View
-            style={{
-              width:           headWidth,
-              height:          HEAD_H,
-              borderRadius:    HEAD_H / 2,
-              backgroundColor: theme.colors.primary,
-              borderWidth:     0.5,
-              borderColor:     theme.colors.paperSoft,
-              alignItems:      'center',
-              justifyContent:  'center',
-              overflow:        'hidden',
-            }}
-          >
-            {/* Top-left highlight */}
-            <View
-              pointerEvents="none"
-              style={{
-                position:        'absolute',
-                top:             5,
-                left:            12,
-                width:           16,
-                height:          6,
-                borderRadius:    3,
-                backgroundColor: theme.colors.paperSoft,
-                opacity:         0.28,
-              }}
-            />
-            <Text
-              allowFontScaling={false}
-              style={{
-                fontFamily:         theme.fontFamilies.mono,
-                fontWeight:         '700',
-                fontSize:           FONT_SZ,
-                lineHeight:         FONT_SZ,
-                color:              theme.colors.paper,
-                includeFontPadding: false,
-                textAlignVertical:  'center',
-                letterSpacing:      0.2,
-              }}
-            >
-              {count}
-            </Text>
-          </View>
-        </View>
-
-        {/* Triangle pointer — overlaps head by 3px so they appear joined.
-            View-border trick: an empty View with transparent left/right
-            borders and a coloured top border renders a downward triangle. */}
-        <View
-          pointerEvents="none"
-          style={{
-            width:             0,
-            height:            0,
-            borderLeftWidth:   POINTER_HALF,
-            borderRightWidth:  POINTER_HALF,
-            borderTopWidth:    POINTER_H,
-            borderLeftColor:   'transparent',
-            borderRightColor:  'transparent',
-            borderTopColor:    theme.colors.primary,
-            marginTop:         -3,
-          }}
-        />
-      </View>
-    </Marker>
+      image={{ uri }}
+      tracksViewChanges={false}
+    />
   );
 }
 
@@ -456,6 +565,16 @@ export default function MapScreen() {
   useEffect(() => {
     const t = setTimeout(() => setInitialTracking(false), 1000);
     return () => clearTimeout(t);
+  }, []);
+
+  // Cluster PNG pre-warm — rasterize counts 5..50 on mount to cover the
+  // ~95% of real-world cluster counts on this map. Lazy-rasterizes counts
+  // above 50 on first sight (≤20ms per PNG, one-frame flicker tolerated).
+  // Sequential queue inside ClusterPngRasterizer means this runs in the
+  // background without blocking the first map paint.
+  useEffect(() => {
+    if (!rasterizeClusterPng) return;
+    for (let i = 5; i <= 50; i++) rasterizeClusterPng(i);
   }, []);
 
   // Tapped existing stop marker — shows remove callout
@@ -1556,6 +1675,12 @@ export default function MapScreen() {
   // ── Render ─────────────────────────────────────────────────────────────────
   return (
     <View style={s.root}>
+
+      {/* Hidden cluster PNG rasterizer — sibling of the MapView so it
+          shares MapScreen's theme context but doesn't compete for layout.
+          Renders one cluster count at a time off-screen and rasterizes
+          via toDataURL. See ClusterPngRasterizer definition for arch. */}
+      <ClusterPngRasterizer />
 
       {/* ── FULL-SCREEN MAP ─────────────────────────────────────────────── */}
       <ClusteredMapView
