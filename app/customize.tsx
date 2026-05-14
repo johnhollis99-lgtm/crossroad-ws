@@ -14,6 +14,9 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   Alert,
+  Animated,
+  Dimensions,
+  PanResponder,
   Platform,
   Pressable,
   ScrollView,
@@ -64,9 +67,12 @@ import { curateRoutePOIs, type Density } from '../src/lib/curation/curateRoutePO
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
-const MAP_PREVIEW_H = 200;
-const STATUS_TOP    = Platform.OS === 'ios' ? 50 : ((StatusBar.currentHeight ?? 24) + 8);
-const MAPBOX_TOKEN  = process.env.EXPO_PUBLIC_MAPBOX_TOKEN!;
+const { height: SCREEN_H } = Dimensions.get('window');
+const MAP_PEEK_MIN = 200;
+const MAP_PEEK_MAX = Math.round(SCREEN_H * 0.55);
+const STATUS_TOP   = Platform.OS === 'ios' ? 50 : ((StatusBar.currentHeight ?? 24) + 8);
+const MAPBOX_TOKEN = process.env.EXPO_PUBLIC_MAPBOX_TOKEN!;
+const PEEK_SPRING  = { useNativeDriver: false as const, friction: 9, tension: 80 };
 
 type Depth = 'glance' | 'ride_along' | 'deep_dive';
 
@@ -268,8 +274,6 @@ export default function CustomizeScreen() {
     : { polylineCoords: [], destLat: null, destLng: null };
 
   const polylineCoords: { latitude: number; longitude: number }[] = routePreview.polylineCoords ?? [];
-  const midIdx = Math.floor(polylineCoords.length / 2);
-  const midPoint = polylineCoords[midIdx] ?? { latitude: 34.05, longitude: -118.24 };
 
   // ── Trip-mode awareness ──────────────────────────────────────────────────
   const activeTripMode = useTripStore(s => s.activeTripMode);
@@ -324,6 +328,51 @@ export default function CustomizeScreen() {
   }, [poiMax]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => { loadMapStyle().then(setMapStyleId); }, []);
+
+  // ── Drag-to-expand map peek ──────────────────────────────────────────────
+  // Inline PanResponder mirrors hooks/useSheetSnap.ts but with inverted
+  // direction: handle sits at the bottom of the peek, so a DOWN drag grows
+  // the peek and an UP drag shrinks it. Two snap points only (min / max);
+  // release picks by velocity (±0.5 throw) or nearest-snap distance.
+  const mapRef     = useRef<MapView | null>(null);
+  const peekHeight = useRef(new Animated.Value(MAP_PEEK_MIN)).current;
+  const peekStart  = useRef(MAP_PEEK_MIN);
+  const peekPan    = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => true,
+      onMoveShouldSetPanResponder:  (_e, gs) => Math.abs(gs.dy) > 4,
+      onPanResponderGrant: () => {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        peekStart.current = (peekHeight as any)._value as number;
+      },
+      onPanResponderMove: (_e, gs) => {
+        const next = Math.max(MAP_PEEK_MIN, Math.min(MAP_PEEK_MAX, peekStart.current + gs.dy));
+        peekHeight.setValue(next);
+      },
+      onPanResponderRelease: (_e, gs) => {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const cur = (peekHeight as any)._value as number;
+        const vy  = gs.vy;
+        let target: number;
+        if (vy > 0.5)       target = MAP_PEEK_MAX;
+        else if (vy < -0.5) target = MAP_PEEK_MIN;
+        else                target = (cur - MAP_PEEK_MIN) < (MAP_PEEK_MAX - cur) ? MAP_PEEK_MIN : MAP_PEEK_MAX;
+        Animated.spring(peekHeight, { toValue: target, ...PEEK_SPRING }).start();
+      },
+    })
+  ).current;
+
+  // Fit the polyline on first map ready (and on map-style remounts via
+  // key={mapStyleId}). Replaces the old static initialRegion approach so
+  // the full trip route is framed by default at any peek size.
+  const handleMapReady = useCallback(() => {
+    if (polylineCoords.length > 1 && mapRef.current) {
+      mapRef.current.fitToCoordinates(polylineCoords, {
+        edgePadding: { top: 40, right: 40, bottom: 60, left: 40 },
+        animated:    false,
+      });
+    }
+  }, [polylineCoords]);
 
   // ── Stats / curation refresh ─────────────────────────────────────────────
   const HIKING_PACE_MIN_PER_MI = 20;
@@ -585,25 +634,28 @@ export default function CustomizeScreen() {
         </View>
       </View>
 
-      {/* ── MAP PEEK — non-interactive route preview, no overlays ──────── */}
-      <View style={styles.mapWrap}>
+      {/* ── MAP PEEK — drag-to-expand interactive map ─────────────────────
+          Animated.View height drives the peek. Min 200 / max ~55% screen.
+          Drag handle at bottom (paper-cream chip + paperEdge pill) accepts
+          vertical pan via inline PanResponder. MapView gestures (pan / zoom
+          / rotate) enabled at all sizes so the user can explore inside the
+          map body without conflicting with the drag handle (separate touch
+          regions). Pitch + toolbar stay disabled. fitToCoordinates on
+          map-ready frames the full route by default. */}
+      <Animated.View style={[styles.mapWrap, { height: peekHeight }]}>
         <MapView
+          ref={mapRef}
           key={mapStyleId}
           style={StyleSheet.absoluteFillObject}
           provider={PROVIDER_GOOGLE}
           mapType={activeMapStyle.mapType}
           customMapStyle={activeMapStyle.customMapStyle as any}
-          scrollEnabled={false}
-          zoomEnabled={false}
-          rotateEnabled={false}
+          scrollEnabled
+          zoomEnabled
+          rotateEnabled
           pitchEnabled={false}
           toolbarEnabled={false}
-          initialRegion={{
-            latitude:       midPoint.latitude,
-            longitude:      midPoint.longitude,
-            latitudeDelta:  0.10,
-            longitudeDelta: 0.10,
-          }}
+          onMapReady={handleMapReady}
         >
           {polylineCoords.length > 1 && (
             <Polyline
@@ -624,14 +676,34 @@ export default function CustomizeScreen() {
           )}
         </MapView>
 
-        {/* Gradient fade — bottom 110px of the map blends into the sheet bg */}
+        {/* Gradient fade — placed INSIDE Animated.View so it stays anchored
+            to the bottom edge of the peek at any height (not the old 200px
+            boundary). pointerEvents="none" keeps the drag handle tappable. */}
         <LinearGradient
           pointerEvents="none"
           colors={['transparent', theme.colors.paper]}
           locations={[0, 1]}
           style={styles.mapFade}
         />
-      </View>
+
+        {/* Drag handle — bottom-center, paper-cream chip backing keeps the
+            pill visible against bright satellite / topo imagery. Painted
+            after the gradient so it sits on top. */}
+        <View style={styles.dragHandleAnchor} {...peekPan.panHandlers}>
+          <View
+            style={[
+              styles.dragHandleChip,
+              {
+                backgroundColor: theme.colors.paperSoft,
+                borderColor:     theme.colors.paperEdge,
+              },
+              Platform.OS === 'android' ? { elevation: 4 } : shadows.control,
+            ]}
+          >
+            <View style={[styles.dragHandlePill, { backgroundColor: theme.colors.paperEdge }]} />
+          </View>
+        </View>
+      </Animated.View>
 
       {/* ── BOTTOM SHEET — scrollable curation controls only ─────────────── */}
       <ScrollView
@@ -852,11 +924,37 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
   },
 
-  // Map peek (overlays removed in prompt 2 — back btn + wordmark + picker
-  // now live in the header card above). Height reduced 240 → 200 to leave
-  // more room for the card + scroll content.
-  mapWrap:  { height: MAP_PREVIEW_H, overflow: 'hidden' },
+  // Map peek — height is supplied by the Animated.Value `peekHeight` inline
+  // on the Animated.View; only overflow stays here so children clip to the
+  // current peek height as it animates between MIN (200) and MAX (~55% H).
+  mapWrap:  { overflow: 'hidden' },
   mapFade:  { position: 'absolute', bottom: 0, left: 0, right: 0, height: 110 },
+
+  // Drag handle for the peek. Anchor wraps a paper-cream chip that backs a
+  // small paperEdge pill — chip + shadow keep the handle visible against
+  // bright satellite/topo imagery. paddingVertical sized for a ~52pt
+  // touch target without making the chip itself bulky.
+  dragHandleAnchor: {
+    position:        'absolute',
+    bottom:          0,
+    left:            0,
+    right:           0,
+    alignItems:      'center',
+    paddingVertical: 14,
+  },
+  dragHandleChip: {
+    paddingVertical:   6,
+    paddingHorizontal: 14,
+    borderRadius:      999,
+    borderWidth:       1,
+    alignItems:        'center',
+    justifyContent:    'center',
+  },
+  dragHandlePill: {
+    width:        36,
+    height:       4,
+    borderRadius: 2,
+  },
   backBtn: {
     width:           40,
     height:          40,
