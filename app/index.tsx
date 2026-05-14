@@ -28,7 +28,6 @@ import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 import { LinearGradient } from 'expo-linear-gradient';
 import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from 'react-native-maps';
 import ClusteredMapView from 'react-native-map-clustering';
-import Svg, { Circle } from 'react-native-svg';
 import * as Location from 'expo-location';
 import { useNavigation } from '@react-navigation/native';
 import {
@@ -179,23 +178,21 @@ function decodePolyline(encoded: string): { latitude: number; longitude: number 
 // to register positions, not per-marker isolation.
 
 // ── Cluster marker (drift 5.72 / C1) ─────────────────────────────────────────
-// Cluster bubble — Pine spec section 4 layered composition:
-//   1. Outer paperSoft halo (opacity 0.18)
-//   2. Slowly-rotating dashed ring (24s/360°, paperSoft stroke)
-//   3. Filled emerald disc with hairline paperSoft border
+// Cluster bubble — pill shape that auto-grows horizontally with content so
+// counts of any digit length fit comfortably (no more clipping on 4+ digit
+// numbers). Layered visual:
+//
+//   1. Outer paperSoft halo (extends 6px around the pill, opacity ~0.22)
+//   2. Pulsing emerald glow ring (opacity-only loop, no scale — pill shape
+//      isn't symmetric so transform-scale would look skewed)
+//   3. Filled emerald pill with hairline paperSoft border
 //   4. Top-left paperSoft inner highlight (3D feel)
 //   5. Mono count text (paper-cream), centered
 //
-// Size scales with digit count so the count text never clips:
-//   1–9       40px disc
-//   10–99     46px disc
-//   100–999   54px disc
-//   1000–9999 64px disc
-//   10000+    74px disc
-//
-// tracksViewChanges stays true so the rotation animation keeps refreshing
-// the native bitmap. Visible clusters are typically few (1–6 at any zoom)
-// so the perf cost is bounded; for static fallback, gate on reduced-motion.
+// Height fixed at 46px; minWidth equals height so small counts read as
+// roughly-circular ovals. Text padding 16px each side. A 4-digit count at
+// mono 14px → ~32px text width → ~64px pill. A 7-digit count → ~85px pill.
+// Always fits, always reads.
 function ClusterMarker({
   coordinate, count, onPress,
 }: {
@@ -204,114 +201,142 @@ function ClusterMarker({
   onPress: () => void;
 }) {
   const { theme } = useTheme();
+  const HEIGHT  = 46;
+  const PAD_X   = 16;
+  const FONT_SZ = 14;
 
-  const size =
-    count < 10    ? 40 :
-    count < 100   ? 46 :
-    count < 1000  ? 54 :
-    count < 10000 ? 64 :
-                    74;
-  const fontSize = count < 1000 ? 14 : count < 10000 ? 13 : 12;
+  // tracksViewChanges: true initially so the bitmap snapshot picks up the
+  // pill after layout (drift 5.66 / 5.94 pattern); flip false 1s post-mount
+  // so the static pill doesn't churn the GPU. The pulsing glow uses opacity
+  // only so the bitmap diff per frame is minimal even while tracking.
+  const [tracking, setTracking] = useState(true);
+  useEffect(() => {
+    const t = setTimeout(() => setTracking(false), 1200);
+    return () => clearTimeout(t);
+  }, []);
 
-  // Halo extends 6px beyond the disc; SVG viewbox sized to contain it.
-  const viewSize = size + 12;
-  const center   = viewSize / 2;
-  const r        = size / 2;
-  const haloR    = r + 6;
-  const ringR    = r + 3;
-
-  // Rotation loop — Pine spec `clusterRing` 24s linear infinite. Gated on
-  // reduced-motion (parks at 0deg, no loop started). useRef + Animated
-  // value drive the wrapper's transform via interpolation.
-  const rotProgress = useRef(new Animated.Value(0)).current;
+  // Pulsing glow — opacity loop only, no scale (a pill can't symmetrically
+  // scale up). Gated on reduced-motion (parks at min opacity).
+  const glow = useRef(new Animated.Value(0.18)).current;
   useEffect(() => {
     let cancelled = false;
     let loop: Animated.CompositeAnimation | null = null;
     AccessibilityInfo.isReduceMotionEnabled().then((reduced) => {
       if (cancelled || reduced) return;
       loop = Animated.loop(
-        Animated.timing(rotProgress, {
-          toValue: 1,
-          duration: 24000,
-          useNativeDriver: true,
-        }),
+        Animated.sequence([
+          Animated.timing(glow, { toValue: 0.4,  duration: 1500, useNativeDriver: true }),
+          Animated.timing(glow, { toValue: 0.18, duration: 1500, useNativeDriver: true }),
+        ]),
       );
       loop.start();
     });
     return () => { cancelled = true; loop?.stop(); };
-  }, [rotProgress]);
-  const rotation = rotProgress.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '360deg'] });
+  }, [glow]);
 
   return (
     <Marker
       coordinate={coordinate}
       onPress={onPress}
       anchor={{ x: 0.5, y: 0.5 }}
-      tracksViewChanges
+      tracksViewChanges={tracking}
     >
-      <View
-        style={{
-          width:           viewSize,
-          height:          viewSize,
-          alignItems:      'center',
-          justifyContent:  'center',
-        }}
-      >
-        {/* Static layers — halo + filled disc + border + highlight. */}
-        <Svg width={viewSize} height={viewSize} style={StyleSheet.absoluteFill}>
-          <Circle cx={center} cy={center} r={haloR} fill={theme.colors.paperSoft} opacity={0.18} />
-          <Circle cx={center} cy={center} r={r}     fill={theme.colors.primary} />
-          <Circle cx={center} cy={center} r={r}     fill="none" stroke={theme.colors.paperSoft} strokeWidth={0.5} opacity={0.5} />
-          <Circle
-            cx={center - r * 0.32}
-            cy={center - r * 0.4}
-            r={r * 0.22}
-            fill={theme.colors.paperSoft}
-            opacity={0.32}
-          />
-        </Svg>
+      <View style={pillStyles.outer}>
+        {/* Outer halo — paperSoft, semi-transparent, extends past the pill
+            via inset on the outer container's padding. */}
+        <View
+          pointerEvents="none"
+          style={[
+            pillStyles.halo,
+            { backgroundColor: theme.colors.paperSoft },
+          ]}
+        />
 
-        {/* Rotating dashed ring layer — separate Animated wrapper so only
-            the ring spins; the underlying disc + count stay still. */}
+        {/* Pulsing emerald glow ring — opacity-only animation, primary tint. */}
         <Animated.View
           pointerEvents="none"
-          style={[StyleSheet.absoluteFill, { transform: [{ rotate: rotation }] }]}
-        >
-          <Svg width={viewSize} height={viewSize}>
-            <Circle
-              cx={center}
-              cy={center}
-              r={ringR}
-              fill="none"
-              stroke={theme.colors.paperSoft}
-              strokeWidth={0.8}
-              strokeDasharray="2.4 3.6"
-              opacity={0.55}
-            />
-          </Svg>
-        </Animated.View>
+          style={[
+            pillStyles.halo,
+            { backgroundColor: theme.colors.primary, opacity: glow },
+          ]}
+        />
 
-        {/* Count text — JetBrains Mono 600 + tabular figures align cleanly,
-            includeFontPadding + textAlignVertical handle Android's
-            built-in padding so centered numerals don't sit a hair high. */}
-        <Text
-          allowFontScaling={false}
-          style={{
-            fontFamily:         theme.fontFamilies.mono,
-            fontWeight:         '600',
-            fontSize,
-            lineHeight:         fontSize,
-            color:              theme.colors.paper,
-            includeFontPadding: false,
-            textAlignVertical:  'center',
-          }}
+        {/* Pill body — auto-width via content. */}
+        <View
+          style={[
+            pillStyles.body,
+            {
+              height:            HEIGHT,
+              minWidth:          HEIGHT,
+              paddingHorizontal: PAD_X,
+              backgroundColor:   theme.colors.primary,
+              borderColor:       theme.colors.paperSoft,
+            },
+          ]}
         >
-          {count}
-        </Text>
+          {/* Top-left inner highlight — small soft elliptical shine. */}
+          <View
+            pointerEvents="none"
+            style={[
+              pillStyles.highlight,
+              { backgroundColor: theme.colors.paperSoft },
+            ]}
+          />
+
+          <Text
+            allowFontScaling={false}
+            style={{
+              fontFamily:         theme.fontFamilies.mono,
+              fontWeight:         '700',
+              fontSize:           FONT_SZ,
+              lineHeight:         FONT_SZ,
+              color:              theme.colors.paper,
+              includeFontPadding: false,
+              textAlignVertical:  'center',
+              letterSpacing:      0.2,
+            }}
+          >
+            {count}
+          </Text>
+        </View>
       </View>
     </Marker>
   );
 }
+
+const pillStyles = StyleSheet.create({
+  outer: {
+    position:       'relative',
+    alignItems:     'center',
+    justifyContent: 'center',
+    padding:        6,        // gives halo room beyond pill body
+  },
+  halo: {
+    position:     'absolute',
+    top:          0,
+    left:         0,
+    right:        0,
+    bottom:       0,
+    borderRadius: 999,
+    opacity:      0.22,
+  },
+  body: {
+    flexDirection:  'row',
+    alignItems:     'center',
+    justifyContent: 'center',
+    borderRadius:   999,
+    borderWidth:    0.5,
+  },
+  highlight: {
+    position:     'absolute',
+    top:          5,
+    left:         10,
+    width:        16,
+    height:       6,
+    borderRadius: 3,
+    opacity:      0.28,
+  },
+});
 
 function formatDuration(min: number): string {
   if (min < 60) return `${min}m`;
@@ -1127,11 +1152,62 @@ export default function MapScreen() {
 
     // Top safe area + search
     topSafe:  { position: 'absolute', top: 0, left: 0, right: 0 },
-    logoWrap: { alignItems: 'center', paddingVertical: 4 },
 
-    // Drive | Hike-or-Walk row outer wrapper (drift 5.93). Vertical padding
-    // only; horizontal padding + pill geometry live inside ModePillRow itself.
-    modePillRow: { paddingTop: 6, paddingBottom: 2 },
+    // Single rounded header card (Pine spec section 3 home header layout)
+    // — replaces the three previously-floating chips (Wordmark pill +
+    // ModePillRow + searchPill) with one contained box. Card has paperSoft
+    // bg, paperEdge border, rounded corners, padding sufficient for all
+    // three internal rows.
+    headerCard: {
+      marginTop:         8,
+      marginHorizontal:  12,
+      backgroundColor:   theme.colors.paperSoft,
+      borderRadius:      26,
+      borderWidth:       1,
+      borderColor:       theme.colors.paperEdge,
+      paddingTop:        14,
+      paddingBottom:     12,
+      paddingHorizontal: 14,
+      gap:               12,
+      ...Platform.select({
+        ios: {
+          shadowColor:   '#000',
+          shadowOffset:  { width: 0, height: 8 },
+          shadowOpacity: 0.4,
+          shadowRadius:  20,
+        },
+        android: { elevation: 10 },
+        default: {},
+      }),
+    },
+    headerRow1: {
+      flexDirection:  'row',
+      alignItems:     'center',
+      justifyContent: 'space-between',
+    },
+    headerAvatar: {
+      width:           34,
+      height:          34,
+      borderRadius:    17,
+      backgroundColor: theme.colors.paperWarm,
+      borderWidth:     1,
+      borderColor:     theme.colors.paperEdge,
+      alignItems:      'center',
+      justifyContent:  'center',
+    },
+    // Search field inside the header card — paperWarm pill (deeper than
+    // the surrounding paperSoft card so the field visibly recedes).
+    headerSearch: {
+      flexDirection:     'row',
+      alignItems:        'center',
+      gap:               10,
+      height:            42,
+      borderRadius:      999,
+      backgroundColor:   theme.colors.paperWarm,
+      borderWidth:       1,
+      borderColor:       theme.colors.paperEdge,
+      paddingHorizontal: 14,
+    },
     devNavRow: {
       position: 'absolute', top: 4, right: 20,
       flexDirection: 'row', gap: 8, zIndex: 100,
@@ -1775,13 +1851,20 @@ export default function MapScreen() {
               </TouchableOpacity>
             </View>
           )}
-          <View style={s.logoWrap} pointerEvents="none">
-            <Wordmark size="m" background="pill" squiggle />
-          </View>
+          {/* Header card — single rounded box containing wordmark + avatar
+              row, mode toggle, and search field. Matches Pine spec section
+              3 home header layout (originally 3 stacked floating chips). */}
+          <View style={s.headerCard}>
+            {/* Row 1: squiggle + wordmark on the left, avatar on the right */}
+            <View style={s.headerRow1}>
+              <Wordmark size="m" squiggle />
+              <View style={s.headerAvatar}>
+                <Text style={{ fontSize: 14 }}>👤</Text>
+              </View>
+            </View>
 
-          {/* Drive | Hike-or-Walk mode selector (drift 5.93). Persists via tripStore.
-              Tapping Hike/Walk navigates to /hiking — no separate /walk route. */}
-          <View style={s.modePillRow}>
+            {/* Row 2: Drive | Walk mode toggle (drift 5.93). Persists via
+                tripStore. Tapping Walk navigates to /hiking. */}
             <ModePillRow
               value={activeTripMode}
               onChange={(next) => {
@@ -1789,32 +1872,30 @@ export default function MapScreen() {
                 if (next === 'hiking') navigation.navigate('hiking');
               }}
             />
-          </View>
 
-          <TouchableOpacity
-            style={s.searchPill}
-            onPress={() => openLocOverlay('dest')}
-            activeOpacity={0.85}
-          >
-            <Text style={s.searchPillIcon}>🔍</Text>
-            <Text style={[s.searchPillText, !destination && s.searchPillPlaceholder]} numberOfLines={1}>
-              {destination || 'Where to?'}
-            </Text>
-            {loadingRoute
-              ? <ActivityIndicator size="small" color={theme.colors.primary} style={{ marginRight: 4 }} />
-              : destination.length > 0 && (
-                <TouchableOpacity
-                  onPress={() => { setDestination(''); setDestCoords(null); clearRoutes(); }}
-                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                >
-                  <Text style={s.clearBtn}>✕</Text>
-                </TouchableOpacity>
-              )
-            }
-            <View style={s.searchPillAvatar}>
-              <Text style={{ fontSize: 13 }}>👤</Text>
-            </View>
-          </TouchableOpacity>
+            {/* Row 3: Search field */}
+            <TouchableOpacity
+              style={s.headerSearch}
+              onPress={() => openLocOverlay('dest')}
+              activeOpacity={0.85}
+            >
+              <Text style={s.searchPillIcon}>🔍</Text>
+              <Text style={[s.searchPillText, !destination && s.searchPillPlaceholder]} numberOfLines={1}>
+                {destination || 'Where to?'}
+              </Text>
+              {loadingRoute
+                ? <ActivityIndicator size="small" color={theme.colors.primary} style={{ marginRight: 4 }} />
+                : destination.length > 0 && (
+                  <TouchableOpacity
+                    onPress={() => { setDestination(''); setDestCoords(null); clearRoutes(); }}
+                    hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                  >
+                    <Text style={s.clearBtn}>✕</Text>
+                  </TouchableOpacity>
+                )
+              }
+            </TouchableOpacity>
+          </View>
           <View style={s.chipRowWrap}>
             <ScrollView
               horizontal

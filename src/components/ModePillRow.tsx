@@ -156,9 +156,8 @@ export function ModePillRow({ value, onChange, testID }: ModePillRowProps) {
 
 const styles = StyleSheet.create({
   row: {
-    flexDirection:     'row',
-    gap:               8,
-    paddingHorizontal: 14,
+    flexDirection: 'row',
+    gap:           8,
   },
   pill: {
     flex:              1,
