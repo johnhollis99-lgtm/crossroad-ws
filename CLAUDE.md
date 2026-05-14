@@ -5,6 +5,124 @@
 XRoad (rebranded from RoadStory 2026-05-04) — GPS-triggered AI narration for road trips and hikes.
 Package/slug names still say "roadstory" internally; all user-facing strings say "XRoad".
 
+## Pine redesign — current direction (landed 2026-05-14)
+
+Pine **fully supersedes Field Notes** per Claude Design clarification — single dark theme, near-black surfaces, emerald + cobalt + danger-rose accent system. The "Design system — Field Notes" and "Field Notes brand chip family + map integration" sections further down in this doc are **historical context only**; do not reference them for current design decisions.
+
+### Commit chain on `origin/main`
+
+- `880b807` — Foundation: Pine tokens + theme.ts (single dark + CVD swap) + fonts.ts (Instrument Serif + DM Sans) + 17 components rebuilt + 6 new Phase-2 atoms + Customize full rebuild + Drive full rebuild + app/index.tsx token migration
+- `e9a2659` — Paper surfaces swapped from forest-green to near-black per user preference
+- `160b88a` — POI marker visual upgrade (target ring + bicolor X + cream halo for cross-map visibility) + sonar pulse on the active POI in drive + user-location halo pulse
+- `c85b562` — Cluster pill auto-width attempt + home top-header consolidated into a single rounded card with chip rail below
+- `7325b58` — Cluster marker rebuilt as a **pin shape with explicit calculated widths** (the pill auto-width was racing Marker bitmap snapshots — see "Marker auto-sizing gotcha" below)
+
+### Palette (sole source: `src/design/tokens.ts`)
+
+```
+paper             #0A0A0A   near-black canvas
+paperSoft         #141414   text-on-accent + low-elevation surface
+paperWarm         #1E1E1E   search field, active tab pill
+paperEdge         #2E2E2E   borders / dividers
+
+ink               #E8FAEF   body text, icon stroke
+inkSoft           #9ACCB0   secondary text
+inkFaint          #5E907C   tertiary / decorative only
+
+line, lineSoft    rgba(232,250,239, 0.22 / 0.10)
+
+primary           #10B981   emerald — primary CTAs, route polyline, POI X glyph fill
+primaryDeep       #059669
+primaryTint       rgba(16,185,129,0.14)
+primaryTintEdge   rgba(16,185,129,0.28)
+
+secondary         #60A5FA   cobalt — icon accent, Add stop pill, user-location dot
+secondaryDeep     #3B82F6
+secondaryTint     rgba(96,165,250,0.14)
+secondaryTintEdge rgba(96,165,250,0.28)
+
+cvdSafe           #F59E0B   amber — CVD-safe accent (swaps in for cobalt when CVD toggle on)
+
+danger            #E11D48   rose — End trip, destructive CTAs
+dangerDeep        #BE123C
+dangerTint        rgba(225,29,72,0.16)
+```
+
+Note: the original Pine prompt specified `paper` = #08160F (forest-green tinted). Implementation swapped to neutral near-black per user feedback after Phase 2 landed.
+
+### Type ramp (`textVariants` in `src/design/tokens.ts`)
+
+`display` (32 italic) / `displaySmall` (26 italic) / `title` (22 italic) / `titleSmall` (20 italic) over **Instrument Serif italic**, plus `label` (14/700) / `body` (14/600) / `meta` (12/500) / `eyebrow` (10/700 UPPERCASE tracked) over **DM Sans**. Mono inline coords use **JetBrains Mono**.
+
+Phase-1 Field-Notes-era ramp keys (`h1`, `h2`, `h3`, `button`, `buttonStrong`, `ui`, `uiSmall`, `metaSmall`, `bodyItalic`) are gone — migrated by name during the app/index.tsx bulk token migration in commit `880b807`.
+
+### CVD-safe toggle
+
+`ThemeProvider` (in `src/design/theme.ts`) exposes `{ theme, cvdSafe, setCvdSafe }`. The `theme.colors.accent` token is CVD-aware: cobalt by default, amber when `cvdSafe === true`. Other secondary tokens (`secondary`, `secondaryDeep`, `secondaryTint`) stay cobalt regardless — only icon-accent semantics swap. Persisted via AsyncStorage key `xroad.cvdSafe`.
+
+### Motion (`src/design/motion.ts`)
+
+Three hooks, all gated on `AccessibilityInfo.isReduceMotionEnabled()`:
+
+- `useBreath({ min, max, duration })` — opacity loop. Used by the Trip XRoad watermark X (`min: 0.55, max: 0.95, duration: 2800`).
+- `useSonar({ duration, delay })` — Pine spec section 6 `sonarRing` (scale 0.6 → 2.5, opacity 0.7 → 0, 2.8s). Returns `{ scale, opacity }` interpolations. Used on the active POI marker in drive (two rings, second delayed 1.4s for the sustained double-ripple).
+- `useUserHalo({ duration })` — Pine spec `userHalo` (scale 1.0 → 1.5, opacity 0.22 → 0.06, 2.2s). Used on the user-location dot in drive.
+
+Cluster bubble has its own opacity-only glow loop inline in `ClusterMarker` (didn't need a shared hook — single consumer, opacity-only so the per-frame bitmap diff stays minimal).
+
+### Pine screens (Pine-themed, current)
+
+| Screen | File | State |
+|---|---|---|
+| Home | `app/index.tsx` | Pine palette + **single-card top header** (squiggle + Wordmark + avatar in row 1, ModePillRow in row 2, "Where to?" search in row 3) + category-icon chip rail below the card. Legacy bottom-sheet content (search results + customize CTA) still in place — Phase 3 rebuild target. |
+| Customize | `app/customize.tsx` | Full Pine rebuild: 240px map peek + IconArrowLeft back button + map-style chip + route summary inline row + 4-column TripStat strip + SegmentedTrio depth + 2×2 NarratorCard grid (Pine-coherent avatar palette: emerald / lilac / cobalt / amber) + CategoryChip rail with duotone icons + SegmentedTrio density + 2× LabeledSlider + sticky emerald Start trip CTA with IconCar. All handlers preserved (`handleStartTrip`, `toggleCategory`, curation effect, narrator load, map style change). |
+| Trip / drive | `app/drive.tsx` | Full Pine rebuild: emerald polyline + cobalt user-location dot with `useUserHalo` pulse + PersonaPill + StoriesBadge + 3-column TripStat card + retracted/deployed sheet states + breathing watermark X via `useBreath` + media controls + Up next queue + LabeledSlider story corridor + ModePillRow + Quiet pill + danger End trip pill. All handlers preserved (Audio, Socket.io, GPS, POI load + curation, queue, skip back/forward, end trip). |
+
+### Legacy screens (still on brown `C` palette from `lib/theme.ts`)
+
+`app/filters.tsx`, `app/driving.tsx`, `app/hiking.tsx`, `app/trail.tsx` + `.web` shims — Phase 3 / D2 migration target. Will look brown-tinted alongside the Pine screens until migrated.
+
+### Pine component primitives (Pine-themed, ready to consume — all in `src/components/`)
+
+Foundation atoms — `Wordmark` (optional `squiggle` prop for the home decoration), `Card`, `CategoryChip` (accepts optional `icon` slot for the category glyph), `SegmentedControl`, `SegmentedTrio`, `PrimaryButton`, `DangerButton`, `Kicker`, `FieldNotesDivider`, `GlassPill`, `OfflineBadge`, `AudienceMark`, `NarrationCard`, `Waveform`, `ModePillRow`.
+
+Phase-2 additions — `LabeledSlider`, `NarratorCard`, `PersonaPill`, `StoriesBadge`, `TripStat`.
+
+Map primitives — `PoiCallout`, `CoordinatesPill`, `PoiMarkerX` (40×40 wrapper, thin emerald target ring + bicolor X glyph with cobalt outline + cream halo via paintOrder).
+
+Icon library (`Icons.tsx`) — 22 duotone SVGs with a common `{ size, color, accent }` API: ArrowLeft, Play, Pause, SkipBack, SkipFwd, Volume, VolumeOff, Mic, Sparkle, Car, Hike, Close, History, Nature, Architecture, Food, Music, Art, Weird, Roadside, Film, Science. When `accent` is omitted it falls back to `color` for mono rendering — matching the spec's `var(--ax, currentColor)` pattern.
+
+Demo screens — `src/design/DesignSystemScreen.tsx` (palette + type ramp, default vs CVD-safe side-by-side panels), `src/components/ComponentsDemoScreen.tsx` (every component variant in one scroll with a CVD toggle pinned at top).
+
+### Map-marker discipline (current)
+
+**POI markers** (`PoiMarkerX`) must still be inlined as `<Marker>` children directly under `<ClusteredMapView>` (drift 5.94 — the clusterer's `isMarker` helper reads the `coordinate` prop directly off JSX children; function-component wrappers hide it). Wrap each POI's Marker with a `coordinate` prop; PoiMarkerX is the visual child.
+
+**Cluster markers** (`ClusterMarker` in `app/index.tsx`) — **pin shape**: pill head + triangle pointer. Anchor `{ x: 0.5, y: 0.92 }` so the pointer tip sits on the cluster's coordinate. Head width is **computed explicitly**: `headWidth = max(46, digits × 0.62 × fontSize + 2 × 18)` where `fontSize` is 14 / 13 / 12 for 1–3 / 4–5 / 6+ digit counts. See **"Marker auto-sizing gotcha"** below for why this is explicit.
+
+**Active POI in drive** — `ActivePoiMarker` in `app/drive.tsx`: paperSoft disc + emerald border + X glyph + two staggered sonar rings via `useSonar`. `tracksViewChanges` stays `true` for the active marker only (so the rings keep animating); inactive POI markers retain the drift-5.94 flip-to-false-after-1s discipline so 30+ static markers don't churn the GPU.
+
+**User location dot in drive** — `UserLocationMarker` in `app/drive.tsx`: secondaryDeep dot + animated outer halo via `useUserHalo`. `tracksViewChanges` true.
+
+### Marker auto-sizing gotcha (load-bearing for future cluster work)
+
+`react-native-maps` Markers with custom View children **do not reliably honor flex auto-width** when the content includes `<Text>` whose width depends on RN's layout-measurement pass. The Marker bitmap can snapshot before Text measures, freezing a clipped state. The earlier cluster pill (commit `c85b562`) had this problem — auto-width pills clipped 4+ digit counts despite mathematically having room. Fix: compute widths explicitly from `digits × charWidth + padding` (see commit `7325b58`). Documented in `memory/feedback_marker_auto_width_clipping.md`.
+
+### Phase 3 — still open
+
+Tracked in `memory/project_phase_3_pine_followups.md`:
+
+1. **Home bottom sheet rebuild** — Route / Saved / Recent tabs, route summary card with progress bar + ★ rating chip, stops list with colored circle markers + drag grips, "+ Add stop" cobalt pill. Plus right-rail map controls (Compass / Layers / + / -) and recenter FAB above the sheet edge.
+2. **Legacy-screen palette migration** — filters / driving / hiking / trail (+ .web shims) off `lib/theme.ts` `C` palette to Pine. Each is a per-file mechanical token-flip with ~9–43 inline hex literals + ~12–17 rgba() literals to migrate.
+
+### Source-of-truth Pine prompts (committed)
+
+Saved at `docs/pine/`:
+- `CLAUDE_CODE_PROMPT.md` — Phase 1 (home + tokens + components + motion + a11y + duotone icons)
+- `CLAUDE_CODE_PROMPT_PHASE2.md` — Phase 2 (customize + trip + danger token + new atoms)
+- `design-tokens.json` — canonical token values (matches `src/design/tokens.ts`)
+- `README.md` — implementation status, deviations from the prompts (paper-color swap, RN port of CSS motion, etc.)
+
 ## Stack
 
 - **Frontend:** React Native / Expo (TypeScript) — all UI hand-coded as standard RN. EAS Build for iOS/Android binaries, EAS Update for OTA. One codebase compiles to both platforms.
@@ -131,6 +249,8 @@ User mental model / naming convention used in conversation:
 
 ## drive.tsx UI details
 
+> **Mostly SUPERSEDED by the Pine rebuild (commit `880b807` + subsequent polish).** Drive is now: emerald polyline, cobalt user-location dot with `useUserHalo` pulse, PersonaPill + StoriesBadge top chrome, 3-column TripStat card, retracted/deployed sheet states with breathing watermark X, media controls, Up next, LabeledSlider corridor, ModePillRow, Quiet pill + danger End trip. The legacy details below (sheet snap points, slider styling, "🚗 Driving" emoji segment, etc.) describe the pre-Pine state and should be ignored for current work.
+
 - **Back button** — top-left map overlay, inside `overlayTL` row before the narrator avatar chip. Circular dark button `←`. Shows confirmation alert before navigating back to customize.
 - **Sheet snap points** — two states only: `peek` (96px) and `expanded` (82% screen height). `default === expanded` so the hook naturally collapses to two snaps. Sheet starts expanded.
 - **Peek state** — shows only: play/pause + skip forward + End Trip. Everything else hidden, map visible above.
@@ -149,6 +269,8 @@ User mental model / naming convention used in conversation:
 - **Back button** — top-left of map header overlay (`s.backBtn`, circular dark, `←`). Calls `navigation.goBack()` → returns to index (home).
 
 ## Design system — Field Notes (Phase 1, landed 2026-05-12 in commit `98d8243`)
+
+> **SUPERSEDED by Pine — see "Pine redesign — current direction" at the top of this file.** This section is retained as historical context (the tokens, components, demo screens, and drift entries 5.39–5.45 it documents were rebuilt against the Pine palette in commit `880b807`). Do not reference for current design decisions.
 
 Editorial / NatGeo-travel-journal aesthetic. The new system lives entirely under `src/`. Existing screens stay on the legacy `lib/theme.ts` `C` palette until migrated screen-by-screen.
 
@@ -198,6 +320,8 @@ Implementation lives at [app/index.tsx](app/index.tsx#L1115) inside the `<SafeAr
 **`pointerEvents` posture on `SafeAreaView`:** must be a top-level prop, not inside the `style` array. The library (`react-native-safe-area-context` 5.6.2) accepts both forms in newer RN, but only the top-level form works reliably for `box-none`. See drift catalog 5.42 for two remaining in-style hits in the same file — post-Layer-1 line numbers are 869 (`s.desktopPillWrap` StyleSheet entry, with `as any` cast; consumer at 1317 redundantly passes a top-level prop) and 1165 (chip-row `<ScrollView style={{ pointerEvents: 'box-none' } as any}>` — actually-buggy: ScrollView absorbs taps).
 
 ## Field Notes brand chip family + map integration (drifts 5.92 – 5.99, landed 2026-05-13/14)
+
+> **SUPERSEDED by Pine.** The cream-chip-on-map family described below (Wordmark pill, ModePillRow, PoiCallout, CoordinatesPill, MapStylePicker trigger, ClusterMarker) was reworked under Pine — single dark theme + near-black surfaces + emerald accents + pin-shaped clusters. The current state of each component is documented in the "Pine redesign — current direction" section at the top. This section retained as historical context for the drift catalog entries it references.
 
 ### Branded chip family — shared posture
 

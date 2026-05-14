@@ -1,0 +1,79 @@
+{
+  "$schema": "https://design-tokens.org/v1/schema.json",
+  "name": "XRoad · Pine — Emerald + Cobalt",
+  "summary": "Dark forest-green surfaces, emerald primary accent, cobalt-blue secondary accent. WCAG 2.1 AA throughout. NOTE: implementation swapped paper / paperSoft / paperWarm / paperEdge to near-black (#0A0A0A → #2E2E2E) post-Phase-1 per user feedback — see commit e9a2659 and docs/pine/README.md.",
+  "color": {
+    "paper":        { "value": "#08160F", "description": "Primary surface — top header card, bottom sheet, FAB. IMPL: swapped to #0A0A0A." },
+    "paperSoft":    { "value": "#0F1F18", "description": "Inverse text color used on primary-accent backgrounds. IMPL: swapped to #141414." },
+    "paperWarm":    { "value": "#142922", "description": "Secondary surface — search field background, avatar circle, active tab pill. IMPL: swapped to #1E1E1E." },
+    "paperEdge":    { "value": "#2A4035", "description": "Border / divider on opaque surfaces. IMPL: swapped to #2E2E2E." },
+
+    "ink":          { "value": "#E8FAEF", "description": "Body text, primary icon stroke" },
+    "inkSoft":      { "value": "#9ACCB0", "description": "Secondary text, meta labels" },
+    "inkFaint":     { "value": "#5E907C", "description": "Tertiary / decorative text — never for content per WCAG" },
+
+    "line":         { "value": "rgba(232,250,239,0.22)", "description": "Hairline dividers inside surfaces" },
+    "lineSoft":     { "value": "rgba(232,250,239,0.10)", "description": "Faintest dividers" },
+
+    "primary":      { "value": "#10B981", "description": "EMERALD — selected chip bg, Drive button, route stop X marker, intermediate route circles, rating chip text, progress bar fill" },
+    "primaryDeep":  { "value": "#059669", "description": "Deeper emerald — primary button pressed state / cluster gradient outer stop" },
+    "primaryTint":  { "value": "rgba(16,185,129,0.14)", "description": "10% emerald — rating chip bg, soft primary fills" },
+    "primaryTintEdge": { "value": "rgba(16,185,129,0.28)", "description": "22% emerald — rating chip border" },
+
+    "secondary":    { "value": "#60A5FA", "description": "COBALT — icon accent dots (--ax in CSS / theme.colors.accent in RN), Add stop pill text" },
+    "secondaryDeep":{ "value": "#3B82F6", "description": "Deeper cobalt — secondary pressed state" },
+    "secondaryTint":{ "value": "rgba(96,165,250,0.14)", "description": "10% cobalt — Add stop pill bg, soft secondary fills" },
+    "secondaryTintEdge":{ "value":"rgba(96,165,250,0.28)","description": "22% cobalt — Add stop pill border" },
+
+    "cvdSafe":      { "value": "#F59E0B", "description": "Amber fallback — replaces secondary when color-blind-safe mode is on." },
+
+    "danger":       { "value": "#E11D48", "description": "Rose — destructive actions (End trip). AA on Pine paper (~4.8:1), AA white-on-danger (~4.6:1)." },
+    "dangerDeep":   { "value": "#BE123C", "description": "Pressed/hover state of danger" },
+    "dangerTint":   { "value": "rgba(225,29,72,0.16)", "description": "16% danger — soft shadow / glow under destructive CTA" }
+  },
+
+  "type": {
+    "fontFamilySerif":  { "value": "'Instrument Serif', Georgia, serif" },
+    "fontFamilySans":   { "value": "'DM Sans', system-ui, sans-serif" },
+    "fontFamilyMono":   { "value": "ui-monospace, 'JetBrains Mono', monospace" },
+    "scale": {
+      "display":      { "size": "26-32px", "family": "serif italic",  "weight": "400", "use": "Route hero (1h 12m), rationale headers. IMPL: split into display (32) + displaySmall (26)." },
+      "title":        { "size": "20-22px", "family": "serif italic",  "weight": "400", "use": "Wordmark Road. IMPL: split into title (22) + titleSmall (20)." },
+      "label":        { "size": "14px",    "family": "sans",          "weight": "600-700", "use": "Buttons, tab labels, chip labels" },
+      "body":         { "size": "14px",    "family": "sans",          "weight": "600", "use": "Stop titles, primary text" },
+      "meta":         { "size": "12px",    "family": "sans",          "weight": "500", "use": "Stop subtitles, distance, sub-labels" },
+      "eyebrow":      { "size": "10-11px", "family": "sans",          "weight": "700", "tracking": "0.18em", "transform": "uppercase", "use": "Section headers (CURRENT ROUTE)" }
+    }
+  },
+
+  "radius": {
+    "sheet":   { "value": "24px",  "description": "Bottom sheet corners (all four when floating, top-only when flush)" },
+    "card":    { "value": "26px",  "description": "Top header surface card" },
+    "pill":    { "value": "999px", "description": "Chips, mode toggle, search field, rating chip, Add stop" },
+    "button":  { "value": "12-14px", "description": "Tab pills, Add stop, primary CTAs" },
+    "control": { "value": "16px", "description": "MapRail segment buttons" }
+  },
+
+  "shadow": {
+    "card":    { "value": "0 10px 28px rgba(0,0,0,0.5), 0 2px 6px rgba(0,0,0,0.4)" },
+    "control": { "value": "0 4px 14px rgba(0,0,0,0.4), 0 1px 3px rgba(0,0,0,0.3)" },
+    "sheet":   { "value": "0 -8px 24px rgba(20,16,8,0.18)" }
+  },
+
+  "spacing": {
+    "phoneWidth":        { "value": "360px" },
+    "phoneHeight":       { "value": "780px" },
+    "edgeGutter":        { "value": "12px", "description": "Outer margin from phone edge for floating surfaces" },
+    "sheetBottomOffset": { "value": "24px", "description": "Sheet lifts off the bottom edge to clear gesture pill / nav bar" },
+    "headerTop":         { "value": "38px", "description": "Top of header card below status bar" }
+  },
+
+  "motion": {
+    "iconBreath":     { "duration": "2.8s", "easing": "ease-in-out", "amount": "opacity 0.72 → 1.0", "stagger": "0.18s per child along chip rail" },
+    "sonarRing":      { "duration": "2.8s", "easing": "ease-out", "transform": "scale(0.5) → scale(3.6)", "opacity": "0.7 → 0", "pairedDelay": "1.4s for second ripple" },
+    "clusterBreath":  { "duration": "4s",   "easing": "ease-in-out", "transform": "scale(1) → scale(1.045)", "opacity": "1 → 0.93", "stagger": "deterministic per cluster index" },
+    "clusterRing":    { "duration": "24s",  "easing": "linear",      "transform": "rotate(360deg)", "description": "Dashed ring slowly marches around each cluster. IMPL: dropped in favor of opacity-pulsing emerald glow on the pin shape (pill head + triangle pointer)." },
+    "userHalo":       { "duration": "2.2s", "easing": "ease-in-out", "transform": "scale(1) → scale(1.5)", "opacity": "0.22 → 0.06" },
+    "respects":       "prefers-reduced-motion — disable all of the above when user requests. IMPL: AccessibilityInfo.isReduceMotionEnabled() in src/design/motion.ts gates all hooks."
+  }
+}
