@@ -53,7 +53,12 @@
 --   `update_location` event.
 --
 -- APPLIED
---   Applied via Supabase Studio web UI on YYYY-MM-DD — fill in after manual apply
+--   Applied via direct pg connection on 2026-05-14. Verified: regions table
+--   created; idx_regions_polygon (GIST) + idx_regions_type (b-tree) +
+--   regions_pkey present; detect_regions_at_location(double precision,
+--   double precision) RPC created and grant'd to anon/authenticated;
+--   smoke test against (36.5, -118.5) returns 0 rows (expected — no
+--   region data imported yet, roadmap Phase E1 ships that).
 -- =====================================================================
 
 BEGIN;

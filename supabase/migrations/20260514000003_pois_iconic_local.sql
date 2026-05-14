@@ -39,7 +39,10 @@
 --     pois.iconic_local       does not exist
 --
 -- APPLIED
---   Applied via Supabase Studio web UI on YYYY-MM-DD — fill in after manual apply
+--   Applied via direct pg connection on 2026-05-14. Verified: 3 columns
+--   present with correct types/defaults (iconic_local bool NOT NULL default
+--   false; iconic_local_reasons text[] NOT NULL default '{}'; signature_hook
+--   text nullable).
 -- =====================================================================
 
 BEGIN;

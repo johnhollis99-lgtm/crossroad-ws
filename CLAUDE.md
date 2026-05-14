@@ -5,6 +5,18 @@
 XRoad (rebranded from RoadStory 2026-05-04) — GPS-triggered AI narration for road trips and hikes.
 Package/slug names still say "roadstory" internally; all user-facing strings say "XRoad".
 
+## Design docs (`docs/`)
+
+Authoritative product + system design lives under [docs/](docs/). Read order when starting a new session is in [docs/README.md](docs/README.md). The five canonical docs:
+
+- [docs/SKILL.md](docs/SKILL.md) — project skill (tech stack, audience modes, narration depths, conventions). Mirror of the claude.ai SKILL artefact; see the **Mirror note** later in this file for the sync protocol.
+- [docs/roadstory-narration-curation-addendum.md](docs/roadstory-narration-curation-addendum.md) — **authoritative current model**: two narrators (`narrator_a/b`), intrinsic POI depth (brief/standard/long + `long_compressed` Light-Touch variant), Pace as user setting, 70 significance floor, Regions as parallel narration layer, Iconic Local Override, skip/Tell-Me-More feedback loop. Read before any code touching narration generation, lookahead, voice configs, or trip setup UI.
+- [docs/roadstory-unified-roadmap.md](docs/roadstory-unified-roadmap.md) — single source of truth for sequencing across all pending work. §11 of the addendum + §4 of the roadmap are both migration-order references.
+- [docs/roadstory-poi-pipeline-prompts.md](docs/roadstory-poi-pipeline-prompts.md) — phased POI ingestion playbook (OSM, Wikidata, NRHP, CHL, GNIS, narrative extraction).
+- [docs/venue-tour-design.md](docs/venue-tour-design.md) — Venue Tour parent/child mode spec (theme parks, missions, campuses); now addendum-aware after the 2026-05-14 update.
+
+Plus operational docs already in `docs/`: [data-quality-issues.md](docs/data-quality-issues.md), [drift-catalog.md](docs/drift-catalog.md), [audit-*.md](docs/), [db-snapshot-*.md](docs/), and the Pine design prompts at [docs/pine/](docs/pine/).
+
 ## Pine redesign — current direction (landed 2026-05-14)
 
 Pine **fully supersedes Field Notes** per Claude Design clarification — single dark theme, near-black surfaces, emerald + cobalt + danger-rose accent system. The "Design system — Field Notes" and "Field Notes brand chip family + map integration" sections further down in this doc are **historical context only**; do not reference them for current design decisions.
@@ -214,7 +226,7 @@ Operational notes:
 - `narration_audio.narrator_slug` is the voice-id column. Rename to `voice_id` is coordinated work and not committed; until then, every reader/writer uses `narrator_slug`.
 - (Cleanup of `trips.narrator_id` / `user_narrator_id` deferred — see migration backlog. Per drift catalog 5.19a, `narrators` and `user_narrators` are NOT retired.)
 
-**Mirror note:** This section is duplicated in SKILL.md, which lives in the claude.ai project folder (not tracked in this repo) and is read by the chat-side Claude. When this section changes, sync via claude.ai project artefact swap — claude.ai produces an updated SKILL.md and the user replaces the project artefact. SKILL.md is not committed via git; flag the required mirror update in the PR description.
+**Mirror note:** This section is duplicated in two places that need to stay aligned: (1) `docs/SKILL.md` (committed under `docs/` as of commit `213e905`, 2026-05-14) and (2) the SKILL.md artefact inside the claude.ai project folder, which the chat-side Claude reads. When this section changes, update CLAUDE.md, edit `docs/SKILL.md` to match, and have claude.ai swap in the new artefact. Flag the required claude.ai-side mirror update in the PR description.
 
 ## Screen pages (primary flow)
 
@@ -1141,9 +1153,9 @@ pnpm html            # rebuild index.html only
   - Precedents: `20260513000001_get_corridor_pois_overload_cleanup.sql` (rescue migration for drift 5.90); `20260512000003_get_nearby_pois_significance.sql` (gets it right on first try — never tripped 5.90 because of the drop loop).
   - Naming when this pattern stands alone as a cleanup: `<function_name>_overload_cleanup.sql` (precedent 5.90 above). When it's the canonical install of a new signature: `<function_name>_<purpose>.sql` is fine — the drop loop is just inside the body.
 
-### Migration backlog status (updated 2026-05-11)
+### Migration backlog status (updated 2026-05-14)
 
-**DB watermark: `20260511000004`** — all migrations through 20260511000004 applied. No migration files currently staged-but-not-applied.
+**DB watermark: `20260514000007`** — all migrations through 20260514000007 applied. No migration files currently staged-but-not-applied.
 Verification scripts: `scripts/verify-migrations.mjs` (66/66 checks passed on 000014; listed in `.gitignore`). Post-0016 schema verification lives in `scripts/admin/verify-venue-schema.ts`. Phase 2 migrations were applied chunked (pre-snapshot → body → post-snapshot+diff in a `_verify` schema, then `DROP SCHEMA _verify CASCADE`); this catches accidental drift and is the recommended pattern for live-DB migrations going forward. Live schema can be dumped on demand via `node scripts/admin/dump-schema-snapshot.mjs > docs/db-snapshot-YYYY-MM-DD.md`.
 
 **Applied (confirmed live):**
@@ -1183,6 +1195,24 @@ Verification scripts: `scripts/verify-migrations.mjs` (66/66 checks passed on 00
 - 20260511000002 `corridors_enum_checks` — adds two CHECK constraints to `corridors`: `region_type` locked to `('geological','desert','suburban','alpine','mountain_pass','rural')`, `editorial_status` locked to `('draft','verified')`. Resolves drift 5.30. Single atomic BEGIN/COMMIT migration. Precedent for `_enum_checks.sql` suffix (multi-column constraint add on one table).
 - 20260511000003 `pois_source_drop` — drops `pois.source` (legacy `text NOT NULL DEFAULT 'curated'`). All 23,922 rows carried the default, zero readers, fully displaced by `source_type` (added 20260504000005). Resolves drift 5.16. DROP RESTRICT (no CASCADE) per the convention codified the same day. Precedent for `_drop.sql` suffix.
 - 20260511000004 `get_corridor_pois_comment` — attaches `COMMENT ON FUNCTION get_corridor_pois` clarifying that the RPC does not consume `public.corridors` despite the name overlap (function takes a WKT/EWKT LineString in `route_geom` and buffers it by `corridor_width_miles`). Resolves drift 5.35. Precedent for `_comment.sql` suffix (function-level metadata).
+
+**Applied 2026-05-14 (editorial status promotion):**
+- 20260514000001 `pois_editorial_status_auto_verified` — adds `auto_verified` to the `editorial_status` CHECK and promotes rule-eligible drafts (`source_type IN ('nrhp','state_landmark','editorial')` OR `significance_score >= 50`). Live: 3,271 rows promoted; final distribution is draft 18,508 / auto_verified 3,271 / needs_geocoding 2,100 / verified 31 / reviewed 12.
+
+**Applied 2026-05-14 (addendum migrations 1–6 — see `docs/roadstory-narration-curation-addendum.md` §11):**
+- 20260514000002 `pois_intrinsic_depth` — adds `pois.intrinsic_depth text NOT NULL DEFAULT 'standard' CHECK ∈ {brief, standard, long}` per addendum §4.2. Backfilled all 23,922 rows to `'standard'`. Heuristic assignment job (addendum §4.3) runs later per roadmap Phase G1.
+- 20260514000003 `pois_iconic_local` — adds three columns to `pois` per addendum §8.4: `iconic_local bool NOT NULL DEFAULT false`, `iconic_local_reasons text[] NOT NULL DEFAULT '{}'`, `signature_hook text` (nullable). No CHECKs — validation lives in the importer. ~150–300 rows will be flagged later by `scripts/poi-import/sources/iconic-curation.ts` (roadmap Phase F).
+- 20260514000004 `category_significance_floors` — new lookup table per addendum §2.2 (`category text PK`, `significance_floor smallint CHECK 0–100`, `notes text`, `updated_at`). Reuses `public.set_updated_at()` trigger. RLS anon SELECT. Empty seed; the app falls back to global 70 floor via `COALESCE`. Curator fills values post-import distribution review (roadmap Phase G2).
+- 20260514000005 `regions` — new `regions` table per addendum §3.1 (`geography(MultiPolygon, 4326)` polygon, 5-value `region_type` CHECK, `significance_tier` 0–100, self-FK `parent_region_id`, `set_updated_at` trigger, GiST + b-tree indexes, anon SELECT RLS) + `detect_regions_at_location(p_lat, p_lon)` RPC granted to anon/authenticated. RPC uses `ST_Contains(polygon::geometry, ST_SetSRID(ST_MakePoint(p_lon, p_lat), 4326))` per addendum §3.2. No region data loaded yet; importer is roadmap Phase E1, pre-gen is Phase E2.
+- 20260514000006 `narration_plays` — new table per addendum §9.2 with FK to regions/pois/trips/auth.users/narration_audio (all `ON DELETE SET NULL`). Two CHECKs: `poi_or_region_present` (one of poi_id/region_id must be set) and `durations_nonneg` (defensive — not in addendum, locks duration arithmetic sanity). Partial indexes on `poi_id` / `user_id` (`WHERE col IS NOT NULL`). RLS policy `narration_plays_own_rows` (SELECT, authenticated, `user_id = auth.uid()`); writes via service role.
+- 20260514000007 `narration_audio_depth_check` — extends `na_depth_check` from 3-value to 7-value union `{glance, ride_along, deep_dive, brief, standard, long, long_compressed}` per addendum §4.4. No data migration — existing 37 narration_audio rows stay on legacy `deep_dive`; app reads with alias mapping (glance↔brief, ride_along↔standard, deep_dive↔long). Applier: `.tmp-apply-migrations.py` (ad-hoc; deleted post-apply). DROP IF EXISTS + bare ADD pattern, BEGIN/COMMIT-wrapped.
+
+**Deferred to Phase D3** (per roadmap §4 — bundled with voice audition):
+- `voice_configs.narrator_slug` column add + partial unique index swap from `(mode) WHERE is_active=true` to `(mode, narrator_slug) WHERE is_active=true` + 8 new voice rows (4 audience × 2 narrator). All one coordinated migration.
+
+**Deferred to Phase J** (cleanup belongs with UI refit removing user-facing depth):
+- `trips.depth` CHECK (currently 3-value `glance/ride_along/deep_dive`) — vestigial once Pace replaces user-facing depth.
+- `user_preferences.default_depth` CHECK + column — same.
 
 **Out-of-band live patches (no migration file — applied directly via pg):**
 - `get_corridor_pois` + `get_nearby_pois` RPCs patched (2026-05-06): live DB had diverged to reference a nonexistent `categories` table instead of `poi_categories`. Re-applied both `CREATE OR REPLACE FUNCTION` bodies from `20250503000001_trip_mode.sql` directly. Root cause unknown (likely a hand-edit in the Supabase SQL editor at some point). If you ever reset or re-apply migrations from scratch, these functions will be correct — the migration files were already right.

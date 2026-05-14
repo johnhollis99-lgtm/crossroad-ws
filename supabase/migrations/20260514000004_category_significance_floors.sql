@@ -41,7 +41,10 @@
 --   lookahead query path; writes are admin/migration-only via service role.
 --
 -- APPLIED
---   Applied via Supabase Studio web UI on YYYY-MM-DD — fill in after manual apply
+--   Applied via direct pg connection on 2026-05-14. Verified: table created,
+--   set_updated_at trigger present (reusing public.set_updated_at()), RLS
+--   enabled with csf_anon_select policy. Empty seed — values to be set by
+--   curator post-import distribution review (roadmap Phase G2).
 -- =====================================================================
 
 BEGIN;

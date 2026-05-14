@@ -53,7 +53,10 @@
 --   has no equivalent for CHECK constraints).
 --
 -- APPLIED
---   Applied via Supabase Studio web UI on YYYY-MM-DD — fill in after manual apply
+--   Applied via direct pg connection on 2026-05-14. Verified: na_depth_check
+--   now allows the 7-value union {glance, ride_along, deep_dive, brief,
+--   standard, long, long_compressed}. Existing 37 narration_audio rows all
+--   hold 'deep_dive' (LA→Cambria smoke batch) — untouched by this migration.
 -- =====================================================================
 
 BEGIN;

@@ -52,7 +52,11 @@
 --       do not write directly to this table
 --
 -- APPLIED
---   Applied via Supabase Studio web UI on YYYY-MM-DD — fill in after manual apply
+--   Applied via direct pg connection on 2026-05-14. Verified: table created;
+--   3 indexes + pkey present (idx_narration_plays_played_at, _poi, _user);
+--   2 CHECKs present (narration_plays_durations_nonneg,
+--   narration_plays_poi_or_region_present); narration_plays_own_rows RLS
+--   policy on authenticated role (SELECT only, user_id = auth.uid()).
 -- =====================================================================
 
 BEGIN;

@@ -38,7 +38,9 @@
 --     CHECK constraint pois_intrinsic_depth_check is present
 --
 -- APPLIED
---   Applied via Supabase Studio web UI on YYYY-MM-DD — fill in after manual apply
+--   Applied via direct pg connection on 2026-05-14. Verified: 23,922 pois
+--   rows backfilled to intrinsic_depth='standard'; pois_intrinsic_depth_check
+--   CHECK constraint present and locked to the 3-value enum.
 -- =====================================================================
 
 BEGIN;
