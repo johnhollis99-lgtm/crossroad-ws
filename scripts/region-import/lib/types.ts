@@ -55,6 +55,13 @@ export interface NormalizedRegion {
   display_name: string | null;
   description: string;
   polygon_geojson: GeoJSON.Polygon | GeoJSON.MultiPolygon;
+  /**
+   * SRID of the coordinates in `polygon_geojson`. Defaults to 4326 (WGS84).
+   * EPA shapefile data arrives in EPSG:5070 (Albers); pass 5070 here and
+   * the upsert helper's ST_Transform will reproject server-side before
+   * writing to the geography(MultiPolygon, 4326) column.
+   */
+  polygon_srid?: number;
   significance_tier: number; // 0-100
   source: RegionSource;
   source_id: string | null;
@@ -62,7 +69,8 @@ export interface NormalizedRegion {
   /**
    * Per-row structured side-data. Optional — defaults to `{}` at upsert
    * time. Native Land Digital rows (E1c) use this for boundary
-   * disclaimer + attribution metadata; other sources may extend.
+   * disclaimer + attribution metadata; EPA rows store
+   * parent_resolution_method ('centroid' | 'area_intersection') for audit.
    */
   metadata?: Record<string, unknown>;
 }

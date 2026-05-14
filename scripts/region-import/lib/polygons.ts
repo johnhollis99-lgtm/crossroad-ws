@@ -48,17 +48,24 @@ function fmtPolygon(polygon: number[][][]): string {
  * Polygons are auto-wrapped as 1-element MultiPolygons so the schema's
  * geography(MultiPolygon, 4326) accepts the result.
  *
- * Returns a string suitable for `ST_GeogFromText($1)` parameter binding.
+ * `sourceSrid` lets callers pass non-WGS84 coordinates (e.g. EPA shapefile
+ * in EPSG:5070). The SRID prefix on the EWKT tells PostGIS how to
+ * interpret the coords; the upsert helper then ST_Transform's to 4326.
+ * Defaults to 4326 for backward compatibility with E1a's CGS feed.
+ *
+ * Returns a string suitable for `ST_Transform(ST_GeomFromEWKT($1), 4326)`
+ * parameter binding.
  */
 export function geoJsonToEwktMultiPolygon(
   geom: GeoJSON.Polygon | GeoJSON.MultiPolygon,
+  sourceSrid = SRID,
 ): string {
   if (geom.type === 'Polygon') {
-    return `SRID=${SRID};MULTIPOLYGON(${fmtPolygon(geom.coordinates)})`;
+    return `SRID=${sourceSrid};MULTIPOLYGON(${fmtPolygon(geom.coordinates)})`;
   }
   if (geom.type === 'MultiPolygon') {
     const polys = geom.coordinates.map(fmtPolygon).join(', ');
-    return `SRID=${SRID};MULTIPOLYGON(${polys})`;
+    return `SRID=${sourceSrid};MULTIPOLYGON(${polys})`;
   }
   // @ts-expect-error — defensive: bad input
   throw new Error(`Unsupported geometry type: ${geom.type}`);

@@ -69,7 +69,7 @@ export async function upsertRegions(
       await client.query('BEGIN');
       for (const r of batch) {
         try {
-          const ewkt = geoJsonToEwktMultiPolygon(r.polygon_geojson);
+          const ewkt = geoJsonToEwktMultiPolygon(r.polygon_geojson, r.polygon_srid);
           // ON CONFLICT predicate must match the partial unique index
           // `regions_source_source_id_unique` (WHERE source_id IS NOT NULL),
           // added by migration 20260514000008. Rows with source_id IS NULL
@@ -77,6 +77,11 @@ export async function upsertRegions(
           // them — they always INSERT. Editorial regions per Phase E1d
           // get a non-null `valley-<kebab>` source_id specifically so they
           // participate in this upsert.
+          //
+          // ST_Transform(ST_GeomFromEWKT($5), 4326)::geography handles
+          // both native-4326 sources (CGS E1a) and non-4326 sources (EPA
+          // E1b's EPSG:5070 shapefile). For 4326 input the transform is
+          // a no-op; for 5070 input PostGIS reprojects server-side.
           const res = await client.query(
             `
               INSERT INTO public.regions (
@@ -85,7 +90,8 @@ export async function upsertRegions(
                 metadata
               ) VALUES (
                 $1, $2, $3, $4,
-                ST_GeogFromText($5), $6, $7, $8, $9,
+                ST_Transform(ST_GeomFromEWKT($5), 4326)::geography,
+                $6, $7, $8, $9,
                 $10::jsonb
               )
               ON CONFLICT (source, source_id) WHERE source_id IS NOT NULL DO UPDATE SET
