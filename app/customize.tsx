@@ -64,7 +64,7 @@ import { curateRoutePOIs, type Density } from '../src/lib/curation/curateRoutePO
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
-const MAP_PREVIEW_H = 240;
+const MAP_PREVIEW_H = 200;
 const STATUS_TOP    = Platform.OS === 'ios' ? 50 : ((StatusBar.currentHeight ?? 24) + 8);
 const MAPBOX_TOKEN  = process.env.EXPO_PUBLIC_MAPBOX_TOKEN!;
 
@@ -503,7 +503,89 @@ export default function CustomizeScreen() {
   return (
     <View style={[styles.root, { backgroundColor: theme.colors.paper }]}>
 
-      {/* ── MAP PEEK — top 240px ──────────────────────────────────────────── */}
+      {/* ── HEADER CARD — nav row + Strip A + Strip B ─────────────────────
+          Mirrors the home page header pattern: paperSoft surface, paperEdge
+          hairline border, rounded BOTTOM corners (top squared to screen
+          edge so the card touches the status-bar inset). Strips stay pinned
+          here so live POI/pace feedback is visible while the curation
+          controls below scroll. */}
+      <View
+        style={[
+          styles.headerCard,
+          {
+            backgroundColor: theme.colors.paperSoft,
+            borderColor:     theme.colors.paperEdge,
+            paddingTop:      STATUS_TOP,
+          },
+        ]}
+      >
+        {/* Row 1 — back arrow · wordmark · map-style-picker spacer */}
+        <View style={styles.headerRow1}>
+          <Pressable
+            style={[
+              styles.backBtn,
+              {
+                backgroundColor: theme.colors.paperSoft,
+                borderColor:     theme.colors.paperEdge,
+              },
+              Platform.OS === 'android' ? { elevation: 4 } : shadows.control,
+            ]}
+            onPress={() => navigation.goBack()}
+            accessibilityRole="button"
+            accessibilityLabel="Back"
+          >
+            <IconArrowLeft size={20} color={theme.colors.ink} />
+          </Pressable>
+          <Wordmark size="m" />
+          {/* Spacer — matches back-btn width so the wordmark stays centered.
+              MapStylePicker is rendered as the LAST child of the root View
+              (after the Start Trip CTA) with absolute positioning that lands
+              over this slot. Last-child paint order keeps the dropdown panel
+              above the map peek + ScrollView region it extends into; keeping
+              it outside the card preserves the picker's tap-outside-to-dismiss
+              overlay (which fills the root View, not just the card). */}
+          <View style={{ width: 40 }} />
+        </View>
+
+        {/* Row 2 — Strip A: route summary inline (origin → dest · duration) */}
+        <Text style={styles.routeSummary} numberOfLines={1}>
+          <Text style={[theme.textVariants.meta, { color: theme.colors.inkSoft }]}>
+            {routeInfo.origin}
+          </Text>
+          <Text style={[theme.textVariants.meta, { color: theme.colors.primary }]}>
+            {'  →  '}
+          </Text>
+          <Text style={[theme.textVariants.label, { color: theme.colors.ink }]}>
+            {routeInfo.destination}
+          </Text>
+          <Text style={[theme.textVariants.meta, { color: theme.colors.inkFaint }]}>
+            {'  ·  '}
+          </Text>
+          <Text style={[theme.textVariants.meta, { color: theme.colors.inkSoft }]}>
+            {fmtDuration(Math.round(tripDurationMin))}
+          </Text>
+        </Text>
+
+        {/* Row 3 — Strip B: 4-col stats with hairline borders. POIS + PACE
+            are live-bound to curatedCount / avgPaceMin and update as the
+            user adjusts filters in the scroll area below. */}
+        <View
+          style={[
+            styles.statsStrip,
+            {
+              borderTopColor:    theme.colors.line,
+              borderBottomColor: theme.colors.line,
+            },
+          ]}
+        >
+          <TripStat label="DISTANCE" value={fmtMiles(routeInfo.distance_mi)} />
+          <TripStat label="DURATION" value={fmtDuration(Math.round(tripDurationMin))} />
+          <TripStat label="POIS"     value={curatedCount === null ? '…' : String(curatedCount)} />
+          <TripStat label="PACE"     value={paceLabel} />
+        </View>
+      </View>
+
+      {/* ── MAP PEEK — non-interactive route preview, no overlays ──────── */}
       <View style={styles.mapWrap}>
         <MapView
           style={StyleSheet.absoluteFillObject}
@@ -548,79 +630,15 @@ export default function CustomizeScreen() {
           locations={[0, 1]}
           style={styles.mapFade}
         />
-
-        {/* Top chrome on the map */}
-        <View style={[styles.mapHeader, { paddingTop: STATUS_TOP }]}>
-          <Pressable
-            style={[
-              styles.backBtn,
-              {
-                backgroundColor: theme.colors.paperSoft,
-                borderColor:     theme.colors.paperEdge,
-              },
-              Platform.OS === 'android' ? { elevation: 4 } : shadows.control,
-            ]}
-            onPress={() => navigation.goBack()}
-            accessibilityRole="button"
-            accessibilityLabel="Back"
-          >
-            <IconArrowLeft size={20} color={theme.colors.ink} />
-          </Pressable>
-          <Wordmark size="m" />
-          <View style={{ width: 40 }} />
-        </View>
-
-        <MapStylePicker
-          value={mapStyleId}
-          onChange={handleMapStyleChange}
-          mapboxToken={MAPBOX_TOKEN}
-          buttonTop={STATUS_TOP + 6}
-          buttonRight={12}
-        />
       </View>
 
-      {/* ── BOTTOM SHEET — scrollable ────────────────────────────────────── */}
+      {/* ── BOTTOM SHEET — scrollable curation controls only ─────────────── */}
       <ScrollView
         style={[styles.sheet, { backgroundColor: theme.colors.paper }]}
         contentContainerStyle={[styles.sheetContent, { paddingBottom: insets.bottom + 110 }]}
         showsVerticalScrollIndicator={false}
         keyboardShouldPersistTaps="handled"
       >
-        {/* Route summary inline row */}
-        <Text style={styles.routeSummary} numberOfLines={1}>
-          <Text style={[theme.textVariants.meta, { color: theme.colors.inkSoft }]}>
-            {routeInfo.origin}
-          </Text>
-          <Text style={[theme.textVariants.meta, { color: theme.colors.primary }]}>
-            {'  →  '}
-          </Text>
-          <Text style={[theme.textVariants.label, { color: theme.colors.ink }]}>
-            {routeInfo.destination}
-          </Text>
-          <Text style={[theme.textVariants.meta, { color: theme.colors.inkFaint }]}>
-            {'  ·  '}
-          </Text>
-          <Text style={[theme.textVariants.meta, { color: theme.colors.inkSoft }]}>
-            {fmtDuration(Math.round(tripDurationMin))}
-          </Text>
-        </Text>
-
-        {/* Stats strip — 4 equal columns, top + bottom hairline borders */}
-        <View
-          style={[
-            styles.statsStrip,
-            {
-              borderTopColor:    theme.colors.line,
-              borderBottomColor: theme.colors.line,
-            },
-          ]}
-        >
-          <TripStat label="DISTANCE" value={fmtMiles(routeInfo.distance_mi)} />
-          <TripStat label="DURATION" value={fmtDuration(Math.round(tripDurationMin))} />
-          <TripStat label="POIS"     value={curatedCount === null ? '…' : String(curatedCount)} />
-          <TripStat label="PACE"     value={paceLabel} />
-        </View>
-
         {/* ── Narration depth ────────────────────────────────────────────── */}
         <Text style={[theme.textVariants.eyebrow, styles.sectionLabel, { color: theme.colors.inkSoft }]}>
           Narration depth
@@ -779,6 +797,21 @@ export default function CustomizeScreen() {
           {saving ? 'Starting…' : 'Start trip'}
         </Text>
       </Pressable>
+
+      {/* MapStylePicker — rendered LAST so its dropdown panel paints above
+          the map peek + ScrollView region it extends into. The picker is
+          absolute-positioned with `buttonTop: STATUS_TOP + 6` so visually
+          it still lands in the header card's right-side Row 1 slot; only
+          its position in the JSX paint order changes. Kept outside the
+          card so the tap-outside-to-dismiss overlay (absoluteFillObject)
+          covers the full screen rather than just the card. */}
+      <MapStylePicker
+        value={mapStyleId}
+        onChange={handleMapStyleChange}
+        mapboxToken={MAPBOX_TOKEN}
+        buttonTop={STATUS_TOP + 6}
+        buttonRight={12}
+      />
     </View>
   );
 }
@@ -788,20 +821,41 @@ export default function CustomizeScreen() {
 const styles = StyleSheet.create({
   root: { flex: 1 },
 
-  // Map peek
-  mapWrap:  { height: MAP_PREVIEW_H, overflow: 'hidden' },
-  mapFade:  { position: 'absolute', bottom: 0, left: 0, right: 0, height: 110 },
-  mapHeader:{
-    position:       'absolute',
-    top:            0,
-    left:           0,
-    right:          0,
+  // Header card — mirrors home's headerCard pattern (paperSoft surface,
+  // paperEdge hairline, 26px radius, shadow). Adapted for customize: top
+  // corners squared to screen edge and `paddingTop: STATUS_TOP` set inline
+  // so the card carries the status-bar inset itself.
+  headerCard: {
+    borderTopLeftRadius:     0,
+    borderTopRightRadius:    0,
+    borderBottomLeftRadius:  26,
+    borderBottomRightRadius: 26,
+    borderWidth:             1,
+    paddingHorizontal:       14,
+    paddingBottom:           12,
+    gap:                     12,
+    ...Platform.select({
+      ios: {
+        shadowColor:   '#000',
+        shadowOffset:  { width: 0, height: 8 },
+        shadowOpacity: 0.4,
+        shadowRadius:  20,
+      },
+      android: { elevation: 10 },
+      default: {},
+    }),
+  },
+  headerRow1: {
     flexDirection:  'row',
     alignItems:     'center',
     justifyContent: 'space-between',
-    paddingHorizontal: 12,
-    paddingBottom:  12,
   },
+
+  // Map peek (overlays removed in prompt 2 — back btn + wordmark + picker
+  // now live in the header card above). Height reduced 240 → 200 to leave
+  // more room for the card + scroll content.
+  mapWrap:  { height: MAP_PREVIEW_H, overflow: 'hidden' },
+  mapFade:  { position: 'absolute', bottom: 0, left: 0, right: 0, height: 110 },
   backBtn: {
     width:           40,
     height:          40,
