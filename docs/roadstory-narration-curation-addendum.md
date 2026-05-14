@@ -1,0 +1,716 @@
+# RoadStory — Narration & Curation Design Addendum
+
+**Status:** Locked-in design (v1.0)
+**Audience:** All future query path work, importer pipelines, frontend trip setup, narration generation, and admin tooling.
+**Scope:** California (launch) → all states → international.
+**Companion docs:** `venue-tour-design.md`, `roadstory-poi-pipeline-prompts.md`, `SKILL.md`.
+
+---
+
+## 0. Why This Addendum Exists
+
+The original RoadStory architecture treated every POI as roughly equal — a flat catalog filtered by category and audience. That model breaks down once you ask the question that defines this product:
+
+> *"What does this place actually have to say?"*
+
+A fire station has nothing to say. A 4.2-star burger spot has very little to say. A 19th-century Methodist church listed on the NRHP because the wrong county committee filed paperwork in 1973 has, honestly, very little to say to someone driving past at 65mph. But the Long Valley Caldera, the Mono Lake tufa, Manzanar, Schat's Bakkery, the Cabazon Dinosaurs, the moment you crest a pass and drop into a new geomorphic province — these things have *a lot* to say, each in a different register.
+
+This document specifies the curation layer that decides what speaks, how loud, in what voice, and for how long. It locks in nine changes:
+
+1. **Phase 7 — Regions:** polygon-based narration for geomorphic, ecological, and anthropological zones
+2. **Narrative Focus:** Soul (default) / + Local Color (opt-in) / Custom
+3. **Significance floor of 70 across the board** (with per-category tuning when data exists)
+4. **Intrinsic POI depth weight** (Brief / Standard / Long) — a data property, not a user setting
+5. **Two-narrator model** replacing the previous four — both deliver the full depth range, differentiated by posture and conversational register
+6. **Pace setting** (Full Drive / Light Touch) — kept as user choice
+7. **Iconic Local Override** — strict bar, free-tier sources only for v1
+8. **Skip / Tell Me More controls** plus a three-report feedback loop
+9. **Mid-trip narrator swap**
+
+Each section below is a self-contained spec. Read in order; later sections assume earlier ones.
+
+---
+
+## 1. The Soul Doctrine
+
+This is the product position. Every other decision in this document descends from it.
+
+> **The soul of RoadStory is geology, geography, and anthropology.** Architecture and history count when significant. Everything else is opt-in.
+
+This is not "we have a lot of categories and let users filter." It is "we have a default voice → the land speaks → and users can layer flavor on top of it." The data pipeline is already biased toward the soul (history sources like NRHP and CHL, Wikipedia-backed Wikidata, named natural features in GNIS, curated narrative extraction). This addendum hardens that bias at the query layer.
+
+### 1.1. The category tiers
+
+| Tier | Categories | Default state |
+|---|---|---|
+| **Soul** | geology, geography, indigenous/anthropology, history (NRHP/CHL/archaeological/named historic sites), natural features (named peaks, falls, caves, hot springs, geological landmarks), regional zones | **Always on** |
+| **Cultural Fabric** | music venues, public art, notable churches | **Opt-in via Narrative Focus, gated by historical + resonance bar (§7.2)** |
+| **Local Color** | restaurants, breweries, theme parks, water parks, playgrounds, modern shopping, contemporary attractions | **Opt-in via Narrative Focus** |
+| **Iconic Local Override** | food/drink, roadside oddities, Americana lodging/diners that pass the strict iconic bar (§8) | **Always on regardless of focus** |
+| **Regions** | geomorphic provinces, ecoregions, watersheds, indigenous territories, named valleys | **Always on (rate-limited, §3)** |
+
+### 1.2. Trip setup user choice
+
+Trip setup presents two clean cards plus an advanced option:
+
+- **The Land Speaks** *(default)* — Soul tier only. Iconic Local Override still fires. Region transitions still fire. This is the product's headline experience.
+- **+ Local Color** — Adds restaurants, theme parks, modern attractions to the surface set. Soul still dominates the airtime (§5.2).
+- **Custom** — Power users toggle individual category groups. Buried one tap deep so casual users don't see it.
+
+The default is **The Land Speaks**. A user who never touches settings gets the product the way it was designed to be experienced.
+
+---
+
+## 2. Significance Floor
+
+### 2.1. The 70 floor
+
+A POI must clear `significance_score >= 70` (on the 0–100 scale defined in the existing pipeline) to trigger an unsolicited narration. POIs below 70 are still imported, deduped, indexed, and queryable — but they never speak unprompted.
+
+What they're still used for:
+- Map dot rendering on the driving/hiking/city pages
+- "What's around me" tap-to-explore queries
+- Future re-evaluation as cross-source signals accumulate
+- Search results when a user explicitly looks something up
+
+What they don't do:
+- Trigger lookahead narrations
+- Compete for queue slots
+
+### 2.2. Per-category floors (tunable)
+
+A single global 70 is the v1 default. A `category_significance_floors` lookup table allows per-category tuning once we can see the actual accrual list:
+
+```sql
+CREATE TABLE category_significance_floors (
+  category text PRIMARY KEY,  -- references the existing category enum
+  significance_floor smallint NOT NULL CHECK (significance_floor BETWEEN 0 AND 100),
+  notes text,
+  updated_at timestamptz DEFAULT now()
+);
+
+-- Initial seed (placeholder, tuned post-import review):
+INSERT INTO category_significance_floors VALUES
+  ('geology',      60, 'Geological POIs earn presence at lower thresholds'),
+  ('nature',       65, 'Named natural features'),
+  ('history',      70, 'NRHP/CHL are pre-vetted; default floor'),
+  ('culture',      70, 'Indigenous/anthropological sites'),
+  ('architecture', 80, 'High bar: must be historically or architecturally canon'),
+  ('music',        75, 'Cultural Fabric tier — already opt-in'),
+  ('art',          75, 'Cultural Fabric tier'),
+  ('engineering',  70, 'Bridges, dams, etc.'),
+  ('food',          0, 'Floor irrelevant — only surfaces via Iconic Local Override'),
+  ('other',        70, 'Default');
+```
+
+The architecture floor of 80 is the most opinionated number here. Editorial calibration: only Wikipedia-significant or AIA-canon buildings should pass. Anonymous mid-century office buildings, generic Mission Revival churches, and every NRHP-listed Methodist church in a Central Valley town do NOT pass.
+
+These numbers are placeholders. The actual seed values are an editorial decision made by the human curator (you) after reviewing the post-import POI list. The schema exists; the values get tuned in a separate migration once data is available.
+
+### 2.3. What this does to POI volume
+
+Rough estimates from the existing dataset:
+
+| Source | Total imports | After 70-floor |
+|---|---|---|
+| OSM | ~12,000 | ~600 (only Wikipedia/heritage-tagged) |
+| Wikidata | ~5,000 | ~1,800 |
+| NRHP | ~1,500 | ~1,500 (all pre-vetted) |
+| CHL | ~1,200 | ~1,200 (all pre-vetted) |
+| GNIS | ~3,000 | ~200 (most significant named features) |
+| Narrative-extracted | ~500 | ~500 (curated by extraction process) |
+
+**Total triggering POIs: ~5,800 pre-dedup, ~3,500–4,000 post-dedup.** Roughly an 80% reduction from the original ~20K. This is the dataset of a real tour guide who chose her stops carefully.
+
+---
+
+## 3. Phase 7 — Regions
+
+This is the **soul move** → the thing that makes RoadStory feel different from any GPS-triggered POI app. POIs are points. Places are *regions*. When you crest the Tehachapi Pass and drop into the Central Valley, when you climb out of the Owens Valley over the White Mountains, when you cross from Chumash territory into Tongva territory → those transitions deserve narration.
+
+### 3.1. Schema
+
+```sql
+CREATE TABLE regions (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  region_type text NOT NULL CHECK (region_type IN (
+    'geomorphic_province',     -- USGS: Sierra Nevada, Great Valley, Mojave, etc.
+    'ecoregion',                -- EPA Level III/IV: Central California Foothills, etc.
+    'watershed',                -- USGS HUC8
+    'indigenous_territory',     -- Native Land Digital
+    'named_valley_or_basin'     -- Wikidata: Owens Valley, Carrizo Plain, Death Valley
+  )),
+  name text NOT NULL,
+  display_name text,            -- "The Eastern Sierra" vs "Sierra Nevada Geomorphic Province"
+  description text NOT NULL,    -- 200–400 word reference description used to seed narration
+  polygon geography(MultiPolygon, 4326) NOT NULL,
+  significance_tier smallint NOT NULL DEFAULT 50,  -- 0–100; higher = more narration-worthy
+  source text NOT NULL,         -- 'usgs', 'epa', 'native_land', 'wikidata', 'editorial'
+  source_id text,
+  parent_region_id uuid REFERENCES regions(id),  -- ecoregions nest inside provinces, etc.
+  created_at timestamptz DEFAULT now(),
+  updated_at timestamptz DEFAULT now()
+);
+
+CREATE INDEX idx_regions_polygon ON regions USING GIST (polygon);
+CREATE INDEX idx_regions_type ON regions (region_type);
+```
+
+### 3.2. RPC
+
+```sql
+CREATE OR REPLACE FUNCTION detect_regions_at_location(
+  p_lat double precision,
+  p_lon double precision
+)
+RETURNS TABLE (
+  id uuid,
+  region_type text,
+  name text,
+  display_name text,
+  description text,
+  significance_tier smallint
+) LANGUAGE sql STABLE AS $$
+  SELECT id, region_type, name, display_name, description, significance_tier
+  FROM regions
+  WHERE ST_Contains(polygon::geometry, ST_SetSRID(ST_MakePoint(p_lon, p_lat), 4326))
+  ORDER BY significance_tier DESC;
+$$;
+```
+
+Returns all regions containing the point (a user can simultaneously be in a province, an ecoregion, a watershed, an indigenous territory, and a named valley). The WS server holds the current region set in trip state and detects entries/exits as the user moves.
+
+### 3.3. Data sources (all free, all authoritative)
+
+| Layer | Source | License | Approx. count in CA |
+|---|---|---|---|
+| Geomorphic provinces | USGS — California Geomorphic Provinces | Public domain | 11 |
+| Ecoregions | EPA Level III & IV | Public domain | ~25 Level III, ~150 Level IV |
+| Watersheds | USGS Watershed Boundary Dataset (HUC8) | Public domain | ~140 |
+| Indigenous territories | Native Land Digital (native-land.ca) | Free API, attribution required | ~30 historical territories in CA |
+| Named valleys/basins | Wikidata + manual curation for polygons | CC0 / public domain | ~50 |
+
+All five layers ingest via importers in `scripts/region-import/`, structured similarly to the POI importers. One importer per source. Idempotent upserts.
+
+### 3.4. Narration trigger logic
+
+A region narration fires when the WS server detects the user has **entered a region they were not in 60 seconds ago**, subject to:
+
+1. **First-entry-per-trip rule.** Each region narrates at most once per trip, regardless of re-entry.
+2. **Rate limit.** No more than one region narration per ~20 minutes of driving. If two region transitions happen in close succession (e.g., crossing into a new province AND a new indigenous territory at the same pass), the higher significance_tier wins; the other is silently dropped.
+3. **Suppression during active POI narration.** Region narrations queue, never interrupt.
+4. **Mode awareness.** Region narrations are driving-mode only by default. In hiking mode, region context is delivered at trip start, not on boundary crossings (you don't want a region change to fire mid-trail when you cross an ecoregion line by 50m).
+5. **Pace awareness.** Light Touch users only hear top-tier region transitions (geomorphic province + named valley); Full Drive users hear all five layers.
+
+### 3.5. Narration generation
+
+Region narrations use a dedicated prompt template at `server/src/prompts/region_{audience}.ts`. The template injects:
+
+- `region.name`, `region.display_name`, `region.description` (reference text)
+- The audience mode tone (Family / Kids / Unfiltered / Local)
+- The narrator's posture (the two-narrator model from §5)
+- The previous region the user just exited (if any) for transition framing
+- The route's overall direction (heading north into the Sierra is different from heading south out of it)
+
+Output length is fixed at **Standard depth** (60–90 seconds) regardless of intrinsic depth weighting elsewhere. Regions need room to breathe but not 3 minutes — the user is *driving into* the region, not stopping at a single point.
+
+### 3.6. Caching
+
+Region narrations cache forever — regions don't change. Cache key:
+```
+regions/{region_id}/{narrator_slug}.opus
+```
+
+Audience mode is collapsed into narrator_slug as elsewhere. With ~250 total regions in CA × 2 narrators × 4 audience modes = ~2,000 one-time generations. At Haiku-4.5 + Google TTS Chirp 3 HD pricing, this is roughly **$15–25 of one-time spend**, then free forever.
+
+### 3.7. Backfill order
+
+```
+1. Apply schema migration for regions
+2. Import USGS geomorphic provinces (11 polygons)
+3. Import EPA ecoregions (Level III first, Level IV later)
+4. Import Native Land Digital territories
+5. Import named valleys/basins from Wikidata + manual polygons for top 30
+6. Pre-generate all region narrations across both narrators and all four audience modes
+7. Wire detect_regions_at_location into the WS server's trip-state loop
+8. Add Light Touch / Full Drive gating for region layers
+```
+
+### 3.8. Open question — watersheds
+
+Watersheds (HUC8) are the layer I'm least sure about. They're geographically defined but rarely top-of-mind for users. Suggest deferring HUC8 to v2 and starting with provinces + ecoregions + indigenous territories + named valleys. Decision flag for the build chat.
+
+---
+
+## 4. Per-POI Intrinsic Depth Weight
+
+### 4.1. The principle
+
+Depth is a **property of the POI**, not a property of the user. Long Valley Caldera *needs* ~3 minutes to land properly. Schat's Bakkery is done in 25 seconds. The system shouldn't try to make these the same length.
+
+### 4.2. Schema
+
+```sql
+ALTER TABLE pois ADD COLUMN intrinsic_depth text NOT NULL DEFAULT 'standard'
+  CHECK (intrinsic_depth IN ('brief', 'standard', 'long'));
+```
+
+| Weight | Target length | When applied |
+|---|---|---|
+| `brief` | 15–35 sec | POIs with shallow source material (single OSM tag, no Wikipedia article, NRHP-listed but minimal narrative). Most Iconic Local Override POIs. |
+| `standard` | 45–90 sec | The default. NRHP + Wikipedia article + cross-source verified POIs. Most historical landmarks. |
+| `long` | 2–4 min | POIs with deep source material — multiple linked Wikipedia articles, USGS bulletins, oral histories, major historical significance. Geological landmarks (Long Valley Caldera, Anza-Borrego badlands, Sierra Nevada batholith). Manzanar. The Big Sur coast as a unified narrative. |
+
+### 4.3. How depth gets assigned
+
+During the import pipeline, after dedup and significance recompute, a new step assigns `intrinsic_depth`:
+
+```
+- POI has Wikipedia article < 500 words AND no NRHP/CHL listing — brief
+- POI has Wikipedia article 500–3,000 words OR NRHP/CHL listing — standard
+- POI has Wikipedia article > 3,000 words OR multiple cross-references OR narrative-extracted source — long
+- Iconic Local Override POIs — forced to brief regardless of other signals
+- Geological POIs with USGS bulletin references — forced to long
+```
+
+This is a defensible heuristic, not a rule. Once we have skip-rate data (§9), the assignment gets refined per category.
+
+### 4.4. Two cached audio lengths for `long` POIs
+
+Each `long` POI generates **two** audio files per narrator × audience combo:
+
+- The full version (~3 minutes) for Full Drive pace
+- A compressed version (~90 seconds) for Light Touch pace
+
+Cache key shape (extending the existing `{poi_id}/{trip_mode}/{depth}/{narrator_slug}.opus`):
+
+```
+{poi_id}/{trip_mode}/{depth}/{narrator_slug}.opus
+  where depth — {'brief', 'standard', 'long', 'long_compressed'}
+```
+
+Brief and Standard POIs generate one audio each. Long POIs generate two.
+
+### 4.5. Cost shape
+
+Old design: 4 audience × 3 depth × 2 narrator = **24 generations per POI**.
+New design: 4 audience × ~1.2 depth (most POIs at 1; only longs at 2) × 2 narrator = **~9.6 generations per POI on average**.
+
+Roughly a **60% reduction** in generation costs vs the original. At ~4,000 triggering POIs across CA, this is real money saved (rough order of magnitude: $200–400 in initial generation, ongoing savings on all new POIs).
+
+---
+
+## 5. Two-Narrator Model
+
+The original four-narrator design (Professor / Local / Junior Ranger / Truck Driver) collapses to two. Three of the four were doing work that other axes already do:
+
+- **Professor's role** (deep dives into geo/anthro) is now handled by Soul mode + intrinsic depth weighting
+- **Local's role** (highly-rated nuanced content) is now handled by Iconic Local Override + Local Color
+- **Junior Ranger's role** (kid framing) is now handled by Kids audience mode
+
+The only narrator dimension not subsumed elsewhere was **conversational tone / register** — the difference between "the land speaking" and "a friend in the cab." Two narrators capture this; four was redundant.
+
+### 5.1. The two narrators (naming TBD)
+
+| Working name | Posture | Tone | Voice direction |
+|---|---|---|---|
+| **Narrator A** (provisional names: "Window Seat" / "The Naturalist" / "Deep" / "Reverent") | Reverent, present, takes time. The land speaks first. | Thoughtful, well-paced, room for awe. Mary Hunter Austin / Robert Macfarlane / Terry Tempest Williams. | Warm authoritative, comfortable with silence between phrases, deliberate pace |
+| **Narrator B** (provisional names: "Shotgun" / "The Driver" / "Easy" / "Easygoing") | Conversational, casual, relational. A friend in the cab. | Dry humor, off-the-cuff, storytelling-around-a-campfire register. | Conversational, slightly slower than average, room for "y'know" rhythm without being affected |
+
+**Naming decision flag for the user:** the two-button test must pass. Whatever the final names, a user staring at two cards in trip setup should immediately feel the difference based on the names alone. The leading candidates remain Window Seat / Shotgun (road-trip native, paired metaphor) and Reverent / Easygoing (descriptively honest). The naming choice does not block any other implementation work — internal slugs (`narrator_a`, `narrator_b`) can ship before display names finalize.
+
+### 5.2. Both narrators handle full depth range
+
+Critical: **both narrators handle Brief, Standard, and Long POIs.** The Long Valley Caldera narration is ~3 minutes in either narrator — what changes is the framing, not the length. Narrator A leads with "the magma chamber beneath us is still active"; Narrator B leads with "let me tell you why this place blows my mind."
+
+### 5.3. Narrator weight profiles
+
+Each narrator carries a category weight profile that nudges what surfaces above the 70-floor. The weights operate as multipliers on significance_score during lookahead ranking. They do NOT change what's eligible — they change the order in dense areas and let marginal POIs (75–85 significance) tilt toward one narrator's interests.
+
+| Category | Narrator A (reverent) | Narrator B (conversational) |
+|---|---|---|
+| Geology / geography | 1.4× | 1.0× |
+| Anthropology / indigenous | 1.4× | 1.2× |
+| History (NRHP/CHL) | 1.2× | 1.3× |
+| Architecture | 1.2× | 1.0× |
+| Natural features | 1.3× | 1.2× |
+| Roadside / Americana | 0.7× | 1.6× |
+| Local lore / quirks | 0.8× | 1.5× |
+| Engineering / infrastructure | 0.9× | 1.3× |
+
+A POI's effective significance for ranking = `significance_score × narrator_weight[category]`. POIs still must clear the 70-floor on raw `significance_score` to be eligible; the weight is a re-ranker, not a gate.
+
+### 5.4. Local Color airtime share per narrator
+
+When a user opts into Local Color, each narrator carries a different airtime budget for non-Soul content:
+
+| Narrator | Soul share | Local Color share |
+|---|---|---|
+| Narrator A | 90% | 10% |
+| Narrator B | 75% | 25% |
+
+Soul still wins in both columns. Narrator B simply makes more room for diner culture and roadside Americana.
+
+### 5.5. Mid-trip swap
+
+User can change narrator mid-trip. Implementation:
+
+1. User taps narrator chip in driving-page header — bottom sheet opens with two narrator cards
+2. Select — emits `change_narrator` socket event
+3. WS server invalidates the lookahead queue from current location forward
+4. Re-ranks upcoming POIs with the new narrator's category weights
+5. Pre-fetches the next 3–5 POIs' audio under the new narrator (cache hits if anyone's done this route before with this narrator)
+6. Currently-playing narration finishes uninterrupted; next narration uses new voice
+
+UI feedback: brief "Switching to {narrator_name}..." toast (1.5s). No interruption to in-progress audio.
+
+### 5.6. Schema impact
+
+The existing `voice_configs` schema already supports this — we set 2 active rows instead of 4. The `narration_audio.narrator_slug` column already keys the cache by voice. No structural migration needed beyond:
+
+```sql
+-- Deactivate the four original narrators in voice_configs
+UPDATE voice_configs SET is_active = false
+WHERE mode IN ('family', 'kids', 'unfiltered', 'local');
+
+-- Insert two new narrator configs (one row per audience mode × narrator)
+-- The audience mode picks the voice variant; the narrator picks the personality
+-- 4 audience × 2 narrator = 8 active rows total
+INSERT INTO voice_configs (mode, provider, voice_id, narrator_slug, display_name, ...) VALUES
+  ('family',     'google', 'voice_a_family',     'narrator_a', 'Window Seat', ...),
+  ('family',     'google', 'voice_b_family',     'narrator_b', 'Shotgun', ...),
+  ('kids',       'google', 'voice_a_kids',       'narrator_a', 'Window Seat', ...),
+  ('kids',       'google', 'voice_b_kids',       'narrator_b', 'Shotgun', ...),
+  ('unfiltered', 'google', 'voice_a_unfiltered', 'narrator_a', 'Window Seat', ...),
+  ('unfiltered', 'google', 'voice_b_unfiltered', 'narrator_b', 'Shotgun', ...),
+  ('local',      'google', 'voice_a_local',      'narrator_a', 'Window Seat', ...),
+  ('local',      'google', 'voice_b_local',      'narrator_b', 'Shotgun', ...);
+```
+
+The partial unique index `(mode) WHERE is_active = true` will need to be replaced with `(mode, narrator_slug) WHERE is_active = true`. One migration. Low blast radius.
+
+---
+
+## 6. Pace Setting
+
+Two user-facing options, kept as a real choice (not collapsed):
+
+### 6.1. Full Drive (default)
+
+- POIs trigger at `significance_score >= category_floor` (default 70)
+- Long-weight POIs play at full ~3-minute length
+- No artificial gap between narrations
+- Region transitions fire across all 5 layers
+- Iconic Local Override always fires
+
+### 6.2. Light Touch
+
+- POIs trigger at the same floors (significance still does the gating work)
+- Long-weight POIs play the compressed ~90-second version
+- Minimum 6 minutes between non-iconic narrations
+- Region transitions fire for top-tier layers only (province + named valley)
+- Iconic Local Override always fires
+
+### 6.3. No minimum gap rule for high-value content
+
+A previously-considered "minimum 3-minute gap between any two narrations" is **dropped**. Replacement rule:
+
+- A POI with `significance_score >= 75` OR Iconic Local Override status OR Region transition queue **never gets dropped due to timing**. It queues behind the active narration.
+- A POI with `significance_score` in the 70–75 range gets dropped if it would land within 60 seconds of another POI ending.
+- Light Touch's 6-minute floor applies only to non-iconic content (significance < 75 AND not an Iconic Local Override).
+
+Practical result: Long Valley Caldera (3 min) can be followed immediately by Schat's Bakkery (25 sec) followed by Manzanar (90 sec). The pacing comes from the land, not from a clock.
+
+### 6.4. UI
+
+Trip setup shows two cards with explainer popouts:
+
+> **Full Drive** — Hear every significant story along your route, at its full length. Best for road trips when the journey *is* the destination.
+
+> **Light Touch** — Hear only the standout moments, compressed to keep the air clear. Best for everyday drives, family trips, or when you want flavor without commitment.
+
+---
+
+## 7. Cultural Fabric Bar (Music / Art / Notable Churches)
+
+Music venues, public art, and notable churches are **opt-in via Narrative Focus + Local Color**, but with a higher bar than the rest of Local Color because the categories attract volume.
+
+### 7.1. Inclusion criteria
+
+A music venue / public art / notable church surfaces ONLY if it passes BOTH:
+
+**(a) Historical bar — one of:**
+- NRHP-listed
+- CHL-listed
+- Wikipedia article ⥠1,500 words (a meaningful article, not a stub)
+- AIA architectural canon (Twenty-Five Year Award, Pritzker laureate building, etc.)
+
+**(b) Resonance signal — one of:**
+- Currently operating in original use (church-still-church, venue-still-booking)
+- On the Library of Congress National Recording Registry or has a famously-recorded album from there
+- Cross-source verification (≥2 of: NRHP + Wikipedia + heritage tag)
+- Featured in major-publication "places that shaped American X" curation
+
+### 7.2. Drive-by resonance score (runtime tiebreaker)
+
+For POIs that clear the inclusion criteria but are borderline on a drive-by, a runtime resonance score adjusts trigger probability:
+
+| Signal | Effect on resonance |
+|---|---|
+| Visible from the road (within 200m, line-of-sight estimable) | +20 |
+| Current use matches storied use (church-still-church, venue-still-active) | +15 |
+| Has its own Wikipedia article (not just listed in one) | +10 |
+| Recently in cultural discourse (Wikipedia article updated in last 5 years) | +10 |
+| Driving at highway speed past industrial/airport zone | -15 |
+| Open-road mode, not city sightseeing | -10 for indoor venues |
+
+The resonance score acts as a multiplier on top of significance_score for marginal POIs (75-85 range). High-significance POIs (Watts Towers, Mission Dolores, Hollywood Bowl) trigger regardless.
+
+This runtime gate is **automatic, not user-facing**. The user sees the result → a feed where what comes up feels right → not the machinery.
+
+---
+
+## 8. Iconic Local Override
+
+The override that punches through every filter to call out genuinely iconic places — the bread, the dinosaur, the motel.
+
+### 8.1. Eligible categories
+
+- Food & drink (restaurants, bakeries, breweries, diners, ice cream stands, BBQ joints, coffee roasters)
+- Roadside oddities (Cabazon Dinosaurs, Salvation Mountain, World's Largest Thermometer, etc.)
+- Americana lodging/diners with deep historical roots (Madonna Inn, Roy's Motel & Café, etc.)
+
+### 8.2. Inclusion bar — strict, must pass ≥2 of:
+
+For food & drink and oddities:
+1. Wikipedia article exists (notability bar already cleared)
+2. James Beard Foundation recognition (America's Classics, semifinalist, winner)
+3. Roadfood.com directory listing (Jane & Michael Stern's curation)
+4. Atlas Obscura entry (for oddities specifically)
+5. Eater 38 / regional Eater Heatmap inclusion
+6. OSM `start_date` ⤠1965 (longevity signal — pre-Interstate-era survivor)
+7. NRHP or CHL listing (which would have pulled it in via the history pipeline anyway)
+
+For Americana lodging/diners — must pass ≥2 of the above AND ≥1 of:
+- Pre-1965 continuous operation at the same location
+- Listed in Society for Commercial Archeology register or Historic Hotels of America
+- NRHP or CHL listing
+
+This second filter prevents "any 1980s motor lodge with good reviews" from claiming Americana iconic status.
+
+### 8.3. Data sources (all free, all v1)
+
+| Source | Cost | Coverage |
+|---|---|---|
+| Wikipedia articles | Free | ~automatic — already in Wikidata import |
+| James Beard Foundation archive | Free (scrape, refresh annually) | ~20 CA America's Classics |
+| Roadfood.com directory | Free (scrape, refresh annually) | ~200 CA entries |
+| Atlas Obscura | Free API, rate-limited | ~500 CA entries |
+| Eater archives | Free (scrape, refresh annually) | ~100 CA entries |
+| OSM start_date | Free (already imported) | Spotty but useful |
+| Society for Commercial Archeology | Free (manual scrape) | ~30 CA Americana lodging entries |
+| Historic Hotels of America | Free directory | ~20 CA hotels |
+
+**Google Places API is explicitly NOT used in v1.** Rationale: zero users, founder-funded, free sources are sufficient for the iconic-not-popular framing. Revisit Google Places integration when monthly active users > 5,000 OR when user feedback consistently flags "missed obvious place X."
+
+### 8.4. Schema additions
+
+```sql
+ALTER TABLE pois ADD COLUMN iconic_local boolean NOT NULL DEFAULT false;
+ALTER TABLE pois ADD COLUMN iconic_local_reasons text[] DEFAULT '{}';
+-- Examples: ['wikipedia_article', 'roadfood_listed', 'start_date_1938', 'signature_dish:sheepherder_bread']
+ALTER TABLE pois ADD COLUMN signature_hook text;
+-- The one-liner: "known for sheepherder bread, a Basque sourdough"
+```
+
+### 8.5. Narration format
+
+Iconic Local Override narrations are **forced to Brief depth** regardless of trip Pace or intrinsic POI depth. Target ~30-second callout:
+
+> *"Up on the left, that's Schat's Bakkery — Erick Schat opened it in 1938, and they're known for their sheepherder bread, a sourdough recipe the Basque shepherds brought to the Owens Valley. The line out the door on a Saturday morning is half the experience."*
+
+The narration prompt template `iconic_local_callout.ts` takes `(poi.name, poi.signature_hook, poi.iconic_local_reasons)` and generates the punch.
+
+### 8.6. Trigger rules
+
+- Always fires regardless of narrative_focus (Soul, +Local Color, Custom)
+- Always fires regardless of pace (Full Drive, Light Touch)
+- Never interrupts active narration — queues behind it
+- Max one Iconic Local per ~30 min of driving (if two iconic POIs are close together, the higher-scoring one wins; the other is suppressed)
+- Bypasses the 60-second post-narration gap rule
+
+### 8.7. Importer pipeline
+
+A new importer `scripts/poi-import/sources/iconic-curation.ts` scrapes the curated lists, cross-references against the existing pois table by name + location proximity, and sets `iconic_local = true` plus the `iconic_local_reasons` array. Runs as a separate pipeline phase after all other importers and dedup.
+
+---
+
+## 9. Skip / Tell Me More + Feedback Reports
+
+### 9.1. UI controls
+
+**Skip button:** appears on the active narration card (bottom card on driving page). Tap — audio fades out over ~800ms, current narration logs as `skipped_at_second: N`, next queued narration plays.
+
+**Tell Me More pill:** after a Brief or Standard narration ends, a "Tell me more —" pill appears on the card for ~6 seconds. Tap — system plays the Long version of the same POI (regenerating on demand if not cached, which is rare for high-significance POIs).
+
+Both controls are visible during driving mode (placement TBD by UI design — must respect the safety-first rule of large targets, no reading).
+
+### 9.2. Schema
+
+```sql
+CREATE TABLE narration_plays (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id uuid REFERENCES auth.users(id),
+  trip_id uuid REFERENCES trips(id),
+  poi_id uuid REFERENCES pois(id),
+  region_id uuid REFERENCES regions(id),  -- nullable; one of poi_id or region_id is set
+  narration_audio_id uuid REFERENCES narration_audio(id),
+  played_at timestamptz NOT NULL DEFAULT now(),
+  audio_duration_ms integer NOT NULL,
+  played_through_ms integer NOT NULL,  -- 0 if user skipped immediately
+  was_skipped boolean NOT NULL DEFAULT false,
+  skipped_at_second integer,
+  tell_me_more_tapped boolean NOT NULL DEFAULT false,
+  CHECK (poi_id IS NOT NULL OR region_id IS NOT NULL)
+);
+
+CREATE INDEX idx_narration_plays_poi ON narration_plays (poi_id);
+CREATE INDEX idx_narration_plays_user ON narration_plays (user_id);
+CREATE INDEX idx_narration_plays_played_at ON narration_plays (played_at);
+```
+
+### 9.3. Three reports
+
+**Report 1: Per-narration health (weekly cron)**
+
+For every narration with ≥20 plays:
+- Median played-through percentage
+- Skip rate (% of plays that ended early)
+- Skip clustering (where in the audio do skips happen — first 10 sec? 2-min mark?)
+- Tell-Me-More tap rate (for Brief/Standard narrations)
+
+Action: any narration with skip_rate > 40% OR median_played_through < 50% gets flagged for regeneration. Flagged narrations enter `narration_regen_queue`. The narration worker picks them up, regenerates with a varied prompt, and A/B tests against the original over the next 100 plays. Winner stays, loser is archived.
+
+**Report 2: Per-user nudges (real-time)**
+
+For users with ≥20 plays:
+- Skip rate > 50% across all narrations — nudge: *"Looks like our narrations might be running long for you. Want to try Light Touch?"*
+- Skip rate > 40% on a specific category — quiet category weight adjustment for that user (opt-in via "Learn from my taps" setting)
+- Skip rate < 10% AND Tell Me More tap rate > 30% — nudge: *"You're enjoying the deep cuts. Want to switch to Full Drive?"*
+
+Nudges are one-shot, never twice in a row, dismissible.
+
+**Report 3: Content-quality dashboard (monthly, human-curated)**
+
+For the human curator (founder):
+- Top 50 narrations by skip rate
+- Top 50 narrations by Tell Me More tap rate (signals under-served depth)
+- Categories with rising / falling engagement over the last 30 days
+- New POIs added in the last 30 days with their initial skip rates
+
+This is the editorial dashboard. Pattern-spotting that humans do better than crons.
+
+### 9.4. Privacy
+
+Skip data is scoped to authenticated users only. Anonymous users don't generate narration_plays rows. The "learn from my taps" auto-tuning is opt-in (default off) per the user's earlier privacy preference. Aggregated skip statistics for content quality are non-identifying.
+
+---
+
+## 10. Putting It All Together — The Lookahead Queue
+
+The lookahead worker on the WS server runs every 5 seconds during driving mode. It produces an ordered queue of upcoming narrations. The full ranking pipeline:
+
+```
+1. Get user's current location, speed, heading, route geometry
+2. Query candidate sources:
+   a. detect_regions_at_location — any new regions entered in last 60 sec
+   b. get_route_pois(route_geom, corridor_m=lookahead_radius) —
+      all POIs ahead, filtered by:
+      - merged_into IS NULL
+      - significance_score >= category_significance_floors[category]
+      - parent_poi_id IS NULL (drive-by mode; venue tour uses different RPC)
+      - category in narrative_focus allowed categories (default Soul + Iconic Local)
+   c. iconic_local override check for any POI ahead within corridor regardless of focus
+
+3. Rank candidates:
+   - effective_score = significance_score × narrator_weight[category]
+   - For Cultural Fabric POIs: apply resonance score modifier
+   - Iconic Local: forced to top of queue, max 1 per 30 min
+   - Region transitions: forced to top of queue, max 1 per 20 min, top-tier only for Light Touch
+
+4. Apply Pace rules:
+   - Full Drive: queue everything that passes ranking, no gap floor
+   - Light Touch:
+     - non-iconic POIs need ⥠6 min gap from previous narration
+     - long-weight POIs use long_compressed audio variant
+
+5. Drop any POI within 60 sec of another POI's end time IF significance_score < 75
+
+6. Pre-fetch audio for next 3-5 queued items using current narrator + audience + intrinsic_depth (or long_compressed for long+Light Touch)
+   - Cache hit — URL ready
+   - Cache miss — enqueue generation job, expect ~5-8 sec latency
+
+7. Emit narration_queued events to client for UI preview
+```
+
+### 10.1. Mode override
+
+When the user is on the Hiking page, swap step 2b for the hiking RPC variant (80m proximity, walking speed). When on the City Sightseeing page, the auto-queue is disabled entirely (tap-to-hear). Regions are driving-only by default.
+
+### 10.2. Cancel-route invalidates queue
+
+Standard behavior. Already in spec.
+
+---
+
+## 11. Migration Order
+
+When the build chat picks this up, the migrations should run in this order. Each step is incremental and ships independently.
+
+1. **Migration: add `intrinsic_depth` to `pois`** (§4.2) — backfill all existing POIs to 'standard'; the depth-assignment job runs after
+2. **Migration: add `iconic_local` columns to `pois`** (§8.4)
+3. **Migration: create `category_significance_floors` table** (§2.2)
+4. **Migration: create `regions` table** (§3.1) + RPC `detect_regions_at_location`
+5. **Migration: create `narration_plays` table** (§9.2)
+6. **Migration: update `voice_configs` partial unique index** to `(mode, narrator_slug) WHERE is_active = true` (§5.6); deactivate old narrators; insert two new narrators × four audience modes
+7. **Update `get_nearby_pois` and `get_route_pois` RPCs** to accept `narrative_focus`, `pace`, and `narrator_slug` parameters and apply per-category floor logic
+8. **Import region data** (USGS provinces → EPA ecoregions → Native Land Digital → named valleys)
+9. **Pre-generate region narrations** (~2,000 generations, one-time ~$15-25)
+10. **Import iconic curation sources** (Wikipedia + Roadfood + James Beard + Atlas Obscura + Eater + SCA + HHA)
+11. **Run depth-assignment job** to set `intrinsic_depth` per heuristics in §4.3
+12. **Update lookahead worker** with the full ranking pipeline (§10)
+13. **Update mobile UI:**
+    - Trip setup: narrator picker (2 cards), narrative focus picker (3 cards), pace picker (2 cards)
+    - Driving page: Skip button + Tell Me More pill
+    - Settings: "Learn from my taps" toggle
+14. **Wire skip/tell-me-more events** through WS to `narration_plays`
+15. **Ship report cron jobs** (per-narration health, per-user nudges, content dashboard)
+
+Each migration is reversible. Each step can be deployed independently and the system remains functional throughout (with the old behavior progressively replaced).
+
+---
+
+## 12. Open Questions / Decision Flags
+
+The build chat should flag these back for human decision when relevant:
+
+1. **Final narrator names.** Internal slugs (`narrator_a`, `narrator_b`) can ship in code now; display names can be set in `voice_configs.display_name` once finalized. Does not block any work.
+2. **Watersheds (HUC8) in v1 or deferred to v2?** Recommend deferred.
+3. **Per-category significance floors final values.** Schema is in place; human curator (you) reviews the post-import POI list and sets values.
+4. **Resonance score weights** (§7.2) — initial values are heuristic; tune based on early Cultural Fabric skip rates.
+5. **Local Color airtime ratios per narrator** (§5.4) — initial values are guesses; tune based on user feedback.
+6. **Tell Me More cache-on-demand cost** — if Long-version audio doesn't exist when user taps the pill, generation latency is 5–10 sec. Acceptable UX or pre-generate Long versions for all `significance_score >= 80` POIs at import time? Recommend the latter; ~$50 one-time cost for CA.
+
+---
+
+## 13. What This Doc Does NOT Cover
+
+- Venue Tour mode interactions with these changes (see `venue-tour-design.md`; Venue Tour POIs bypass most of this addendum's logic by design — venue children have their own significance pool and trigger logic)
+- Corridor narration (the existing prompt-engineering for gap-filling between POIs is unchanged)
+- Group trip / shared narration synchronization (no changes needed; group narrator selection follows the lead user's pick)
+- The voice audition workflow (unchanged; covered in SKILL.md)
+- Monetization tier gating (TBD — likely the Free tier gets Soul-only Light Touch with Narrator A; Road Pass unlocks all of the above)
+
+---
+
+**End of addendum.** Hand to build chat for incremental implementation per §11.

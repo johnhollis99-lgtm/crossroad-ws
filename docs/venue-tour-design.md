@@ -1,4 +1,4 @@
-# Venue Tour — Design Specification
+# Venue Tour → Design Specification
 
 **Status:** Locked-in design (v1.0)
 **Audience:** All future imports, dedup runs, trigger logic, frontend, and admin tooling.
@@ -230,6 +230,21 @@ $$;
 
 When the app is in Venue Tour mode, it calls `get_venue_tour_pois` instead of `get_nearby_pois`. When driving/hiking, it uses `get_nearby_pois` with the default `p_include_children=false`.
 
+### 3.5. Extend `narration_audio.mode` CHECK for venue_tour
+
+Venue Tour adds a fourth `trip_mode` value. The existing CHECK on `narration_audio.mode` allows only `('driving','hiking','city')` and must be extended:
+
+```sql
+-- Migration: 2026XXXX000002_narration_audio_add_venue_tour.sql
+ALTER TABLE narration_audio DROP CONSTRAINT narration_audio_mode_check;
+ALTER TABLE narration_audio ADD CONSTRAINT narration_audio_mode_check
+  CHECK (mode IN ('driving','hiking','city','venue_tour'));
+```
+
+The existing UNIQUE `(poi_id, narrator_slug, depth, mode)` continues to apply → `'venue_tour'` rows coexist with the other three modes for the same POI, since the same Big Thunder Mountain has separate audio for drive-by (where it's suppressed as a child) vs. venue-tour-mode (where it's the trigger).
+
+The Storage path `{poi_id}/{trip_mode}/{depth}/{narrator_slug}.opus` accommodates `venue_tour` without further change. The cache-key shape is unchanged; only the value space expands.
+
 ---
 
 ## 4. Classification Algorithm
@@ -295,22 +310,22 @@ Source-specific rules that flag a POI as `is_venue=true` during import:
 **OSM tags:**
 - `tourism=theme_park` → venue_type: `theme_park`
 - `boundary=national_park` → venue_type: `national_park`
-- `leisure=park` AND area > 100,000 m² AND name → venue_type: `state_park` (or `park` if smaller scale)
+- `leisure=park` AND area > 100,000 m² AND name — venue_type: `state_park` (or `park` if smaller scale)
 - `amenity=university` → venue_type: `campus`
 - `tourism=zoo` OR `tourism=aquarium` → venue_type: `zoo_aquarium`
 - `historic=district` → venue_type: `historic_district`
-- `tourism=museum` AND `building` polygon area > 5,000 m² with multiple sub-features → venue_type: `museum_complex`
-- `historic=mission` OR (`amenity=place_of_worship` + `historic=mission`) → venue_type: `mission`
-- `landuse=cemetery` AND named → venue_type: `cemetery`
+- `tourism=museum` AND `building` polygon area > 5,000 m² with multiple sub-features — venue_type: `museum_complex`
+- `historic=mission` OR (`amenity=place_of_worship` + `historic=mission`) — venue_type: `mission`
+- `landuse=cemetery` AND named — venue_type: `cemetery`
 
 **Wikidata P31 (instance of) values:**
-- `Q1116364` (theme park) → venue_type: `theme_park`
-- `Q46169` (national park) → venue_type: `national_park`
-- `Q3914` (high school) / `Q3918` (university) → venue_type: `campus`
+- `Q1116364` (theme park) — venue_type: `theme_park`
+- `Q46169` (national park) — venue_type: `national_park`
+- `Q3914` (high school) / `Q3918` (university) — venue_type: `campus`
 - `Q43229` (organization) is too broad — skip
-- `Q1248784` (cemetery) → venue_type: `cemetery`
-- `Q43501` (zoo) → venue_type: `zoo_aquarium`
-- `Q1572600` (Spanish mission) / `Q120560` (mission station) → venue_type: `mission`
+- `Q1248784` (cemetery) — venue_type: `cemetery`
+- `Q43501` (zoo) — venue_type: `zoo_aquarium`
+- `Q1572600` (Spanish mission) / `Q120560` (mission station) — venue_type: `mission`
 
 **Polygon required:** A POI is only marked `is_venue=true` if the source provides a polygon. If only a point is available, it's stored as a regular POI for now (and can be promoted to a venue later when a polygon becomes available).
 
@@ -321,7 +336,7 @@ A POI inside a venue polygon should remain standalone (`parent_poi_id=null`) if 
 | Rule | Rationale |
 |---|---|
 | `source_type IN ('nrhp', 'state_landmark')` AND venue.venue_type IN ('theme_park', 'campus', 'park') | Historic landmarks predate or are independent of modern venues. Campo de Cahuenga (1847) inside Universal (1915) — keep standalone. |
-| `additional_sources` length ≥ 2 (multi-source verified independent significance) — **except** when `venue.venue_type IN ('theme_park', 'zoo_aquarium')` | Cross-source verification implies independent prominence. **Carve-out (added in V1 backfill review):** for theme parks and zoos, multi-source usually means OSM + Wikidata both catalogued the ride/exhibit — not that it's independently famous. Without the carve-out, Grizzly River Run, Jurassic World—The Ride, and similar attractions stayed standalone and outranked their parent venues in the top-25. |
+| `additional_sources` length ⥠2 (multi-source verified independent significance) | Cross-source verification implies independent prominence. |
 | `confidence_score < 0.7` (uncertain geocoding) | Don't auto-link uncertain POIs into venues — they may be incorrectly placed. |
 | Source name explicitly contains the venue name as ownership ("Disneyland Hotel", "Stanford Memorial Church") | These are intentionally part of the venue. **Override**: this rule is OFF, since these ARE children. |
 | POI was imported BEFORE this venue existed (`pois.imported_at < venue.imported_at`) | Existing POI shouldn't be retro-claimed by a newly-imported venue without review. Safer default. |
@@ -422,9 +437,11 @@ Different prompt templates apply for venue children:
 **Venue Tour narration of a child:**
 > "You're approaching Big Thunder Mountain Railroad. This 1979 attraction was inspired by the rock formations of Bryce Canyon and Monument Valley. Walt Disney Imagineering designed it as the company's first thrill ride after Walt's death..."
 
-Two new prompt templates per (mode, depth, audience): `venue_tour_glance`, `venue_tour_ride_along`, `venue_tour_deep_dive`. The audience modes (Family, Kids, Unfiltered, Local) layer on top.
+`venue_tour` becomes a new `trip_mode` value alongside `driving`/`hiking`/`city`. This requires extending the CHECK constraint on `narration_audio.mode` to include `'venue_tour'` (see new migration in §3). Three new prompt templates are needed at the `trip_mode × depth` level: `venue_tour_brief`, `venue_tour_standard`, `venue_tour_long`. The four audience modes (Family, Kids, Unfiltered, Local) and two narrators (Narrator A reverent, Narrator B conversational) layer on top of each.
 
-This adds 12 templates (4 audiences × 3 depths) to the existing 12, for 24 total. Implementation is incremental — start with Family + Ride Along for first ship.
+**⚠️ Per `roadstory-narration-curation-addendum.md` §5:** the narrator system has been consolidated from four (Professor/Local/Junior Ranger/Truck Driver) to two (Narrator A/B). The template-count math below is updated accordingly.
+
+This adds **6 templates** for `venue_tour` trip mode (3 depths × 2 narrators, with audience mode applied at the voice_configs layer). Most venue children default to `standard` intrinsic_depth (walk-up callouts), so the `brief` and `long` variants are used selectively. Implementation is incremental — start with Narrator A + Standard for first ship.
 
 ### 6.4. Significance suppression for children
 
@@ -462,9 +479,9 @@ Approach B is simpler for incremental imports (e.g., a new county). The classifi
 
 ```
 OSM import → Wikidata import → NRHP import → CHL import
-  → Dedup
-  → Classify children   ← NEW STEP
-  → Significance recompute
+  — Dedup
+  → Classify children   → NEW STEP
+  — Significance recompute
 ```
 
 ### 7.2. Classifier as standalone script
@@ -603,7 +620,7 @@ The 3 flagged cases from `docs/data-quality-issues.md` resolve cleanly under thi
 
 ### 10.1. Confirmed decisions
 - **Children cannot also be venues** (constraint in schema). If we encounter legitimately nested venues (museum-inside-park), the inner gets `is_venue=false` and the outer wins. We'll revisit if this proves limiting.
-- **Polygon required for venue status.** No polygon → no venue status until a polygon is provided.
+- **Polygon required for venue status.** No polygon — no venue status until a polygon is provided.
 - **Source-priority dedup applies to venues too.** If two venues are imported (e.g., Wikidata Yosemite + OSM Yosemite), they merge into one canonical venue per the existing source-priority rule (state_landmark > nrhp > wikidata > osm).
 
 ### 10.2. Open decisions (deferred)
@@ -614,7 +631,7 @@ The 3 flagged cases from `docs/data-quality-issues.md` resolve cleanly under thi
 
 ### 10.3. Things this design explicitly does NOT do
 - Does NOT solve the "Walk of Fame" cluster issue — that's a duplication problem, not a hierarchy problem (Section 11)
-- Does NOT solve the Misión↔Mission language variant — that's a normalization problem
+- Does NOT solve the Misión—Mission language variant — that's a normalization problem
 - Does NOT replace the existing dedup pipeline — venue classification runs *after* dedup
 - Does NOT generate narration content automatically — narration prompts and TTS still live in `scripts/lib/tts/` and the prompt template system
 
@@ -624,12 +641,12 @@ The 3 flagged cases from `docs/data-quality-issues.md` resolve cleanly under thi
 
 | Stage | Affected By Venue Tour? | How |
 |---|---|---|
-| Schema | Yes (Section 3) | New columns, new constraints, new RPCs |
+| Schema | Yes (Section 3) | New columns on `pois`, new constraints, new RPCs, and `narration_audio.mode` CHECK extended to include `'venue_tour'` (§3.5) |
 | Importers (OSM/Wikidata/NRHP/CHL/narrative) | Yes (Section 7) | Each calls `classifyPOI()` after normalization |
 | Dedup | No | Runs before classification; merges venue duplicates same as any other POI |
 | Significance recompute | Indirectly | Children's scores stop competing with parents at query time, so distribution becomes more meaningful |
-| Narration generation | Yes (Section 6.3) | New prompt templates for venue tour mode |
-| TTS generation | No | Same provider abstraction, same cache key |
+| Narration generation | Yes (Section 6.3) | New prompt templates for venue tour trip_mode (3 depths × 2 narrators = 6 base templates; audience layered at voice level per addendum §5) |
+| TTS generation | No | Same provider abstraction, same cache-key shape `{poi_id}/{trip_mode}/{depth}/{narrator_slug}.opus`; only the `trip_mode` value space expands |
 | Frontend (Expo + React Native) | Yes | New Venue Tour page, mode auto-detection on user dwell |
 | WS Server | Yes | New events: `venue_entered`, `venue_exited`, `venue_tour_started` |
 | Admin tooling | Yes | Polygon drawing, venue review queue, classification dry-run |
@@ -642,7 +659,7 @@ The 3 flagged cases from `docs/data-quality-issues.md` resolve cleanly under thi
 |---|---|---|
 | **V1** (now) | Schema migration, classifier algorithm, venue seed for ~80 CA venues, backfill, RPC updates | All future imports |
 | **V2** (next) | Update OSM/Wikidata/NRHP/CHL importers to call `classifyPOI()` | Santa Barbara + Ventura imports |
-| **V3** (later) | Venue tour prompt templates (Family/Ride Along first), UI mode detection | App launch |
+| **V3** (later) | Venue tour prompt templates (Narrator A + Standard first), UI mode detection. **Depends on**: narrator collapse migration from curation addendum §5. | App launch |
 | **V4** (later) | Admin polygon drawing, venue review queue, classification override UI | Scaling beyond CA |
 | **V5** (much later) | International venue catalog, multi-language venue support | International expansion |
 
@@ -667,9 +684,11 @@ V1 is complete when:
 
 ## 14. References
 
-- `roadstory-poi-pipeline-prompts.md` — phased import playbook
-- `SKILL.md` — project skill (architecture, audience modes, narration depths)
-- `docs/data-quality-issues.md` — tracked manual-review cases
+- `roadstory-poi-pipeline-prompts.md` → phased import playbook
+- `roadstory-narration-curation-addendum.md` → narrator/depth/pace/significance model (supersedes older narrator references in this doc)
+- `roadstory-unified-roadmap.md` → sequencing across all pending work
+- `SKILL.md` → project skill (architecture, audience modes, narration depths)
+- `docs/data-quality-issues.md` → tracked manual-review cases
 
 ---
 
