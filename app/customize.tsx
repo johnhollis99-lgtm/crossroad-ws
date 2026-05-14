@@ -588,6 +588,7 @@ export default function CustomizeScreen() {
       {/* ── MAP PEEK — non-interactive route preview, no overlays ──────── */}
       <View style={styles.mapWrap}>
         <MapView
+          key={mapStyleId}
           style={StyleSheet.absoluteFillObject}
           provider={PROVIDER_GOOGLE}
           mapType={activeMapStyle.mapType}
