@@ -40,7 +40,7 @@ import { MapStylePicker } from '../components/MapStylePicker';
 import { useSheetSnap } from '../hooks/useSheetSnap';
 import { useTheme } from '../src/design/theme';
 import { shadows } from '../src/design/tokens';
-import { useBreath } from '../src/design/motion';
+import { useBreath, useSonar, useUserHalo } from '../src/design/motion';
 import {
   IconClose,
   IconPause,
@@ -189,11 +189,15 @@ function DrivePoiMarker({
   themeColors: { primary: string; ink: string; paperSoft: string };
 }) {
   const tracking = usePoiMarkerTracking();
+  // Active = currently narrating. Sonar rings animate continuously so the
+  // marker must keep tracksViewChanges=true; otherwise the bitmap snapshot
+  // freezes the first frame and the rings appear static.
+  const tracksViewChanges = isActive ? true : tracking;
   return (
     <Marker
       coordinate={{ latitude: poi.lat, longitude: poi.lng }}
       anchor={{ x: 0.5, y: 0.5 }}
-      tracksViewChanges={tracking}
+      tracksViewChanges={tracksViewChanges}
       onPress={onPress}
     >
       {isActive
@@ -203,42 +207,137 @@ function DrivePoiMarker({
   );
 }
 
-// Active = larger X glyph on a paperSoft pill with a primary border ring —
-// visibly distinct from the inactive curated X without changing brand color.
+// Active = larger X glyph on a paperSoft pill with a primary border ring,
+// flanked by two staggered sonar pulse rings (Pine spec section 6
+// `sonarRing`). The double-ripple draws the eye to whichever POI is
+// currently narrating without animating every marker on the map.
 function ActivePoiMarker({
   themeColors,
 }: {
   themeColors: { primary: string; ink: string; paperSoft: string };
 }) {
+  const sonarA = useSonar({ duration: 2800, delay: 0 });
+  const sonarB = useSonar({ duration: 2800, delay: 1400 });
+
   return (
-    <View
-      style={{
-        width:           40,
-        height:          40,
-        borderRadius:    20,
-        backgroundColor: themeColors.paperSoft,
-        borderWidth:     2,
-        borderColor:     themeColors.primary,
-        alignItems:      'center',
-        justifyContent:  'center',
-      }}
-    >
-      <Svg width={28} height={28} viewBox="0 0 28 28">
-        <SvgText
-          x={14}
-          y={14}
-          textAnchor="middle"
-          dy={6}
-          fontSize={20}
-          fontWeight="700"
-          fill={themeColors.primary}
-        >
-          X
-        </SvgText>
-      </Svg>
+    <View style={activeMarkerStyles.wrap} pointerEvents="none">
+      <Animated.View
+        style={[
+          activeMarkerStyles.sonarRing,
+          {
+            borderColor: themeColors.primary,
+            transform:   [{ scale: sonarA.scale }],
+            opacity:     sonarA.opacity,
+          },
+        ]}
+      />
+      <Animated.View
+        style={[
+          activeMarkerStyles.sonarRing,
+          {
+            borderColor: themeColors.primary,
+            transform:   [{ scale: sonarB.scale }],
+            opacity:     sonarB.opacity,
+          },
+        ]}
+      />
+      <View
+        style={[
+          activeMarkerStyles.disc,
+          { backgroundColor: themeColors.paperSoft, borderColor: themeColors.primary },
+        ]}
+      >
+        <Svg width={28} height={28} viewBox="0 0 28 28">
+          <SvgText
+            x={14}
+            y={14}
+            textAnchor="middle"
+            dy={6}
+            fontSize={20}
+            fontFamily="serif"
+            fontWeight="700"
+            fill={themeColors.primary}
+          >
+            X
+          </SvgText>
+        </Svg>
+      </View>
     </View>
   );
 }
+
+const activeMarkerStyles = StyleSheet.create({
+  wrap: {
+    width:           96,
+    height:          96,
+    alignItems:      'center',
+    justifyContent:  'center',
+  },
+  disc: {
+    width:           40,
+    height:          40,
+    borderRadius:    20,
+    borderWidth:     2,
+    alignItems:      'center',
+    justifyContent:  'center',
+  },
+  sonarRing: {
+    position:        'absolute',
+    width:           40,
+    height:          40,
+    borderRadius:    20,
+    borderWidth:     2,
+    top:             28,
+    left:            28,
+  },
+});
+
+// User location dot with breathing halo — Pine spec section 6 `userHalo`.
+function UserLocationMarker({
+  haloColor, dotColor, ringColor,
+}: {
+  haloColor: string;
+  dotColor:  string;
+  ringColor: string;
+}) {
+  const halo = useUserHalo({ duration: 2200 });
+  return (
+    <View style={userLocStyles.wrap} pointerEvents="none">
+      <Animated.View
+        style={[
+          userLocStyles.halo,
+          {
+            backgroundColor: haloColor,
+            transform:       [{ scale: halo.scale }],
+            opacity:         halo.opacity,
+          },
+        ]}
+      />
+      <View style={[userLocStyles.dot, { backgroundColor: dotColor, borderColor: ringColor }]} />
+    </View>
+  );
+}
+
+const userLocStyles = StyleSheet.create({
+  wrap: {
+    width:           44,
+    height:          44,
+    alignItems:      'center',
+    justifyContent:  'center',
+  },
+  halo: {
+    position:        'absolute',
+    width:           28,
+    height:          28,
+    borderRadius:    14,
+  },
+  dot: {
+    width:           14,
+    height:          14,
+    borderRadius:    7,
+    borderWidth:     2,
+  },
+});
 
 // ── Main screen ───────────────────────────────────────────────────────────────
 
@@ -728,10 +827,16 @@ export default function Drive() {
         )}
 
         {userLocation && (
-          <Marker coordinate={userLocation} anchor={{ x: 0.5, y: 0.5 }}>
-            <View style={[s.userLocOuter, { backgroundColor: theme.colors.secondaryTint }]}>
-              <View style={[s.userLocInner, { backgroundColor: theme.colors.secondaryDeep, borderColor: theme.colors.paper }]} />
-            </View>
+          <Marker
+            coordinate={userLocation}
+            anchor={{ x: 0.5, y: 0.5 }}
+            tracksViewChanges
+          >
+            <UserLocationMarker
+              haloColor={theme.colors.secondary}
+              dotColor={theme.colors.secondaryDeep}
+              ringColor={theme.colors.paper}
+            />
           </Marker>
         )}
 

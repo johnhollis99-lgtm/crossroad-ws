@@ -1,23 +1,19 @@
 /**
- * X-shaped POI marker — Pine serif-X glyph via SVG <Text> with the
- * paintOrder="stroke" halo trick (Pine spec section 4). NOT a Marker —
- * the caller wraps it in a <Marker> with the coordinate + onPress and
- * this component renders the X glyph as the Marker's child.
+ * X-shaped POI marker — Pine serif-X glyph layered over a thin emerald
+ * "target" ring with a cream halo (Pine spec section 4 + visual upgrade).
  *
- * Two sizes:
- *   curated — high-relevance corridor / route-curated POIs (larger X)
- *   reveal  — viewport-reveal low-relevance POIs (smaller X)
+ * Composition (centered in a 40×40 wrapper):
+ *   1. Static outer emerald ring (frames the glyph, gives a "target" feel)
+ *   2. Bicolor X glyph — emerald fill with a thin cobalt outline (two-color
+ *      punch) and a cream halo from the paintOrder="stroke" trick (legible
+ *      on every map style — dark, satellite, streets, terrain).
  *
- * Always rendered inside a 32×32 invisible View so the hitbox stays
- * comfortable on the smaller reveal size. Fill is `theme.colors.primary`
- * (emerald — same brand mark used on the Wordmark X). Halo is paperSoft
- * via the paintOrder stroke trick: the stroke renders behind the fill,
- * creating a soft ring that keeps the glyph legible on any map color.
+ * Two size variants:
+ *   curated — high-relevance corridor / route-curated POIs (larger)
+ *   reveal  — viewport-reveal low-relevance POIs (smaller)
  *
- * tracksViewChanges discipline: when a Marker wraps a custom View child,
- * react-native-maps captures a bitmap. `usePoiMarkerTracking()` starts
- * true so the first frame rasterizes the SVG once then flips to false
- * after 1s to stop the native re-snapshot churn.
+ * Always rendered inside a 40×40 wrapper so the hitbox stays comfortable
+ * even on the smaller reveal size.
  *
  * Clusterer rule (drift 5.94): react-native-map-clustering's `isMarker`
  * helper reads `child.props.coordinate` directly on JSX children passed
@@ -28,7 +24,7 @@
 
 import React from 'react';
 import { StyleSheet, View } from 'react-native';
-import Svg, { Text as SvgText } from 'react-native-svg';
+import Svg, { Circle, Text as SvgText } from 'react-native-svg';
 
 import { useTheme } from '../design/theme';
 
@@ -38,28 +34,44 @@ export interface PoiMarkerXProps {
   size?: PoiMarkerXSize;
 }
 
-const WRAPPER_PX = 32;
+const WRAPPER_PX = 40;
 
-// Halo color is `ink` (cream), NOT `paperSoft` (near-black per Pine spec
-// section 4). The spec assumed lighter map tiles (streets / satellite) where
-// a dark halo separates the emerald X. On Pine's dark map style the dark
-// halo disappears into the tile. Cream halo keeps the marker visible on
-// every map style — high contrast on dark, subtle edge on light.
-const GLYPH: Record<PoiMarkerXSize, { fontSize: number; haloWidth: number }> = {
-  curated: { fontSize: 18, haloWidth: 2.8 },
-  reveal:  { fontSize: 12, haloWidth: 2.0 },
+interface GlyphCfg {
+  fontSize:    number;
+  haloWidth:   number;
+  ringRadius:  number;
+  ringStroke:  number;
+  outlineWidth: number;
+}
+
+const GLYPH: Record<PoiMarkerXSize, GlyphCfg> = {
+  curated: { fontSize: 20, haloWidth: 3.0, ringRadius: 15, ringStroke: 1.3, outlineWidth: 0.5 },
+  reveal:  { fontSize: 14, haloWidth: 2.2, ringRadius: 11, ringStroke: 1.0, outlineWidth: 0.4 },
 };
 
 export function PoiMarkerX({ size = 'curated' }: PoiMarkerXProps) {
   const { theme } = useTheme();
-  const { fontSize, haloWidth } = GLYPH[size];
+  const { fontSize, haloWidth, ringRadius, ringStroke, outlineWidth } = GLYPH[size];
+  const center = WRAPPER_PX / 2;
 
   return (
     <View style={styles.wrap} pointerEvents="none">
       <Svg width={WRAPPER_PX} height={WRAPPER_PX} viewBox={`0 0 ${WRAPPER_PX} ${WRAPPER_PX}`}>
+        {/* Outer target ring — emerald, thin, framing the glyph. */}
+        <Circle
+          cx={center}
+          cy={center}
+          r={ringRadius}
+          stroke={theme.colors.primary}
+          strokeWidth={ringStroke}
+          fill="none"
+          opacity={0.9}
+        />
+        {/* Halo X — cream stroke renders behind the fill via paintOrder, giving
+            the glyph a cream outline that pops on dark maps + edges on light. */}
         <SvgText
-          x={WRAPPER_PX / 2}
-          y={WRAPPER_PX / 2}
+          x={center}
+          y={center}
           textAnchor="middle"
           dy={fontSize * 0.32}
           fontSize={fontSize}
@@ -70,8 +82,24 @@ export function PoiMarkerX({ size = 'curated' }: PoiMarkerXProps) {
           strokeWidth={haloWidth}
           strokeLinejoin="round"
           // @ts-expect-error react-native-svg supports paintOrder at runtime
-          // but its TS types omit the attribute; rendering still respects it.
           paintOrder="stroke"
+        >
+          X
+        </SvgText>
+        {/* Outline X — thin cobalt outline ON TOP of the fill for two-color
+            punch (subtle but distinguishes the marker from "plain white X"). */}
+        <SvgText
+          x={center}
+          y={center}
+          textAnchor="middle"
+          dy={fontSize * 0.32}
+          fontSize={fontSize}
+          fontFamily={theme.fontFamilies.serif}
+          fontWeight="700"
+          fill="none"
+          stroke={theme.colors.secondary}
+          strokeWidth={outlineWidth}
+          strokeLinejoin="round"
         >
           X
         </SvgText>
@@ -84,15 +112,6 @@ export function PoiMarkerX({ size = 'curated' }: PoiMarkerXProps) {
  * Hook for the Marker-side tracksViewChanges discipline. Starts true so the
  * first frame rasterizes the SVG child; flips to false after 1s to stop the
  * native re-snapshot churn.
- *
- * Usage at the call site (inside the parent screen):
- *
- *   const tracking = usePoiMarkerTracking();
- *   return (
- *     <Marker coordinate={...} tracksViewChanges={tracking} onPress={...}>
- *       <PoiMarkerX size="curated" />
- *     </Marker>
- *   );
  */
 export function usePoiMarkerTracking(): boolean {
   const [tracking, setTracking] = React.useState(true);
