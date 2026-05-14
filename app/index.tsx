@@ -9,6 +9,7 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  AccessibilityInfo,
   ActivityIndicator,
   Animated,
   Dimensions,
@@ -27,6 +28,7 @@ import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 import { LinearGradient } from 'expo-linear-gradient';
 import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from 'react-native-maps';
 import ClusteredMapView from 'react-native-map-clustering';
+import Svg, { Circle } from 'react-native-svg';
 import * as Location from 'expo-location';
 import { useNavigation } from '@react-navigation/native';
 import {
@@ -177,36 +179,135 @@ function decodePolyline(encoded: string): { latitude: number; longitude: number 
 // to register positions, not per-marker isolation.
 
 // ── Cluster marker (drift 5.72 / C1) ─────────────────────────────────────────
-// Renders a single cluster bubble at a coordinate. tracksViewChanges begins
-// true so the native bitmap snapshot picks up the View child after
-// rasterization (drift 5.66 root cause); flips false 1s post-mount to bound
-// re-snapshot cost when many clusters are on screen. Per-instance state.
+// Cluster bubble — Pine spec section 4 layered composition:
+//   1. Outer paperSoft halo (opacity 0.18)
+//   2. Slowly-rotating dashed ring (24s/360°, paperSoft stroke)
+//   3. Filled emerald disc with hairline paperSoft border
+//   4. Top-left paperSoft inner highlight (3D feel)
+//   5. Mono count text (paper-cream), centered
+//
+// Size scales with digit count so the count text never clips:
+//   1–9       40px disc
+//   10–99     46px disc
+//   100–999   54px disc
+//   1000–9999 64px disc
+//   10000+    74px disc
+//
+// tracksViewChanges stays true so the rotation animation keeps refreshing
+// the native bitmap. Visible clusters are typically few (1–6 at any zoom)
+// so the perf cost is bounded; for static fallback, gate on reduced-motion.
 function ClusterMarker({
-  coordinate, count, onPress, styles,
+  coordinate, count, onPress,
 }: {
   coordinate: { latitude: number; longitude: number };
   count: number;
   onPress: () => void;
-  styles: any;
 }) {
-  const [tracking, setTracking] = useState(true);
+  const { theme } = useTheme();
+
+  const size =
+    count < 10    ? 40 :
+    count < 100   ? 46 :
+    count < 1000  ? 54 :
+    count < 10000 ? 64 :
+                    74;
+  const fontSize = count < 1000 ? 14 : count < 10000 ? 13 : 12;
+
+  // Halo extends 6px beyond the disc; SVG viewbox sized to contain it.
+  const viewSize = size + 12;
+  const center   = viewSize / 2;
+  const r        = size / 2;
+  const haloR    = r + 6;
+  const ringR    = r + 3;
+
+  // Rotation loop — Pine spec `clusterRing` 24s linear infinite. Gated on
+  // reduced-motion (parks at 0deg, no loop started). useRef + Animated
+  // value drive the wrapper's transform via interpolation.
+  const rotProgress = useRef(new Animated.Value(0)).current;
   useEffect(() => {
-    const t = setTimeout(() => setTracking(false), 1000);
-    return () => clearTimeout(t);
-  }, []);
-  const sizeStyle =
-    count < 50  ? styles.clusterBubble40 :
-    count < 500 ? styles.clusterBubble48 :
-                  styles.clusterBubble56;
+    let cancelled = false;
+    let loop: Animated.CompositeAnimation | null = null;
+    AccessibilityInfo.isReduceMotionEnabled().then((reduced) => {
+      if (cancelled || reduced) return;
+      loop = Animated.loop(
+        Animated.timing(rotProgress, {
+          toValue: 1,
+          duration: 24000,
+          useNativeDriver: true,
+        }),
+      );
+      loop.start();
+    });
+    return () => { cancelled = true; loop?.stop(); };
+  }, [rotProgress]);
+  const rotation = rotProgress.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '360deg'] });
+
   return (
     <Marker
       coordinate={coordinate}
       onPress={onPress}
       anchor={{ x: 0.5, y: 0.5 }}
-      tracksViewChanges={tracking}
+      tracksViewChanges
     >
-      <View style={[styles.clusterBubble, sizeStyle]}>
-        <Text style={styles.clusterText}>{count}</Text>
+      <View
+        style={{
+          width:           viewSize,
+          height:          viewSize,
+          alignItems:      'center',
+          justifyContent:  'center',
+        }}
+      >
+        {/* Static layers — halo + filled disc + border + highlight. */}
+        <Svg width={viewSize} height={viewSize} style={StyleSheet.absoluteFill}>
+          <Circle cx={center} cy={center} r={haloR} fill={theme.colors.paperSoft} opacity={0.18} />
+          <Circle cx={center} cy={center} r={r}     fill={theme.colors.primary} />
+          <Circle cx={center} cy={center} r={r}     fill="none" stroke={theme.colors.paperSoft} strokeWidth={0.5} opacity={0.5} />
+          <Circle
+            cx={center - r * 0.32}
+            cy={center - r * 0.4}
+            r={r * 0.22}
+            fill={theme.colors.paperSoft}
+            opacity={0.32}
+          />
+        </Svg>
+
+        {/* Rotating dashed ring layer — separate Animated wrapper so only
+            the ring spins; the underlying disc + count stay still. */}
+        <Animated.View
+          pointerEvents="none"
+          style={[StyleSheet.absoluteFill, { transform: [{ rotate: rotation }] }]}
+        >
+          <Svg width={viewSize} height={viewSize}>
+            <Circle
+              cx={center}
+              cy={center}
+              r={ringR}
+              fill="none"
+              stroke={theme.colors.paperSoft}
+              strokeWidth={0.8}
+              strokeDasharray="2.4 3.6"
+              opacity={0.55}
+            />
+          </Svg>
+        </Animated.View>
+
+        {/* Count text — JetBrains Mono 600 + tabular figures align cleanly,
+            includeFontPadding + textAlignVertical handle Android's
+            built-in padding so centered numerals don't sit a hair high. */}
+        <Text
+          allowFontScaling={false}
+          style={{
+            fontFamily:         theme.fontFamilies.mono,
+            fontWeight:         '600',
+            fontSize,
+            lineHeight:         fontSize,
+            color:              theme.colors.paper,
+            includeFontPadding: false,
+            textAlignVertical:  'center',
+          }}
+        >
+          {count}
+        </Text>
       </View>
     </Marker>
   );
@@ -891,10 +992,9 @@ export default function MapScreen() {
         coordinate={{ longitude: geometry.coordinates[0], latitude: geometry.coordinates[1] }}
         count={count}
         onPress={onPress}
-        styles={s}
       />
     );
-  }, [theme]);
+  }, []);
 
   const handleMapPress = useCallback(async (e: any) => {
     // Map-background tap drops a pending-pin (stop candidate). The POI
@@ -1341,33 +1441,6 @@ export default function MapScreen() {
     // cleanly inside a tight circle, no italic lean). includeFontPadding +
     // textAlignVertical handle Android's built-in font-padding so centered
     // numerals don't sit a hair high in the bubble.
-    clusterBubble: {
-      alignItems: 'center', justifyContent: 'center',
-      backgroundColor: theme.colors.primary,
-      ...Platform.select({
-        ios: {
-          shadowColor:   '#000',
-          shadowOffset:  { width: 0, height: 2 },
-          shadowOpacity: 0.18,
-          shadowRadius:  6,
-        },
-        android: { elevation: 3 },
-        default: {},
-      }),
-    },
-    clusterBubble40: { width: 40, height: 40, borderRadius: 20 },
-    clusterBubble48: { width: 48, height: 48, borderRadius: 24 },
-    clusterBubble56: { width: 56, height: 56, borderRadius: 28 },
-    clusterText: {
-      fontFamily:         theme.fontFamilies.mono,
-      fontWeight:         '600',
-      fontSize:           14,
-      lineHeight:         14,
-      color:              theme.colors.paper,
-      includeFontPadding: false,
-      textAlignVertical:  'center',
-    },
-
     chipRowWrap: { position: 'relative' },
     chipFadeLeft:  { position: 'absolute', left: 0,  top: 0, bottom: 0, width: 20 },
     chipFadeRight: { position: 'absolute', right: 0, top: 0, bottom: 0, width: 20 },
