@@ -1744,6 +1744,189 @@ supported selection surface.
 
 ---
 
+### 5.91 — DROP-loop pattern for signature-changing Postgres migrations
+
+**Status:** `resolved` — codified into CLAUDE.md "Migration conventions" section during the 2026-05-13 docs pass.
+
+**Context:** Drift 5.90's investigation surfaced that `CREATE OR REPLACE FUNCTION` only REPLACEs when the argument list matches exactly. With any signature change, PostgreSQL silently CREATEs an additional overload and the prior overload survives, leading to `PGRST203 — Could not choose the best candidate function` when PostgREST routes by name.
+
+**Resolution:** Canonical pattern documented in CLAUDE.md's "Migration conventions" subsection. Body shape:
+
+```sql
+BEGIN;
+DO $$
+DECLARE func_sig text;
+BEGIN
+  FOR func_sig IN
+    SELECT pg_get_function_identity_arguments(oid)
+    FROM pg_proc
+    WHERE proname = '<func>'
+      AND pronamespace = 'public'::regnamespace
+  LOOP
+    EXECUTE 'DROP FUNCTION public.<func>(' || func_sig || ')';
+  END LOOP;
+END $$;
+
+CREATE FUNCTION public.<func>(...) ... ;  -- bare CREATE, not REPLACE
+GRANT EXECUTE ...;
+COMMENT ON FUNCTION ... ;
+COMMIT;
+```
+
+Key elements:
+- `BEGIN`/`COMMIT` mandatory: partial apply (drop succeeds, create fails) must roll back to prior shape, not zero overloads.
+- Bare `CREATE FUNCTION` (not REPLACE): after the loop the function is gone, so REPLACE would silently no-op the would-create case. CREATE fails loudly if any overload survived.
+- `pg_proc` loop is defensive against unknown / drifted / future overloads that a static inventory might miss.
+
+**Precedents:**
+- `20260513000001_get_corridor_pois_overload_cleanup.sql` — rescue migration that introduced the pattern (drift 5.90).
+- `20260512000003_get_nearby_pois_significance.sql` — got it right on first try (never tripped 5.90).
+
+**Why filed:** discipline rule promoted from prose convention to a numbered catalog entry so future signature-change migrations have a referenceable canonical pattern. CLAUDE.md "Migration conventions" remains the authoritative copy; this entry is the catalog cross-reference.
+
+---
+
+### 5.94 sub-drift — Android Marker bitmap snapshot race; PNG-based resolution
+
+**Status:** `resolved` 2026-05-13 via commit `782dab1`.
+
+**Surface:** Hardware testing on Android showed cluster-marker count text intermittently rendering as a quarter-circle clip rather than the expected centered numeral. Symptom reproduced across multiple cluster-marker compositions (View-pill auto-width, SVG-pill dynamic-width, SVG-pill fixed-canvas with `collapsable={false}` + `renderToHardwareTextureAndroid`, StyleSheet-with-fixed-dims pin).
+
+**Root cause:** the clipping is downstream of the React View layer entirely — in `react-native-maps`' Android `Marker.captureView()` bitmap-snapshot pipeline. Neither inline-vs-StyleSheet styling, dynamic-vs-fixed dimensions, nor explicit-width fixes (the original drift 5.94 commit `7325b58` attempt) affect it. The bug is unreachable from JS-land. Compounded on Android by MapView's `SurfaceView`, which can punch through RN's view-tree paint order regardless of elevation.
+
+Earlier escalation arc within this sub-drift:
+- Auto-width pills clipping 4+ digit counts despite mathematically having room → first fix at commit `7325b58` computing widths explicitly from `digits × charWidth + padding` (also filed in `feedback_marker_auto_width_clipping.md`).
+- Explicit-width fix proved insufficient on hardware.
+- Permanent `tracksViewChanges={true}` attempted — failed; bitmap snapshot still raced layout.
+- StyleSheet + fixed dims + `collapsable={false}` + `renderToHardwareTextureAndroid` — failed; same symptom.
+
+**Resolution (commit `782dab1`):** bypass `captureView` entirely by feeding the Marker a pre-rasterized PNG via the `image` prop.
+
+- Cluster markers render `<Marker image={{ uri }} />` with a base64-PNG fed by an in-memory cache keyed by count.
+- PNGs are rasterized via `react-native-svg`'s `toDataURL()` from a hidden `<Svg>` off-screen (positioned `top:-1000, opacity:0, pointerEvents:'none'`), via a sequential queue with a two-`requestAnimationFrame` settle.
+- Cache: module-level `Map<number, string>` + LRU cap 500 + a `Set` of listeners for re-render notification.
+- Pre-warm: counts 5–50 on MapScreen mount. Counts >50 lazy-rasterize on first sight (~5–20ms, one-frame flicker tolerated). `ClusterMarker` renders `null` while its count is being rasterized — pre-warm covers ~95% of real-world clusters so the blank window is rare.
+- `tracksViewChanges` permanently `false` — the image is a static native bitmap, nothing to track.
+- Anchor `{ x: 0.5, y: 0.92 }` preserved bit-for-bit from the previous pin shape so on-screen positions don't shift.
+
+**Documented tradeoff:** loses the previous cluster opacity-pulse glow animation. SVG composition mirrors the previous pin visual (halo + static glow at 0.30 opacity + pill head + paperSoft border + highlight + count + downward triangle pointer); the static glow is preserved, the per-frame opacity pulse is not.
+
+**Future cluster work** that wants animation back will have to either (a) reverse the PNG decision and re-inherit this bug class, or (b) move to a marker library that doesn't have the same Android capture race — `react-native-mapbox-gl` and `react-native-maps`'s upcoming new arch are both candidates, neither is a small migration.
+
+**Decided by:** Iterative hardware testing across multiple compositions; PNG-based path adopted after View-pipe approaches conclusively failed.
+
+---
+
+### 5.100 — Deletion-pass discipline when abandoning architectural workarounds
+
+**Status:** `noted` — codified for future application; not enforced retroactively.
+
+**Context:** When the cluster-pill arc abandoned explicit-width computation in favor of PNG rasterization (drift 5.94 sub-drift, commit `782dab1`), some state primitives from the abandoned path persisted in the working tree across the transition. Pattern: when a workaround approach is abandoned in favor of a different architectural approach, supporting state machinery for the abandoned path (refs, effects, derived flags, props, helper functions, type fields) tends to remain — partly because each piece looks orthogonal in isolation, partly because the new approach's PR scope feels "additive" rather than "supersession."
+
+**Rule:** when committing a "fix-X-via-Y" change that supersedes a "fix-X-via-Z" attempt, audit for Z's state primitives in the same pass and drop them in the same commit. Leftover machinery from abandoned approaches:
+- looks load-bearing to future readers (especially after the commit message obscures the supersession);
+- confuses bisects (the leftover state changes behavior in subtle ways even when the new path is the active one);
+- accumulates as cruft if every supersession-by-replacement leaves a residual trail.
+
+**How to apply:** during the "approve commit" step of a supersession PR, grep for the abandoned-approach's symbols (variable names, ref names, helper functions, custom props) and verify each is either (a) removed in this commit or (b) explicitly retained with a comment explaining why. Default is removal.
+
+**Decided by:** Session 2026-05-13 carryover.
+
+---
+
+### 5.101 — Customize MapView missing `key={mapStyleId}` on Android
+
+**Status:** `resolved` 2026-05-13 via commit `128fe0f`.
+
+**Surface:** On Android, switching from the dark map style to a non-dark style (standard / satellite / topo) on the customize page left the dark `customMapStyle` array applied to the new style — visible as the dark-style overlay persisting on top of standard street tiles. iOS unaffected. Home and drive screens already carried the workaround.
+
+**Root cause:** `react-native-maps`' Android implementation does not reliably clear `customMapStyle` when the prop transitions from `array` to `undefined` (or to a different array). The native side caches the previous style and the bridge update doesn't propagate the clear instruction.
+
+**Resolution:** Add `key={mapStyleId}` to the MapView component on customize. Style change becomes a key change → React remounts the MapView → fresh native instance with no cached customMapStyle. Mirrors the existing home / drive pattern.
+
+```tsx
+<MapView
+  key={mapStyleId}
+  ...
+/>
+```
+
+**Tradeoff:** remount loses any user pan/zoom state on style switch. Acceptable — style switches are infrequent and the customize map is a route preview, not the primary trip surface.
+
+**Coupling to 5.104:** the drag-to-expand commit retained this `key` and added `ref` + `onMapReady` — `fitToCoordinates` now re-fires on every style-change remount, giving the user a clean refit per style toggle as effectively free behavior.
+
+**Decided by:** Hardware regression observed during customize page user testing.
+
+---
+
+### 5.102 — `loadMapStyle` / `saveMapStyle` no-op on native
+
+**Status:** `resolved` 2026-05-13 via commit `a10cee5`.
+
+**Surface:** Map-style preference (selected via MapStylePicker) did not survive cold start on iOS or Android. Every app launch returned to the hardcoded `'dark'` default regardless of last selection. Web persisted correctly.
+
+**Root cause:** `lib/mapStyle.ts`'s `loadMapStyle()` and `saveMapStyle()` helpers had a web-only `localStorage` path with a native branch that returned `'dark'` unconditionally and discarded writes. Native preference persistence was never wired despite the helper signatures suggesting parity with web.
+
+**Resolution:** Add an `AsyncStorage` native branch. Storage key `rs_map_style`. Web continues to use `localStorage` (unchanged); native reads/writes via `@react-native-async-storage/async-storage` which is already in the dependency tree.
+
+```ts
+// load
+const stored = Platform.OS === 'web'
+  ? localStorage.getItem(STORAGE_KEY)
+  : await AsyncStorage.getItem(STORAGE_KEY);
+
+// save
+if (Platform.OS === 'web') localStorage.setItem(STORAGE_KEY, id);
+else await AsyncStorage.setItem(STORAGE_KEY, id);
+```
+
+Consumers (home, customize, drive) hardcode `useState<MapStyleId>('dark')` initial value with a post-mount `loadMapStyle().then(setMapStyleId)` effect that overrides via persistence. No consumer code changed — the helper is the sole site of the fix.
+
+**Decided by:** Hardware regression observed during cold-start testing.
+
+---
+
+### 5.103 — MapStylePicker thumbnails restored (reverses 5.98)
+
+**Status:** `resolved` 2026-05-13 via commit `2c35393`.
+
+**Context:** Drift 5.98 (text-only treatment for the MapStylePicker dropdown rows, palette-matching to the Field Notes brand chip family) removed the 40×40 swatch thumbnails. After landing, the dropdown felt under-affordant — text-only rows didn't convey style character at a glance (dark / standard / satellite / topo all read as bare names without visual cue).
+
+**Resolution:** Restore 40×40 SVG swatch thumbnails to each dropdown row.
+
+- Wrapper: rounded 8px square with paperEdge hairline border + per-style background fill (paper / paperWarm / `#2a2a2a` / `#3d4a2c`).
+- Overlay: inline `<Path>` strokes hinting at style character — warm horizon line (standard) / street grid (dark) / diagonal aerial tiles (satellite) / topo contour arcs (outdoors).
+- Helper `StyleSwatch({ id, theme })` + `styleSwatchBg(id, colors)` live in `components/MapStylePicker.tsx`.
+- Single-file change. No Mapbox network calls; `buildThumbUrl` + `mapboxToken` prop remain inert (no regression of 5.98's "no thumbnails fetched over the network" guarantee).
+
+**Why filed as reversal:** drift 5.98's text-only treatment was a deliberate palette-matching decision. The reversal preserves the chip-family palette discipline at the trigger level (cream pill + `MAP` mono label still in place) while restoring the dropdown affordance. Both drifts coexist — 5.98 governs the trigger, 5.103 governs the dropdown rows.
+
+**Decided by:** Owner request after cold-evaluating the post-5.98 dropdown affordance.
+
+---
+
+### 5.104 — Drag-to-expand customize map peek + fit-to-route framing
+
+**Status:** `resolved` 2026-05-14 via commit `2929828`.
+
+**Surface:** Customize page's 200px non-interactive map peek (post-b681329 unified header card landing) only showed a midpoint slice of the route — user could not see the full trip nor zoom into specific areas. Static framing via `initialRegion: { latitude: midPoint.latitude, longitude: midPoint.longitude, latitudeDelta: 0.10, longitudeDelta: 0.10 }` ignored the polyline extent.
+
+**Resolution (two coupled changes in one commit):**
+
+1. **Drag-to-expand peek.** Replace the static `View` containing `<MapView />` with an `<Animated.View>` whose `height` is driven by an `Animated.Value`. Min 200px, max `Math.round(SCREEN_H * 0.55)` (~464px on 390×844). Inline `PanResponder` mirrors `hooks/useSheetSnap.ts` with **inverted drag direction**: drag handle at the bottom of the peek, finger DOWN grows, UP shrinks. Two snap points only; release picks by ±0.5 velocity throw or nearest-snap distance with same spring config (`friction: 9, tension: 80`, `useNativeDriver: false`). MapView gestures (`scrollEnabled`, `zoomEnabled`, `rotateEnabled`) enabled at all sizes; `pitchEnabled={false}` and `toolbarEnabled={false}` preserved.
+
+2. **Fit-to-route framing.** Add `mapRef = useRef<MapView | null>(null)` + `onMapReady` callback that calls `mapRef.current.fitToCoordinates(polylineCoords, { edgePadding: { top: 40, right: 40, bottom: 60, left: 40 }, animated: false })`. Replaces `initialRegion`. With `key={mapStyleId}` (drift 5.101) retained, the fit re-fires on every style-change remount as effectively free behavior.
+
+**Drag handle:** paper-cream chip (radius 999, paperEdge hairline, e2 shadow) backing a 36×4 paperEdge pill, anchored bottom-center inside the Animated.View with `paddingVertical: 14` for a ~52pt touch target. `mapFade` gradient moved INSIDE the Animated.View so it stays anchored to the dynamic bottom edge (would otherwise linger at the 200px boundary).
+
+**No new dependencies.** Used RN core `Animated` + `PanResponder` consistent with `useSheetSnap` precedent. Confirms the Pine motion infra gap: Reanimated / gesture-handler / `@gorhom/bottom-sheet` are NOT installed (verified during the audit-first phase against `package.json`).
+
+**Layout behavior:** ScrollView (flex: 1) below the peek compresses naturally as peek grows — push-down behavior, no overlay. Header card stays pinned. Sticky Start trip CTA stays pinned at `bottom: insets.bottom + 16`. MapStylePicker (rendered last for paint order) preserves dropdown layering at all peek heights.
+
+**Decided by:** Owner request — wants to inspect full trip route or zoom into specific areas without leaving customize for a fullscreen modal.
+
+---
+
 ## Cross-cutting observation
 
 Five entries (5.18, 5.19, 5.24, 5.25, 5.26) shared the same root: out-of-band

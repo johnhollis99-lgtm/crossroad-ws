@@ -16,6 +16,12 @@ Pine **fully supersedes Field Notes** per Claude Design clarification — single
 - `160b88a` — POI marker visual upgrade (target ring + bicolor X + cream halo for cross-map visibility) + sonar pulse on the active POI in drive + user-location halo pulse
 - `c85b562` — Cluster pill auto-width attempt + home top-header consolidated into a single rounded card with chip rail below
 - `7325b58` — Cluster marker rebuilt as a **pin shape with explicit calculated widths** (the pill auto-width was racing Marker bitmap snapshots — see "Marker auto-sizing gotcha" below)
+- `05c0b39` — Home chip rail removed; customize is sole UI for category selection
+- `782dab1` — Cluster markers re-architected View-based → **PNG-based** via react-native-svg `toDataURL`, bypassing Android's `Marker.captureView()` race. Loses cluster animation as documented tradeoff.
+- `b681329` — Customize: unified header card matching home pattern (nav row + Strip A + Strip B all in one paperSoft card; map peek shrunk 240→200, no longer carries overlays; MapStylePicker re-ordered as last child of root for paint-order)
+- `128fe0f` — `key={mapStyleId}` on customize's MapView so style change clears `customMapStyle` on Android (mirrors home/drive pattern; required for array→undefined transition)
+- `a10cee5` — `lib/mapStyle.ts` AsyncStorage persistence on native (previously web-only); map-style preference survives cold start on iOS/Android
+- `2c35393` — SVG swatch thumbnails restored to MapStylePicker dropdown rows (reverses drift 5.98's text-only treatment); single-file change, no Mapbox network calls
 
 ### Palette (sole source: `src/design/tokens.ts`)
 
@@ -74,8 +80,8 @@ Cluster bubble has its own opacity-only glow loop inline in `ClusterMarker` (did
 
 | Screen | File | State |
 |---|---|---|
-| Home | `app/index.tsx` | Pine palette + **single-card top header** (squiggle + Wordmark + avatar in row 1, ModePillRow in row 2, "Where to?" search in row 3) + category-icon chip rail below the card. Legacy bottom-sheet content (search results + customize CTA) still in place — Phase 3 rebuild target. |
-| Customize | `app/customize.tsx` | Full Pine rebuild: 240px map peek + IconArrowLeft back button + map-style chip + route summary inline row + 4-column TripStat strip + SegmentedTrio depth + 2×2 NarratorCard grid (Pine-coherent avatar palette: emerald / lilac / cobalt / amber) + CategoryChip rail with duotone icons + SegmentedTrio density + 2× LabeledSlider + sticky emerald Start trip CTA with IconCar. All handlers preserved (`handleStartTrip`, `toggleCategory`, curation effect, narrator load, map style change). |
+| Home | `app/index.tsx` | Pine palette + **single-card top header** (squiggle + Wordmark + avatar in row 1, ModePillRow in row 2, "Where to?" search in row 3). **Category chip rail removed in commit `05c0b39`** — customize is sole UI for category selection; home's RPC chain still consumes `selectedCategories` from the Zustand store. Legacy bottom-sheet content (search results + customize CTA) still in place — Phase 3 rebuild target. |
+| Customize | `app/customize.tsx` | Full Pine rebuild + **unified header card (commit `b681329`)**: full-width paperSoft card with squared top corners / rounded bottom that touches the status-bar inset, carries `STATUS_TOP` paddingTop itself. Row 1: 40px back button + Wordmark + 40px spacer slot. Row 2: route-summary inline (origin → dest · duration). Row 3: 4-col `TripStat` strip (DISTANCE / DURATION / POIS / PACE) with hairline borders — POIS + PACE live-bound to `curatedCount` / `avgPaceMin`. Below the card: 200px non-interactive map peek (overlays removed; just MapView + Polyline + dest marker + bottom fade gradient). ScrollView holds: narration-depth `SegmentedTrio`, 2×2 NarratorCard grid (Pine avatar palette: emerald / lilac / cobalt / amber), Categories horizontal CategoryChip row, Density `SegmentedTrio`, Min relevance + POI distance `LabeledSlider`s. Sticky emerald Start trip CTA at bottom. `MapStylePicker` is rendered as the LAST child of the root View (paint-order workaround so its dropdown panel renders above the map peek). All handlers preserved. MapView carries `key={mapStyleId}` (commit `128fe0f`) so customMapStyle clears correctly when switching from dark on Android. |
 | Trip / drive | `app/drive.tsx` | Full Pine rebuild: emerald polyline + cobalt user-location dot with `useUserHalo` pulse + PersonaPill + StoriesBadge + 3-column TripStat card + retracted/deployed sheet states + breathing watermark X via `useBreath` + media controls + Up next queue + LabeledSlider story corridor + ModePillRow + Quiet pill + danger End trip pill. All handlers preserved (Audio, Socket.io, GPS, POI load + curation, queue, skip back/forward, end trip). |
 
 ### Legacy screens (still on brown `C` palette from `lib/theme.ts`)
@@ -98,7 +104,7 @@ Demo screens — `src/design/DesignSystemScreen.tsx` (palette + type ramp, defau
 
 **POI markers** (`PoiMarkerX`) must still be inlined as `<Marker>` children directly under `<ClusteredMapView>` (drift 5.94 — the clusterer's `isMarker` helper reads the `coordinate` prop directly off JSX children; function-component wrappers hide it). Wrap each POI's Marker with a `coordinate` prop; PoiMarkerX is the visual child.
 
-**Cluster markers** (`ClusterMarker` in `app/index.tsx`) — **pin shape**: pill head + triangle pointer. Anchor `{ x: 0.5, y: 0.92 }` so the pointer tip sits on the cluster's coordinate. Head width is **computed explicitly**: `headWidth = max(46, digits × 0.62 × fontSize + 2 × 18)` where `fontSize` is 14 / 13 / 12 for 1–3 / 4–5 / 6+ digit counts. See **"Marker auto-sizing gotcha"** below for why this is explicit.
+**Cluster markers** (`ClusterMarker` in `app/index.tsx`) — **PNG-based** (commit `782dab1`). The marker renders `<Marker image={{ uri }} />` with a base64-PNG fed by an in-memory cache keyed by count. PNGs are rasterized via `react-native-svg`'s `toDataURL()` from a hidden `<Svg>` off-screen (positioned `top:-1000, opacity:0, pointerEvents:'none'`), via a sequential queue with a two-`requestAnimationFrame` settle. Cache: module-level `Map<number, string>` + LRU cap 500 + a `Set` of listeners for re-render notification. Pre-warm: counts 5–50 on MapScreen mount. Counts >50 lazy-rasterize on first sight (~5-20ms, one-frame flicker tolerated). `ClusterMarker` renders `null` while its count is being rasterized — pre-warm covers ~95% of real-world clusters so the blank window is rare. `tracksViewChanges` is permanently `false` — the image is a static native bitmap, nothing to track. Anchor `{ x: 0.5, y: 0.92 }` preserved bit-for-bit from the previous pin shape so on-screen positions don't shift. SVG composition mirrors the previous pin visual (halo + static glow at 0.30 opacity + pill head + paperSoft border + highlight + count + downward triangle pointer); cluster animation (the opacity-pulse glow) is the documented tradeoff. See **"Marker auto-sizing gotcha"** below for the full arc that led here.
 
 **Active POI in drive** — `ActivePoiMarker` in `app/drive.tsx`: paperSoft disc + emerald border + X glyph + two staggered sonar rings via `useSonar`. `tracksViewChanges` stays `true` for the active marker only (so the rings keep animating); inactive POI markers retain the drift-5.94 flip-to-false-after-1s discipline so 30+ static markers don't churn the GPU.
 
@@ -106,7 +112,11 @@ Demo screens — `src/design/DesignSystemScreen.tsx` (palette + type ramp, defau
 
 ### Marker auto-sizing gotcha (load-bearing for future cluster work)
 
-`react-native-maps` Markers with custom View children **do not reliably honor flex auto-width** when the content includes `<Text>` whose width depends on RN's layout-measurement pass. The Marker bitmap can snapshot before Text measures, freezing a clipped state. The earlier cluster pill (commit `c85b562`) had this problem — auto-width pills clipped 4+ digit counts despite mathematically having room. Fix: compute widths explicitly from `digits × charWidth + padding` (see commit `7325b58`). Documented in `memory/feedback_marker_auto_width_clipping.md`.
+`react-native-maps` Markers with custom View children **do not reliably honor flex auto-width** when the content includes `<Text>` whose width depends on RN's layout-measurement pass. The Marker bitmap can snapshot before Text measures, freezing a clipped state. The earlier cluster pill (commit `c85b562`) had this problem — auto-width pills clipped 4+ digit counts despite mathematically having room. First fix attempt: compute widths explicitly from `digits × charWidth + padding` (commit `7325b58`). Documented in `memory/feedback_marker_auto_width_clipping.md`.
+
+**The explicit-width fix proved insufficient on hardware.** A multi-attempt debug arc (View-pill / SVG-pill dynamic-width / SVG-pill fixed-canvas with `collapsable={false}` + `renderToHardwareTextureAndroid` / StyleSheet-with-fixed-dims pin) reproduced the same clipping symptom across every composition variant. The clipping is **downstream of the React View layer entirely** — in `react-native-maps`' Android `Marker.captureView()` bitmap-snapshot pipeline. Neither inline-vs-StyleSheet styling nor dynamic-vs-fixed dimensions on the wrapper affect it. The bug is unreachable from JS-land. Compounded on Android by MapView's `SurfaceView`, which can punch through RN's view-tree paint order regardless of elevation.
+
+**The resolution (commit `782dab1`)** is to bypass `captureView` entirely by feeding the Marker a pre-rasterized PNG via the `image` prop. See the **Cluster markers** bullet above for the full architecture. The pre-PNG iterations are preserved as historical sessions in the chain (`c85b562` → `7325b58` → working-tree experiments stashed during the arc, since dropped). **Future cluster work that wants animation back will have to either reverse the PNG decision (and re-inherit this bug class) or move to a marker library that doesn't have the same Android capture race** — `react-native-mapbox-gl` and `react-native-maps`'s upcoming new arch are both candidates, neither is a small migration.
 
 ### Phase 3 — still open
 
@@ -266,7 +276,18 @@ User mental model / naming convention used in conversation:
 
 ## customize.tsx UI details
 
-- **Back button** — top-left of map header overlay (`s.backBtn`, circular dark, `←`). Calls `navigation.goBack()` → returns to index (home).
+> **Mostly REBUILT in commit `b681329` (2026-05-15).** The page is now top-to-bottom: full-width paperSoft header card (Pine pattern, mirrors home) → 200px non-interactive map peek → ScrollView with curation controls → sticky Start Trip CTA. See the **Pine screens** table at the top of this file for the canonical structure.
+
+- **Header card** — direct child of root View, paperSoft surface, paperEdge hairline, top corners squared / bottom corners radius 26, `paddingTop: STATUS_TOP` so the card itself carries the status-bar inset. Three rows separated by `gap: 12`:
+  - **Row 1 (nav)**: 40px circular back button (`backBtn` style with paperSoft fill + paperEdge border + shadow, `navigation.goBack()`) + `<Wordmark size="m" />` center + 40px spacer slot for MapStylePicker.
+  - **Row 2 (Strip A)**: route-summary inline `<Text numberOfLines={1}>` mixing four spans — origin (meta inkSoft) + `→` (meta primary) + destination (label ink) + `·` (meta inkFaint) + duration (meta inkSoft). Duration is reactive to hiking toggle via `tripDurationMin`.
+  - **Row 3 (Strip B)**: 4-col `<TripStat>` row with hairline top/bottom borders — DISTANCE / DURATION / POIS / PACE. POIS is `curatedCount` (post-filter, post-curation, live-bound to slider/chip changes). PACE is `avgPaceMinutes` (e.g. `1 / 7m`). Both update as the user adjusts filters in the ScrollView below.
+- **MapStylePicker** — rendered as the **LAST child of the root View** (after Start Trip CTA), with `buttonTop={STATUS_TOP + 6}` + `buttonRight={12}`. Visually lands in the header card's Row 1 right slot; structurally a sibling at root level so its tap-outside-to-dismiss `absoluteFillObject` overlay covers the full screen and its dropdown panel's paint order beats the map peek + ScrollView region it extends into geometrically.
+- **Map peek** — 200px (`MAP_PREVIEW_H`), non-interactive (`scrollEnabled/zoomEnabled/rotateEnabled/pitchEnabled={false}`), shows Polyline + destination Marker only. `<LinearGradient>` bottom-fade `transparent → paper` blends into the ScrollView. **`<MapView key={mapStyleId} ...>`** (commit `128fe0f`) — required so Android's RN bridge clears `customMapStyle` when switching from dark to a style with `customMapStyle: undefined`. Without the key, the previous WARM_DARK_MAP styling persists.
+- **Map style persistence** — `lib/mapStyle.ts`'s `loadMapStyle()` / `saveMapStyle()` now persist to AsyncStorage on native (commit `a10cee5`). `STORAGE_KEY = 'rs_map_style'`. Initial state still hardcodes `'dark'` in each consumer's `useState<MapStyleId>('dark')`; persistence overrides via the post-mount `loadMapStyle().then(setMapStyleId)` effect.
+- **MapStylePicker dropdown rows** — each option now carries a 40×40 SVG swatch on the left (commit `2c35393`, reverses drift 5.98). Wrapper: rounded 8px square with paperEdge hairline border + per-style background fill (paper / paperWarm / `#2a2a2a` / `#3d4a2c`). Overlay: inline `<Path>` strokes hinting at style character (warm horizon line / street grid / diagonal aerial tiles / topo contour arcs). Helper `StyleSwatch({ id, theme })` + `styleSwatchBg(id, colors)` live in `components/MapStylePicker.tsx`. No Mapbox network calls; `buildThumbUrl` + `mapboxToken` prop remain inert.
+- **Categories chip rail** — still in customize (this page is now the sole UI for category selection app-wide; home's chip rail was removed in `05c0b39`). `<CategoryChip>` row with horizontal scroll + edge fade gradients. State sources `selectedCategories` from the Zustand store (also consumed by home's RPC chain).
+- **Filter wiring** — see [docs/customize-audit-2026-05-14.md](docs/customize-audit-2026-05-14.md) if extracted. Empty `selectedCategories` array becomes `null` before reaching the RPC (`slugs.length ? slugs : null`), so deselecting all chips = no filter (returns everything). `minRelevance` slider drives both server-side `min_significance` and a client-side re-filter inside `curateRoutePOIs()`.
 
 ## Design system — Field Notes (Phase 1, landed 2026-05-12 in commit `98d8243`)
 
@@ -1181,7 +1202,13 @@ Verification scripts: `scripts/verify-migrations.mjs` (66/66 checks passed on 00
 - **Repo:** `https://github.com/johnhollis99-lgtm/crossroad-ws.git` — main branch on origin/main.
 - Git binary (not on PATH): `C:\Users\johnh\AppData\Local\GitHubDesktop\app-3.5.8\resources\app\git\cmd\git.exe`
 - **`.gitignore`** — covers: `node_modules/` (all sub-packages), `.env` + `server/.env` (secrets), `.expo/`, `dist/`, `admin/.next/`, `scripts/*/cache/`, `scripts/audition-output/`, `*.opus`, `*.tsbuildinfo`, OS files, `.claude/scheduled_tasks.lock`, `.claude/settings.local.json`, `supabase/.temp/`, plus session-scoped pre-handoff working notes (`docs/alignment-plan.md`, `docs/codebase-audit.md` — added 2026-05-11 per chore(gitignore) commit, files retained locally for historical context).
-- **Recent commit history (top of `main`, 2026-05-14):**
+- **Recent commit history (top of `main`, 2026-05-15):**
+  - `2c35393` feat(map-style-picker): add 40x40 thumbnails back to dropdown rows (reverses drift 5.98; SVG swatches, no Mapbox network)
+  - `a10cee5` fix(map-style): AsyncStorage persistence on native so user-selected style survives cold start
+  - `128fe0f` fix(customize): add key={mapStyleId} to MapView for style change to take effect on Android
+  - `b681329` refactor(customize): unified header card matching home pattern (nav + Strip A + Strip B in one card; MapStylePicker re-ordered as last child for paint order)
+  - `05c0b39` refactor(home): remove redundant chip rail; category selection owned by customize page
+  - `782dab1` fix(map): PNG-based cluster markers — bypass Android bitmap capture race (in-memory PNG cache + pre-warm 5–50 + react-native-svg toDataURL; loses cluster animation as documented tradeoff)
   - `8da6778` fix(map): more aggressive cluster condensing at low zoom — radius 60 → 80 (drift 5.94)
   - `8a958e4` feat(brand): map style picker palette match (drift 5.98)
   - `42dac68` fix(map): cleaner cluster bubble — tabular mono count + lift shadow (drift 5.94)
@@ -1299,3 +1326,13 @@ npx tsx sweep-orphaned-narration.ts --dry-run  # preview only
 ## Session workflow
 
 When context fills (PreCompact hook fires), update this CLAUDE.md with current project state, then `/clear` to restart fresh. Proactively save when significant new screens, migrations, or server routes are completed. This file is the single source of truth — MEMORY.md just points here.
+
+### Workflow notes
+
+- **Audit-first prompts validated.** Three debugging arcs this session (cluster bug, customize MapView key, drag-to-expand peek) used the audit-first → premise-notes → greenlight → apply pattern. Each surfaced root cause vs symptom early and prevented iteration loops. **Apply to any non-trivial implementation.** See drifts 5.94 sub-drift, 5.101, 5.104 in `docs/drift-catalog.md`.
+
+- **Scope expansion belongs to the owner.** Claude Code reports premise notes, asks for direction; owner explicitly approves before any commit beyond current scope. Do not pre-stage multi-file PRs as "the next commit" without approval. Boundary clarified this session after a default-map-style-flip proposal was presented as decided rather than as a proposal. **Pattern:** Claude Code drafts premise notes → asks for owner direction → applies only after explicit greenlight.
+
+- **Handoff push count is unreliable.** Session-2026-05-13 handoff claimed ~66 unpushed commits; origin was actually current at session open. **At session open, verify push state with `git log origin/main..HEAD`** before acting on handoff claims about unpushed work.
+
+- **Pine motion infra absent.** Reanimated, gesture-handler, and `@gorhom/bottom-sheet` are NOT installed (verified against `package.json` during the customize drag-to-expand audit). Pine spec called for 5 keyframes + rotating cluster ring + breath pulses, all implemented today against RN core `Animated` + `PanResponder` (no new deps added). Either Pine motion is implicitly deferred or the spec assumed library presence. **Clarify with Claude Design on next touchpoint** whether to install the Reanimated stack (motion fidelity gap on dynamic spring physics and gesture composition) or stay on RN core (current state is functional and matches `hooks/useSheetSnap` precedent across screens). See drift 5.104.
