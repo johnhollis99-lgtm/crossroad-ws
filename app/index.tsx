@@ -178,21 +178,27 @@ function decodePolyline(encoded: string): { latitude: number; longitude: number 
 // to register positions, not per-marker isolation.
 
 // ── Cluster marker (drift 5.72 / C1) ─────────────────────────────────────────
-// Cluster bubble — pill shape that auto-grows horizontally with content so
-// counts of any digit length fit comfortably (no more clipping on 4+ digit
-// numbers). Layered visual:
+// Cluster marker — pin shape with explicit calculated widths.
 //
-//   1. Outer paperSoft halo (extends 6px around the pill, opacity ~0.22)
-//   2. Pulsing emerald glow ring (opacity-only loop, no scale — pill shape
-//      isn't symmetric so transform-scale would look skewed)
-//   3. Filled emerald pill with hairline paperSoft border
+// The previous pill relied on auto-width via flex layout, which Marker
+// bitmap snapshots don't always honor reliably — Text inside a Marker
+// child can render before its width measures, so the bitmap captures
+// a clipped frame and reusing it crops the number.
+//
+// Switching to pin shape (pill head + triangle pointer) per the user's
+// suggestion, with the head width COMPUTED from digit count and font
+// size. No auto-sizing → no measurement-race → number always fits.
+//
+// Layered visual on the head (the outline style the user said to keep):
+//   1. Outer paperSoft halo (extends 8px around the head, opacity ~0.22)
+//   2. Pulsing emerald glow ring (opacity-only loop 0.18 → 0.42 / 3s)
+//   3. Filled emerald pill head with hairline paperSoft border
 //   4. Top-left paperSoft inner highlight (3D feel)
-//   5. Mono count text (paper-cream), centered
+//   5. Mono count text (paper-cream, weight 700), centered
+//   6. Triangle pointer below the head, pointing down at the cluster center
 //
-// Height fixed at 46px; minWidth equals height so small counts read as
-// roughly-circular ovals. Text padding 16px each side. A 4-digit count at
-// mono 14px → ~32px text width → ~64px pill. A 7-digit count → ~85px pill.
-// Always fits, always reads.
+// Marker anchor: { x: 0.5, y: 0.92 } so the pointer tip sits on the
+// cluster's coordinate.
 function ClusterMarker({
   coordinate, count, onPress,
 }: {
@@ -201,22 +207,39 @@ function ClusterMarker({
   onPress: () => void;
 }) {
   const { theme } = useTheme();
-  const HEIGHT  = 46;
-  const PAD_X   = 16;
-  const FONT_SZ = 14;
+
+  // Width math: digit-count drives an explicit head width with comfortable
+  // padding both sides. Font down-shifts only on 6+ digit counts so the
+  // pin doesn't get gratuitously wide on Walk-of-Fame-tier clusters.
+  const digits     = String(count).length;
+  const FONT_SZ    = digits >= 6 ? 12 : digits >= 4 ? 13 : 14;
+  // Mono digit ≈ 0.6 * fontSize incl letterSpacing 0.2 — verified against
+  // JetBrains Mono on iOS + Android.
+  const CHAR_W     = FONT_SZ * 0.62;
+  const textWidth  = Math.ceil(digits * CHAR_W);
+  const HEAD_H     = 46;
+  const PAD_X      = 18;
+  const HEAD_MIN_W = HEAD_H;
+  const headWidth  = Math.max(HEAD_MIN_W, textWidth + 2 * PAD_X);
+
+  const HALO_PAD     = 8;
+  const POINTER_H    = 12;
+  const POINTER_HALF = 8;
+  const headSection  = HEAD_H + HALO_PAD * 2;
+  const wrapperW     = headWidth + HALO_PAD * 2;
+  const wrapperH     = headSection + POINTER_H - 3;  // pointer overlaps head 3px
 
   // tracksViewChanges: true initially so the bitmap snapshot picks up the
-  // pill after layout (drift 5.66 / 5.94 pattern); flip false 1s post-mount
-  // so the static pill doesn't churn the GPU. The pulsing glow uses opacity
-  // only so the bitmap diff per frame is minimal even while tracking.
+  // pin after layout; flip false 1.2s post-mount so the static pin doesn't
+  // churn the GPU. Opacity-only glow keeps per-frame bitmap diff minimal
+  // during the tracking window.
   const [tracking, setTracking] = useState(true);
   useEffect(() => {
     const t = setTimeout(() => setTracking(false), 1200);
     return () => clearTimeout(t);
   }, []);
 
-  // Pulsing glow — opacity loop only, no scale (a pill can't symmetrically
-  // scale up). Gated on reduced-motion (parks at min opacity).
+  // Pulsing emerald glow — opacity loop only. Gated on reduced-motion.
   const glow = useRef(new Animated.Value(0.18)).current;
   useEffect(() => {
     let cancelled = false;
@@ -225,7 +248,7 @@ function ClusterMarker({
       if (cancelled || reduced) return;
       loop = Animated.loop(
         Animated.sequence([
-          Animated.timing(glow, { toValue: 0.4,  duration: 1500, useNativeDriver: true }),
+          Animated.timing(glow, { toValue: 0.42, duration: 1500, useNativeDriver: true }),
           Animated.timing(glow, { toValue: 0.18, duration: 1500, useNativeDriver: true }),
         ]),
       );
@@ -238,105 +261,112 @@ function ClusterMarker({
     <Marker
       coordinate={coordinate}
       onPress={onPress}
-      anchor={{ x: 0.5, y: 0.5 }}
+      anchor={{ x: 0.5, y: 0.92 }}
       tracksViewChanges={tracking}
     >
-      <View style={pillStyles.outer}>
-        {/* Outer halo — paperSoft, semi-transparent, extends past the pill
-            via inset on the outer container's padding. */}
+      <View style={{ width: wrapperW, height: wrapperH, alignItems: 'center' }}>
+        {/* Head section — halo + glow + pill head, all centered. */}
         <View
-          pointerEvents="none"
-          style={[
-            pillStyles.halo,
-            { backgroundColor: theme.colors.paperSoft },
-          ]}
-        />
-
-        {/* Pulsing emerald glow ring — opacity-only animation, primary tint. */}
-        <Animated.View
-          pointerEvents="none"
-          style={[
-            pillStyles.halo,
-            { backgroundColor: theme.colors.primary, opacity: glow },
-          ]}
-        />
-
-        {/* Pill body — auto-width via content. */}
-        <View
-          style={[
-            pillStyles.body,
-            {
-              height:            HEIGHT,
-              minWidth:          HEIGHT,
-              paddingHorizontal: PAD_X,
-              backgroundColor:   theme.colors.primary,
-              borderColor:       theme.colors.paperSoft,
-            },
-          ]}
+          style={{
+            width:          wrapperW,
+            height:         headSection,
+            alignItems:     'center',
+            justifyContent: 'center',
+          }}
         >
-          {/* Top-left inner highlight — small soft elliptical shine. */}
+          {/* Outer paperSoft halo */}
           <View
             pointerEvents="none"
-            style={[
-              pillStyles.highlight,
-              { backgroundColor: theme.colors.paperSoft },
-            ]}
+            style={{
+              position:        'absolute',
+              width:           wrapperW,
+              height:          headSection,
+              borderRadius:    headSection / 2,
+              backgroundColor: theme.colors.paperSoft,
+              opacity:         0.22,
+            }}
           />
 
-          <Text
-            allowFontScaling={false}
+          {/* Pulsing emerald glow */}
+          <Animated.View
+            pointerEvents="none"
             style={{
-              fontFamily:         theme.fontFamilies.mono,
-              fontWeight:         '700',
-              fontSize:           FONT_SZ,
-              lineHeight:         FONT_SZ,
-              color:              theme.colors.paper,
-              includeFontPadding: false,
-              textAlignVertical:  'center',
-              letterSpacing:      0.2,
+              position:        'absolute',
+              width:           wrapperW,
+              height:          headSection,
+              borderRadius:    headSection / 2,
+              backgroundColor: theme.colors.primary,
+              opacity:         glow,
+            }}
+          />
+
+          {/* Pill head */}
+          <View
+            style={{
+              width:           headWidth,
+              height:          HEAD_H,
+              borderRadius:    HEAD_H / 2,
+              backgroundColor: theme.colors.primary,
+              borderWidth:     0.5,
+              borderColor:     theme.colors.paperSoft,
+              alignItems:      'center',
+              justifyContent:  'center',
+              overflow:        'hidden',
             }}
           >
-            {count}
-          </Text>
+            {/* Top-left highlight */}
+            <View
+              pointerEvents="none"
+              style={{
+                position:        'absolute',
+                top:             5,
+                left:            12,
+                width:           16,
+                height:          6,
+                borderRadius:    3,
+                backgroundColor: theme.colors.paperSoft,
+                opacity:         0.28,
+              }}
+            />
+            <Text
+              allowFontScaling={false}
+              style={{
+                fontFamily:         theme.fontFamilies.mono,
+                fontWeight:         '700',
+                fontSize:           FONT_SZ,
+                lineHeight:         FONT_SZ,
+                color:              theme.colors.paper,
+                includeFontPadding: false,
+                textAlignVertical:  'center',
+                letterSpacing:      0.2,
+              }}
+            >
+              {count}
+            </Text>
+          </View>
         </View>
+
+        {/* Triangle pointer — overlaps head by 3px so they appear joined.
+            View-border trick: an empty View with transparent left/right
+            borders and a coloured top border renders a downward triangle. */}
+        <View
+          pointerEvents="none"
+          style={{
+            width:             0,
+            height:            0,
+            borderLeftWidth:   POINTER_HALF,
+            borderRightWidth:  POINTER_HALF,
+            borderTopWidth:    POINTER_H,
+            borderLeftColor:   'transparent',
+            borderRightColor:  'transparent',
+            borderTopColor:    theme.colors.primary,
+            marginTop:         -3,
+          }}
+        />
       </View>
     </Marker>
   );
 }
-
-const pillStyles = StyleSheet.create({
-  outer: {
-    position:       'relative',
-    alignItems:     'center',
-    justifyContent: 'center',
-    padding:        6,        // gives halo room beyond pill body
-  },
-  halo: {
-    position:     'absolute',
-    top:          0,
-    left:         0,
-    right:        0,
-    bottom:       0,
-    borderRadius: 999,
-    opacity:      0.22,
-  },
-  body: {
-    flexDirection:  'row',
-    alignItems:     'center',
-    justifyContent: 'center',
-    borderRadius:   999,
-    borderWidth:    0.5,
-  },
-  highlight: {
-    position:     'absolute',
-    top:          5,
-    left:         10,
-    width:        16,
-    height:       6,
-    borderRadius: 3,
-    opacity:      0.28,
-  },
-});
 
 function formatDuration(min: number): string {
   if (min < 60) return `${min}m`;
