@@ -11,9 +11,11 @@
  *
  * Per the spec (addendum §3.3, user direction):
  *   region_type        = 'geomorphic_province'
- *   source             = 'usgs'  (CGS is the proximate publisher; we
- *                        bucket it under the existing `usgs` source enum
- *                        rather than adding a new `cgs` value)
+ *   source             = 'cgs'  (California Geological Survey — the
+ *                        proximate publisher. Per migration
+ *                        20260514000010, `regions.source` is locked to
+ *                        a 10-value enum; `'usgs'` is reserved for
+ *                        future federal-USGS layers e.g. HUC8.)
  *   source_id          = kebab-case slug of RANGE_NAME
  *   significance_tier  = 80
  *
@@ -296,7 +298,7 @@ export async function runImport(opts: ImportOptions): Promise<ImportResult> {
       description,
       polygon_geojson: feat.geometry as GeoJSON.Polygon | GeoJSON.MultiPolygon,
       significance_tier: 80,
-      source: 'usgs',
+      source: 'cgs',
       source_id: kebabCase(name),
       metadata: {
         cgs_geogem_note_title: cgs.noteTitle,

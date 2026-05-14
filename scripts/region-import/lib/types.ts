@@ -12,7 +12,32 @@ export type RegionType =
   | 'indigenous_territory'
   | 'named_valley_or_basin';
 
-export type RegionSource = 'usgs' | 'epa' | 'native_land' | 'wikidata' | 'editorial';
+/**
+ * Allowed values for regions.source. Locked to this 10-value set by the
+ * `regions_source_check` CHECK constraint (migration 20260514000010).
+ *
+ *   osm           — OpenStreetMap relation/way
+ *   wikidata      — Wikidata entity (e.g. named valleys via Q-number)
+ *   nrhp          — National Register of Historic Places (future: district boundaries)
+ *   chl           — California Historical Landmarks (future: district boundaries)
+ *   gnis          — USGS Geographic Names Information System
+ *   usgs          — federal USGS (reserved; e.g. HUC8 watersheds, federal physiographic)
+ *   cgs           — California Geological Survey (e.g. Geomorphic Provinces — E1a)
+ *   epa           — EPA Ecoregions (E1b)
+ *   native_land   — Native Land Digital (E1c)
+ *   editorial     — hand-curated; e.g. editorial valley polygons (E1d fallback)
+ */
+export type RegionSource =
+  | 'osm'
+  | 'wikidata'
+  | 'nrhp'
+  | 'chl'
+  | 'gnis'
+  | 'usgs'
+  | 'cgs'
+  | 'epa'
+  | 'native_land'
+  | 'editorial';
 
 /**
  * A normalized region ready for upsert.
