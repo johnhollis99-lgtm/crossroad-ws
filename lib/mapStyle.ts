@@ -1,4 +1,5 @@
 import { Platform } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { WARM_DARK_MAP } from './theme';
 
 export type MapStyleId = 'dark' | 'satellite' | 'topo' | 'standard';
@@ -37,6 +38,9 @@ export async function loadMapStyle(): Promise<MapStyleId> {
     if (Platform.OS === 'web') {
       const saved = localStorage.getItem(STORAGE_KEY);
       if (saved && saved in MAP_STYLES) return saved as MapStyleId;
+    } else {
+      const saved = await AsyncStorage.getItem(STORAGE_KEY);
+      if (saved && saved in MAP_STYLES) return saved as MapStyleId;
     }
   } catch {}
   return 'dark';
@@ -44,7 +48,11 @@ export async function loadMapStyle(): Promise<MapStyleId> {
 
 export async function saveMapStyle(id: MapStyleId): Promise<void> {
   try {
-    if (Platform.OS === 'web') localStorage.setItem(STORAGE_KEY, id);
+    if (Platform.OS === 'web') {
+      localStorage.setItem(STORAGE_KEY, id);
+    } else {
+      await AsyncStorage.setItem(STORAGE_KEY, id);
+    }
   } catch {}
 }
 
