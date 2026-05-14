@@ -30,6 +30,7 @@ import {
 } from 'react-native';
 import Svg, { Path } from 'react-native-svg';
 
+import type { ThemeColors } from '../src/design/theme';
 import { useTheme } from '../src/design/theme';
 import { shadows } from '../src/design/tokens';
 import { MAP_STYLES, MapStyleId } from '../lib/mapStyle';
@@ -89,6 +90,71 @@ function LayersIcon({ color }: { color: string }) {
         strokeLinecap="round"
         strokeLinejoin="round"
       />
+    </Svg>
+  );
+}
+
+// 40×40 abstract swatch per style — colored background + a thin overlay
+// pattern that hints at the style's character (warm horizon, street grid,
+// aerial tile, topo contours). Drawn in SVG so no asset files / network
+// calls are required. The colored fill comes from the wrapper View; the
+// SVG canvas is transparent and carries only the pattern strokes.
+const SWATCH_PX = 40;
+const SWATCH_RADIUS = 8;
+
+function styleSwatchBg(id: MapStyleId, colors: ThemeColors): string {
+  switch (id) {
+    case 'dark':      return colors.paper;       // near-black
+    case 'standard':  return colors.paperWarm;   // warm paper
+    case 'satellite': return '#2a2a2a';          // dark slate — distinct from paper
+    case 'topo':      return '#3d4a2c';          // olive — distinct from primary emerald
+  }
+}
+
+function StyleSwatch({ id, theme }: { id: MapStyleId; theme: { colors: ThemeColors } }) {
+  const c = theme.colors;
+  const stroke = id === 'satellite'
+    ? 'rgba(255,255,255,0.18)'            // diagonal aerial tile hint over dark slate
+    : id === 'topo'
+      ? c.primaryTint
+      : id === 'dark'
+        ? c.primaryTint                   // warm horizon hint over near-black
+        : c.lineSoft;                      // street grid hint over warm paper
+
+  return (
+    <Svg
+      width={SWATCH_PX}
+      height={SWATCH_PX}
+      viewBox={`0 0 ${SWATCH_PX} ${SWATCH_PX}`}
+    >
+      {id === 'dark' && (
+        // Single warm horizon line near the bottom (~75% down)
+        <Path d="M 6 30 L 34 30" stroke={stroke} strokeWidth={1.5} strokeLinecap="round" />
+      )}
+      {id === 'standard' && (
+        // Street grid: one vertical + two horizontal lines
+        <>
+          <Path d="M 20 6 L 20 34" stroke={stroke} strokeWidth={1} />
+          <Path d="M 6 14 L 34 14" stroke={stroke} strokeWidth={1} />
+          <Path d="M 6 26 L 34 26" stroke={stroke} strokeWidth={1} />
+        </>
+      )}
+      {id === 'satellite' && (
+        // Diagonal aerial-tile hint
+        <>
+          <Path d="M 4 16 L 16 4"  stroke={stroke} strokeWidth={1} />
+          <Path d="M 4 28 L 28 4"  stroke={stroke} strokeWidth={1} />
+          <Path d="M 12 36 L 36 12" stroke={stroke} strokeWidth={1} />
+          <Path d="M 24 36 L 36 24" stroke={stroke} strokeWidth={1} />
+        </>
+      )}
+      {id === 'topo' && (
+        // Two curved contour arcs — topo isoline suggestion
+        <>
+          <Path d="M 4 24 Q 20 12 36 24" stroke={stroke} strokeWidth={1.3} fill="none" strokeLinecap="round" />
+          <Path d="M 4 32 Q 20 20 36 32" stroke={stroke} strokeWidth={1.3} fill="none" strokeLinecap="round" />
+        </>
+      )}
     </Svg>
   );
 }
@@ -191,6 +257,19 @@ export function MapStylePicker({
                   !isLast && { borderBottomWidth: 1, borderBottomColor: theme.colors.lineSoft },
                 ]}
               >
+                {/* 40×40 swatch — colored fill + SVG pattern overlay hinting
+                    at the style's character (street grid, contour lines, etc.) */}
+                <View
+                  style={[
+                    s.rowSwatch,
+                    {
+                      backgroundColor: styleSwatchBg(id, theme.colors),
+                      borderColor:     theme.colors.paperEdge,
+                    },
+                  ]}
+                >
+                  <StyleSwatch id={id} theme={theme} />
+                </View>
                 <View style={{ flex: 1 }}>
                   <Text
                     allowFontScaling={false}
@@ -253,14 +332,24 @@ const s = StyleSheet.create({
   row: {
     flexDirection:     'row',
     alignItems:        'center',
-    paddingVertical:   12,
+    gap:               12,
+    paddingVertical:   10,
     paddingHorizontal: 4,
     minHeight:         44,
+  },
+  rowSwatch: {
+    width:           SWATCH_PX,
+    height:          SWATCH_PX,
+    borderRadius:    SWATCH_RADIUS,
+    borderWidth:     1,
+    overflow:        'hidden',
+    alignItems:      'center',
+    justifyContent:  'center',
   },
   activeDot: {
     width:        8,
     height:       8,
     borderRadius: 4,
-    marginLeft:   12,
+    // Inter-child spacing is provided by row.gap (12), so no extra margin.
   },
 });
