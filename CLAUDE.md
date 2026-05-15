@@ -1233,6 +1233,12 @@ Verification scripts: `scripts/verify-migrations.mjs` (66/66 checks passed on 00
 - Git binary (not on PATH): `C:\Users\johnh\AppData\Local\GitHubDesktop\app-3.5.8\resources\app\git\cmd\git.exe`
 - **`.gitignore`** — covers: `node_modules/` (all sub-packages), `.env` + `server/.env` (secrets), `.expo/`, `dist/`, `admin/.next/`, `scripts/*/cache/`, `scripts/audition-output/`, `*.opus`, `*.tsbuildinfo`, OS files, `.claude/scheduled_tasks.lock`, `.claude/settings.local.json`, `supabase/.temp/`, plus session-scoped pre-handoff working notes (`docs/alignment-plan.md`, `docs/codebase-audit.md` — added 2026-05-11 per chore(gitignore) commit, files retained locally for historical context).
 - **Recent commit history (top of `main`, 2026-05-15):**
+  - `9ced1c7` feat(regions): E1d Tier C polygon derivation script + v1.1 doc update (LTBMU/Hetch-Hetchy-reservoir-buffer/Sierra-Valley-centroid-bbox drafts to `data/editorial-named-valleys.geojson`; Class B osm_linear_to_bbox section in v1.1 doc)
+  - `9418afd` feat(regions): E1d Phase 4 — live import 27 named valleys (51 regions total) (25 Haiku calls × $0.0577; osmtogeojson + geodesic-circle Wikidata buffers; ST_MakeValid on Anza-Borrego ring self-intersection; Salinas Valley editorial parent override to Coast Ranges)
+  - `8682694` docs(regions): E1d v1.1 polygon-followups — SJV + LA Basin inadequacy
+  - `253d692` feat(regions): E1d Phase 1–3 — candidate list + polygon verification + samples (osmtogeojson dep added; 4-iteration verification with location-sanity + AVA-by-tag + plausibility checks; 2 tone-check samples)
+  - `e5dcce8` docs(regions): E1d Phase 1 — curator-annotated candidate list (top 80 with curator boost annotations; Castro Valley dropped, 11 rows boosted, Mono Basin = 2)
+  - `2c3fecd` docs(regions): E1c deferred — NLD commercial-license outreach in flight (native-land.ts stub removed; schema enum value 'indigenous_territory' reserved-not-loaded)
   - `2c35393` feat(map-style-picker): add 40x40 thumbnails back to dropdown rows (reverses drift 5.98; SVG swatches, no Mapbox network)
   - `a10cee5` fix(map-style): AsyncStorage persistence on native so user-selected style survives cold start
   - `128fe0f` fix(customize): add key={mapStyleId} to MapView for style change to take effect on Android
@@ -1265,6 +1271,85 @@ Verification scripts: `scripts/verify-migrations.mjs` (66/66 checks passed on 00
   - **Drift 5.44 (open) — brand-mark color literals in `app/index.tsx`.** Three references to `#2EC4B6` (×2) and `#1a1208` remain in MapScreen's StyleSheet (`logoPinOuter` / `logoPinInner` / `brandX` entries) — deferred to Layer 2 when these get replaced wholesale by importing the canonical `src/components/Wordmark.tsx`. Filed in commit `a965214`.
   - **Drift 5.45 (open) — color-distinction collapses from Layer 1 home-screen migration.** The 15→9 token collapse merged `STOP+ACCENT_TEXT → accent2`, `WARNING+WARNING_BRIGHT+DANGER → accent`, and `BORDER_STRONG+BG_ELEVATED → cardEdge`. Most user-visible regression: the origin-search-dot ternary at the search card no longer distinguishes GPS vs manual mode by color (both branches now resolve to `accent2`). Address in Layer 2 with non-color signals (icon / border treatment / label) rather than re-introducing a per-state color. Filed in commit `a965214`.
   - **Layer 2 home-screen migration** — follow-up to commit `a965214`. In scope: (1) resolve drift 5.44 by replacing the inline brand-mark assembly (`logoX` / `logoXBar1/2` / `logoPinOuter` / `logoPinInner` / `brand` / `brandX`) with `<Wordmark/>`; (2) resolve drift 5.45's GPS-vs-manual dot regression; (3) replace hand-rolled search-card / customize-CTA / route-card patterns with Field Notes components (`Card`, `PrimaryButton`, `Kicker`). Likely also a candidate moment to swap modal scrim `rgba(0,0,0,0.6)` for a themed dim if a primitive emerges. Token-only Layer 1 is the foundation; Layer 2 is component replacement.
+
+## Region import pipeline (`scripts/region-import/`)
+
+Standalone Phase-E1 ingestion package — own `package.json`, separate `npm install` from poi-import. Pulls geographic region polygons from authoritative sources, drafts third-person factual seed text via Haiku (canonical `SEED_TEXT_SYSTEM_PROMPT` in [scripts/region-import/lib/anthropic.ts](scripts/region-import/lib/anthropic.ts)), upserts to `public.regions`.
+
+### Phase E1 status (2026-05-15)
+
+| Phase | Source | Rows | Status |
+|---|---|---:|---|
+| E1a | USGS / California Geological Survey Geomorphic Provinces | 11 | Live ✓ |
+| E1b | EPA Level III Ecoregions | 13 | Live ✓ |
+| E1c | Native Land Digital indigenous territories | 0 | **Deferred to v2** — see [docs/decisions/2026-05-14-nld-deferral.md](docs/decisions/2026-05-14-nld-deferral.md) |
+| E1d | Named valleys/basins | 27 + 3 pending | Live (27/30); 3 Tier C in DRAFT awaiting greenlight |
+| E1e | Watersheds (HUC8) | 0 | Not started |
+
+**Total regions in DB: 51** (11 + 13 + 27). After Tier C lands: 54.
+
+### Pipeline scripts
+
+| Script | Purpose |
+|---|---|
+| `run.ts` | CLI entry — `import:regions` runs registered sources (`usgs`, `epa`, `named_valleys`) |
+| `sources/usgs-provinces.ts` | E1a importer (geomorphic provinces from CGS shapefile) |
+| `sources/epa-ecoregions.ts` | E1b importer (EPA L3 ecoregions from shapefile + DOCX descriptions; uses shared `lib/anthropic.ts` canonical prompt) |
+| `sources/named-valleys.ts` | E1d importer stub — actual work split across the 4 phase scripts below |
+| `build-named-valleys-candidates.ts` | E1d Phase 1: top-N candidate list from Wikipedia category + Wikimedia pageviews → markdown worksheet for curator boost annotation |
+| `verify-named-valleys-polygons.ts` | E1d Phase 2: per-region polygon-source resolution (OSM name-match + location-sanity 50km filter + tag-fallback by type + Wikidata-buffer with 15km heuristic when no P2046 area; AVA name-keyword filter; tiny-geological override + area-plausibility check) |
+| `seed-sample-owens-and-lvc.ts` | E1d Phase 3: two-sample tone-check before bulk Haiku spend |
+| `live-import-named-valleys.ts` | E1d Phase 4: live upsert of 27 non-Tier-C regions; osmtogeojson for OSM relation polygon assembly + 64-point geodesic circle for Wikidata buffers + bbox-rectangle fallback for unclosed LineStrings |
+| `derive-tier-c-polygons.ts` | E1d Tier C derivation pass — Lake Tahoe LTBMU + Hetch Hetchy reservoir-buffer + Sierra Valley centroid bbox → `data/editorial-named-valleys.geojson` (DRAFT) |
+
+### Polygon source conventions (`metadata.polygon_source`)
+
+- `osm_natural_valley` / `osm_natural_basin` / `osm_natural_desert` / `osm_natural_badlands` — geological OSM tags
+- `osm_boundary_viticulture` / `osm_ava_landuse_vineyard` / `osm_boundary_wine` — wine appellation (AVA)
+- `osm_protected_area` / `osm_boundary_national_park` — protected admin (accepted per-region via `acceptedPolygonTypes`)
+- `osm_boundary_admin_level_6_county` — county-level approximation (must pass one-OOM area plausibility check)
+- `wikidata_<QID>_centroid+buffer_<radius>km` — Wikidata centroid + 64-point geodesic circle; radius = `Math.sqrt(area_km² / π)` when P2046 set, else 15km if Wikipedia extract contains a region-type keyword (valley/basin/plain/caldera/desert), else 5km default
+- `derived_osm_ltbmu` / `derived_osm_lake_buffer` / `derived_osm_reservoir_buffer` — Tier C derivation paths
+- `editorial_approximation` — Tier C bbox-rectangle from Wikidata centroid (Sierra Valley)
+
+### Polygon-quality flags (`metadata.polygon_quality`)
+
+Two values currently in use; auditable via `metadata->>'polygon_quality'` query:
+
+- `inadequate_buffer_v1` — Wikidata 15km buffer is 1–10% of real area; v1.1 followup. **Set on: San Joaquin Valley, Los Angeles Basin** (only).
+- `osm_linear_to_bbox_v1` — OSM way is an unclosed LineString (linear feature for valley axis, not closed boundary polygon); bbox-rectangle approximation in use. **Set on: Cuyama Valley, Panamint Valley, Yosemite Valley.**
+
+Both classes documented in [docs/decisions/v1.1-polygon-followups.md](docs/decisions/v1.1-polygon-followups.md) with rationale + candidate fix paths. Lower-priority Class B (osm_linear_to_bbox_v1) over-triggers slightly; Class A (inadequate_buffer_v1) under-triggers by 10–40×.
+
+### Parent resolution
+
+Named valleys + ecoregions get `parent_region_id` via centroid → `ST_Within(geomorphic_province.polygon)` lookup; fallback to `ST_Intersects` area-largest if centroid is outside every province. Resolution method captured in `metadata.parent_resolution_method` ∈ {`centroid`, `area_intersection`, `editorial_override`}.
+
+**One editorial override** in E1d: **Salinas Valley** — Wikidata centroid (36.765°N, -121.792°W) falls in a 15.6 km province-coverage gap; manually assigned to Coast Ranges with `metadata.parent_resolution_note` explaining the gap.
+
+### LLM spend (E1a + E1b + E1d)
+
+$0.1301 total across 57 Haiku 4.5 calls (`claude-haiku-4-5-20251001`), all logged to `llm_calls` with `call_type='claude'`. Per-region average ~$0.0023 for 1,500–2,100 char descriptions.
+
+### Tier C status (E1d follow-up)
+
+3 regions originally Tier-C-manual-digitization → one lap of `derive-tier-c-polygons.ts` reduced to 0 manual cases via real-data derivation:
+
+| Region | Source | Polygon area | Status |
+|---|---|---:|---|
+| Lake Tahoe Basin | USFS LTBMU boundary (OSM `boundary=protected_area`) | 609.6 km² | Draft ready; awaiting greenlight |
+| Hetch Hetchy Valley | OSM reservoir (natural=water) + 2km buffer | 75.7 km² | Draft ready |
+| Sierra Valley | Wikidata centroid bbox 40km × 25km | 1,004.5 km² | Draft ready (editorial approximation) |
+
+Draft GeoJSON at `scripts/region-import/data/editorial-named-valleys.geojson` (gitignored alongside `cache/`). After curator greenlight, `live-import-tier-c.ts` will upsert these 3 with ~$0.007 Haiku spend. Then E1d is fully closed and the next phase is **E2 — region narration pre-generation**.
+
+### Decision records
+
+The `docs/decisions/` folder captures dated decisions affecting region-import design:
+
+- [docs/decisions/2026-05-14-nld-deferral.md](docs/decisions/2026-05-14-nld-deferral.md) — E1c (NLD indigenous_territory) deferred to v2 pending commercial-license outreach
+- [docs/decisions/2026-05-14-named-valleys-candidates.md](docs/decisions/2026-05-14-named-valleys-candidates.md) — E1d Phase 1 boost-annotated candidate worksheet (top 80, curator boosts marked)
+- [docs/decisions/v1.1-polygon-followups.md](docs/decisions/v1.1-polygon-followups.md) — Class A + Class B polygon-quality v1.1 followup work list
 
 ## scripts/seed-db.mjs
 
