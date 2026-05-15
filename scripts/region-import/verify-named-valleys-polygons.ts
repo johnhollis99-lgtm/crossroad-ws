@@ -72,6 +72,13 @@ interface TopRegion {
   proposedTier: 'A' | 'B' | 'C';
   /** OK list of polygon source types to accept beyond strict geological */
   acceptedPolygonTypes?: PolygonType[];
+  /** If set, tag-fallback candidates must contain this substring (case-
+   *  insensitive) in their OSM `name` tag. Prevents the
+   *  "nearby-AVA grabs every wine region in the radius" failure mode
+   *  (e.g., Sonoma Valley and Russian River Valley AVA centroids are both
+   *  within 20km of Napa Valley AVA's polygon edge — without this filter,
+   *  all three would resolve to the Napa polygon). */
+  tagFallbackNameKeyword?: string;
   /** If true, skip OSM/Wikidata; manual digitization only (Tier C). */
   manualOnly?: boolean;
   /** Free-text curator note */
@@ -85,8 +92,8 @@ const TOP_30: TopRegion[] = [
   { rank: 4,  displayName: 'Death Valley',              articleTitle: 'Death Valley',                     osmNameCandidates: ['Death Valley'], proposedTier: 'A' },
   { rank: 5,  displayName: 'Mono Basin',                articleTitle: 'Mono Basin',                       osmNameCandidates: ['Mono Basin', 'Mono Lake Basin'], proposedTier: 'A' },
   { rank: 6,  displayName: 'Napa Valley',               articleTitle: 'Napa Valley',                      osmNameCandidates: ['Napa Valley', 'Napa Valley AVA'], proposedTier: 'A', acceptedPolygonTypes: ['ava'], notes: 'AVA polygon explicitly accepted' },
-  { rank: 7,  displayName: 'Russian River Valley AVA',  articleTitle: 'Russian River Valley AVA',         osmNameCandidates: ['Russian River Valley', 'Russian River Valley AVA'], proposedTier: 'A', acceptedPolygonTypes: ['ava'], notes: 'AVA polygon explicitly accepted' },
-  { rank: 8,  displayName: 'Sonoma Valley',             articleTitle: 'Sonoma Valley',                    osmNameCandidates: ['Sonoma Valley', 'Sonoma Valley AVA'], proposedTier: 'A', acceptedPolygonTypes: ['ava'], notes: 'AVA polygon explicitly accepted' },
+  { rank: 7,  displayName: 'Russian River Valley AVA',  articleTitle: 'Russian River Valley AVA',         osmNameCandidates: ['Russian River Valley', 'Russian River Valley AVA'], proposedTier: 'A', acceptedPolygonTypes: ['ava'], tagFallbackNameKeyword: 'Russian River', notes: 'AVA polygon explicitly accepted; tag-fallback name-filtered to avoid grabbing Napa Valley AVA polygon' },
+  { rank: 8,  displayName: 'Sonoma Valley',             articleTitle: 'Sonoma Valley',                    osmNameCandidates: ['Sonoma Valley', 'Sonoma Valley AVA'], proposedTier: 'A', acceptedPolygonTypes: ['ava'], tagFallbackNameKeyword: 'Sonoma', notes: 'AVA polygon explicitly accepted; tag-fallback name-filtered to avoid grabbing Napa Valley AVA polygon' },
   { rank: 9,  displayName: 'Hetch Hetchy Valley',       articleTitle: 'Hetch Hetchy Valley',              osmNameCandidates: ['Hetch Hetchy Valley'], proposedTier: 'C', manualOnly: true, notes: 'Partially under reservoir; manual digitization' },
   { rank: 10, displayName: 'Panamint Valley',           articleTitle: 'Panamint Valley',                  osmNameCandidates: ['Panamint Valley'], proposedTier: 'B' },
   { rank: 11, displayName: 'Saline Valley',             articleTitle: 'Saline Valley',                    osmNameCandidates: ['Saline Valley'], proposedTier: 'B' },
@@ -856,7 +863,24 @@ async function verifyRegion(region: TopRegion): Promise<VerificationResult> {
   if (best === null && region.acceptedPolygonTypes && trustedCentroid) {
     const tagRadiusKm = chooseTagRadiusKm(region.acceptedPolygonTypes);
     const tagElements = await queryOverpassByTagNearCentroid(trustedCentroid, region.acceptedPolygonTypes, tagRadiusKm);
-    const tagCandidates = elementsToOsmCandidates(tagElements);
+    let tagCandidates = elementsToOsmCandidates(tagElements);
+
+    // Optional name-keyword filter: drop candidates whose `name` doesn't
+    // contain the keyword. Used for clustered AVAs (Sonoma/RRV/Napa) where
+    // the nearest matching `boundary=viticulture` polygon by area is the
+    // WRONG appellation just because it edges within the 20km radius.
+    if (region.tagFallbackNameKeyword) {
+      const kw = region.tagFallbackNameKeyword.toLowerCase();
+      const before = tagCandidates.length;
+      tagCandidates = tagCandidates.filter((c) => c.name.toLowerCase().includes(kw));
+      if (before > 0 && tagCandidates.length === 0) {
+        SANITY_CHECK_LOG.push({
+          region: region.displayName,
+          reason: `tag-fallback name-keyword filter dropped all ${before} candidates (none contained "${region.tagFallbackNameKeyword}")`,
+        });
+      }
+    }
+
     // Apply same sanity check (drop matches >50km even within the around-buffer radius)
     const { kept: tagKept } = applyLocationSanity(tagCandidates, trustedCentroid, 50);
     if (tagKept.length > 0) {
