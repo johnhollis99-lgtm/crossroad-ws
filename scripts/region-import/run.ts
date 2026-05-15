@@ -20,7 +20,6 @@ import chalk from 'chalk';
 
 import * as usgs from './sources/usgs-provinces.js';
 import * as epa from './sources/epa-ecoregions.js';
-import * as nativeLand from './sources/native-land.js';
 import * as namedValleys from './sources/named-valleys.js';
 
 import type { ImportOptions, ImportResult } from './lib/types.js';
@@ -31,13 +30,16 @@ import type { ImportOptions, ImportResult } from './lib/types.js';
  * usgs → epa: EPA ecoregions need USGS province rows present to resolve
  *             parent_region_id via ST_Within.
  *
- * native_land, named_valleys: order-independent w.r.t. each other and the
- *             other two.
+ * named_valleys: order-independent w.r.t. usgs/epa.
+ *
+ * E1c (Native Land Digital / indigenous_territory) is deferred to v2 pending
+ * NLD commercial-license outreach. The schema enum value remains reserved
+ * in migration 20260514000005. See docs/decisions/2026-05-14-nld-deferral.md
+ * for the licensing finding and conditions to ship.
  */
 const SOURCES = {
   usgs:          usgs.runImport,
   epa:           epa.runImport,
-  native_land:   nativeLand.runImport,
   named_valleys: namedValleys.runImport,
 } as const;
 
