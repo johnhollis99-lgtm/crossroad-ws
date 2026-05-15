@@ -293,6 +293,27 @@ After Phases 5–5c complete, **you (the human curator) review the post-import P
 
 Recommend spot-checking 30 random POIs that pass each proposed floor before committing. See addendum §2.2.
 
+### Phase 5e — Architecture POI substance gate (locked 2026-05-15)
+
+Architecture POIs are subject to a stricter gate than other categories. Bare NRHP / CHL / Wikidata-entry status is **insufficient** — those signals prove a building exists, not that it has a story worth narrating at 50 mph. Per addendum §0 ("the soul is geology, geography, anthropology — architecture and history count *when significant*"), this principle is locked-in design intent now made actionable.
+
+**Substance criteria** — every architecture-category POI must satisfy ≥1 of:
+
+1. **Linked Wikipedia article** — actual prose, not just a Wikidata entity row with no enwiki sitelink.
+2. **Cited primary-source narrative content** — WPA Guide entry, CHL marker text, oral history excerpt loaded via the narrative-extraction pipeline (Phase 6).
+3. **Architectural significance documented beyond a database row** — e.g. *"first poured-concrete house in Southern California"* qualifies; *"Methodist church built in 1887"* alone does not.
+4. **Visible from a road a user would plausibly drive on** — geometric distance check vs. route geometry; suburban houses 3 blocks off the corridor get filtered even if they pass 1–3.
+
+**Implementation hooks** (split across this phase + Phase 6 + Phase G):
+
+- **Phase 5e (here):** add a substance-check pass after Phase 5d. Architecture POIs failing all four criteria either (a) get their `significance_score` clamped below the architecture floor (so they never trigger unsolicited narration but stay queryable), or (b) get inserted into `poi_review_queue` with `reason='architecture_substance_gate_failed'` for curator decision. Per-row choice: clamp if there's no plausible curator action (e.g. a generic 1920s Craftsman miles off-route), queue if there's a shred of doubt (e.g. a CHL-marked Methodist church on a state highway).
+- **Phase 6 (narrative extraction):** architecture-category POIs whose Haiku seed-text generation produces only generic prose ("a Methodist church built in 1887 in the city of X, listed on the National Register of Historic Places…") get auto-flagged into the review queue. Detect via simple heuristic: seed text contains the POI name + 1–2 source-row attributes + no concrete narrative beyond ≈100 chars.
+- **Phase G (per-category floor tuning):** the architecture floor in `category_significance_floors` defaults to **≥85**, with sub-category overrides (mission / courthouse / theater / lighthouse / depot tunable down; generic_residence / generic_church_no_article tunable up to 95+). The 85 default is calibrated so that ~the top 15% of architecture POIs (by significance_score) trigger narration; the rest stay in the catalog but never speak unprompted.
+
+Apply this gate **before** Phase B (full POI import beyond California) or Phase G (curation pass). Skipping it means importing tens of thousands of architecture rows that will quietly clutter `pois` without contributing to narration; applying it at import time keeps the table cleaner and the curation queue focused.
+
+See addendum §0 + the SKILL.md "Architecture POI substance gate" callout for the full rationale and the cross-doc statement of design intent.
+
 ---
 
 ## Phase 6 — Narrative extraction pipeline

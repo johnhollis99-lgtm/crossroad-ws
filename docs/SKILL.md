@@ -57,6 +57,22 @@ RoadStory is **not** an audio tour app. It is an **intelligent travel companion*
 - **Iconic Local Override** punches through filters for iconic food/drink/oddities/Americana lodging using free-tier curation sources only. (Addendum §8)
 - **Skip + Tell Me More controls** + 3 feedback reports drive content quality over time. (Addendum §9)
 - **Mid-trip narrator swap** is supported. (Addendum §5.5)
+- **Architecture POIs require demonstrable narrative substance.** Bare NRHP / CHL / Wikidata-entry status is *insufficient* — those signals only prove a building exists, not that it has a story worth telling at 50 mph. See callout below.
+
+### Architecture POI substance gate (locked 2026-05-15)
+
+Per addendum §0 ("the soul is geology, geography, anthropology — architecture and history count *when significant*"), an architecture-category POI passes the significance floor only if it satisfies **at least one** of:
+
+1. **Linked Wikipedia article** — actual prose, not just a Wikidata entity row with no enwiki sitelink.
+2. **Cited primary-source narrative content** — WPA Guide entry, CHL marker text, oral history excerpt, etc., loaded via the narrative-extraction pipeline.
+3. **Architectural significance documented beyond the database row** — e.g. *"first poured-concrete house in Southern California"* qualifies; *"Methodist church built in 1887"* alone does not.
+4. **Visible from a road a user would plausibly drive on** — geometric distance check vs. route geometry; suburban houses 3 blocks off the corridor are filtered even if they pass criteria 1–3.
+
+POIs failing all four either drop below the per-category floor at runtime OR get queued in `poi_review_queue` for curator decision. **Implementation hooks:**
+- **Phase 6 (narrative extraction):** architecture-category POIs that produce only generic seed text from Haiku get auto-flagged for review queue.
+- **Phase G (significance tuning):** the architecture category floor in `category_significance_floors` defaults to **≥85**, with sub-category overrides (e.g. mission, courthouse, theater) tunable down/up by the curator.
+
+This is pre-existing design intent (addendum §0) made explicit and actionable. Apply at Phase 5e of the POI pipeline (see `roadstory-poi-pipeline-prompts.md`) before any Phase B (full POI import) or Phase G (curation pass) work proceeds.
 
 **Sequencing across all pending work:** see `roadstory-unified-roadmap.md`. That doc is the single source of truth for what order to build things in.
 
