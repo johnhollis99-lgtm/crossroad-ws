@@ -193,7 +193,7 @@ async function insertNarrationAudioPending({ poiId, voiceId, depth, mode }) {
         prompt_version: PROMPT_VERSION,
         generated_at:   new Date().toISOString(),
       },
-      { onConflict: 'poi_id,narrator_slug,depth,mode', ignoreDuplicates: false },
+      { onConflict: 'poi_id,region_id,narrator_slug,depth,mode', ignoreDuplicates: false },
     )
     .select('id')
     .single();
