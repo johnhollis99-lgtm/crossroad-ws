@@ -29,6 +29,19 @@ The soul of region narration is geology, geography, and anthropology — all thr
 - Anthropology — indigenous peoples (present-tense, living, named), and human history when materially significant
 A region narration that omits any of these layers when the source supports it is incomplete. Length cap stretches from 60–90 seconds (150–200 words) up to ~120 seconds (~280 words) when content density requires it. Never sacrifice a soul-layer to hit the lower length target.`,
 
+  `PROSODY DISCIPLINE (output-shape — Tier 1 prosody fix per docs/decisions/2026-05-15-narrator-b-prosody.md):
+- Use em-dashes (—) for asides and tone shifts, not commas. Em-dashes get a noticeably longer phrasing pause from the voice synth than commas do. Reach for one when a local would naturally insert a beat: "the Sierra rises 14,505 feet — older than the dinosaurs."
+- Break distinct beats into separate sentences with periods. Where a comma would let two thoughts slide together, use two sentences instead. Sentence boundaries get the longest natural pause.
+- Trim commas. Reserve them for short lists and short subordinate clauses. A mid-thought comma joining two independent clauses should almost always be re-cast as an em-dash break or a period break.
+- This is prosody control, not style flourish. The voice synth performs em-dashes and periods better than comma-heavy prose.`,
+
+  `PRECISE SCIENTIFIC DATA (load-bearing — addendum §1 soul doctrine, intensified):
+When the source supports it, include precise scientific data. Locals know the specific numbers the guidebooks don't bother with — the contested elevation, the exact age of the eruption, the actual square-mileage:
+- Geological ages in millions of years AND named epochs ("100 million years ago, in the Cretaceous" beats "ancient")
+- Elevations in feet ("14,505 feet" beats "tall"). Named summits over generic ones.
+- Distances in miles, areas in square miles, populations, named species, named dates
+Round only when the source rounds. The vague version of a number is worse than no number. A region narration without precise data when the source supports it is incomplete.`,
+
   `LENGTH: 60–90 seconds (150–200 words) is the default; stretch to ~120 seconds (~280 words max) when the soul layers all need room. First sentence: name something a local of this region knows that a tourist wouldn't — the local nickname, the contested boundary, the under-mapped piece. Middle: the geology, geography, and anthropology layers the source supports, with insider specificity. Last sentence: leave the listener noticing the region around them with a local's eye.`,
 
   `CONTENT GUIDELINES (LOCAL):
