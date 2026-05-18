@@ -60,9 +60,11 @@ if (!chatId) {
 
 const message = '[RoadStory] Telegram notification system live. ✓';
 
-console.log(`Sending test ping to chat_id ${chatId}...`);
+// Wrapped in async main() — tsx treats this .ts under scripts/ as CJS
+// (no local package.json with "type": "module"), CJS rejects top-level await.
+async function main(): Promise<void> {
+  console.log(`Sending test ping to chat_id ${chatId}...`);
 
-try {
   const res = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -82,8 +84,10 @@ try {
   }
 
   console.log('✓ Test ping sent. Check your Telegram for the message above.');
-} catch (err: unknown) {
+}
+
+main().catch((err: unknown) => {
   const msg = err instanceof Error ? err.message : String(err);
   console.error(`Error: ${msg}`);
   process.exit(1);
-}
+});

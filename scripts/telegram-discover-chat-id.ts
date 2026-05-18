@@ -119,30 +119,40 @@ function updateEnvChatId(path: string, chatId: number): void {
   writeFileSync(path, lines.join('\n'));
 }
 
-// Polling loop
-process.stdout.write('Polling');
-while (true) {
-  process.stdout.write('.');
-  try {
-    const found = await pollOnce();
-    if (found) {
+// Polling loop wrapped in async main() — tsx treats this .ts under
+// scripts/ as CommonJS (no local package.json with "type": "module"),
+// and CJS cannot use top-level await.
+async function main(): Promise<void> {
+  process.stdout.write('Polling');
+  while (true) {
+    process.stdout.write('.');
+    try {
+      const found = await pollOnce();
+      if (found) {
+        console.log('');
+        console.log('');
+        console.log(`✓ Received message from ${found.senderName}: "${found.messageText}"`);
+        console.log(`  chat_id: ${found.chatId}`);
+        console.log('');
+        updateEnvChatId(ENV_PATH, found.chatId);
+        console.log(`✓ Wrote TELEGRAM_CHAT_ID=${found.chatId} to ${ENV_PATH}`);
+        console.log('');
+        console.log('Discovery complete. The bot now knows where to send notifications.');
+        console.log('Next: run "npx tsx scripts/telegram-test.ts" to confirm end-to-end works.');
+        process.exit(0);
+      }
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
       console.log('');
-      console.log('');
-      console.log(`✓ Received message from ${found.senderName}: "${found.messageText}"`);
-      console.log(`  chat_id: ${found.chatId}`);
-      console.log('');
-      updateEnvChatId(ENV_PATH, found.chatId);
-      console.log(`✓ Wrote TELEGRAM_CHAT_ID=${found.chatId} to ${ENV_PATH}`);
-      console.log('');
-      console.log('Discovery complete. The bot now knows where to send notifications.');
-      console.log('Next: run "npx tsx scripts/telegram-test.ts" to confirm end-to-end works.');
-      process.exit(0);
+      console.error(`Polling error: ${msg}`);
+      console.error(`Retrying in ${POLL_INTERVAL_MS / 1000}s...`);
     }
-  } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : String(err);
-    console.log('');
-    console.error(`Polling error: ${msg}`);
-    console.error(`Retrying in ${POLL_INTERVAL_MS / 1000}s...`);
+    await new Promise(r => setTimeout(r, POLL_INTERVAL_MS));
   }
-  await new Promise(r => setTimeout(r, POLL_INTERVAL_MS));
 }
+
+main().catch((err: unknown) => {
+  const msg = err instanceof Error ? err.message : String(err);
+  console.error(`Fatal: ${msg}`);
+  process.exit(1);
+});
