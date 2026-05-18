@@ -23,6 +23,7 @@ import { Command } from 'commander';
 import chalk from 'chalk';
 import { getAdminClient, getPgPool } from './lib/supabase.js';
 import { resolveQidsToTitles, isQid } from './lib/wikidata-sitelinks.js';
+import { resolveQidsToP31, p31BonusForClasses } from './lib/wikidata-p31.js';
 import { tokenSetRatio } from './lib/dedupe.js';
 
 // Minimum token-set overlap between POI name and the enwiki article title
@@ -46,13 +47,16 @@ interface SignificanceBreakdown {
   cross_source:    number;
   pageviews:       number;
   route_adjacency: number;
+  p31_bonus?:      number;  // A1 fix: +10 for geology/nature POIs with soul-doctrine P31 class
   total:           number;
 }
 
 interface PoiRow {
   id:                      string;
   name:                    string | null;
+  category_id:             string | null;
   source_type:             string | null;
+  source_id:               string | null;
   significance_score:      number | string;
   significance_breakdown:  Partial<SignificanceBreakdown> | null;
   additional_sources:      string[] | null;
@@ -325,6 +329,7 @@ interface CliOpts {
   dryRun:       boolean;
   forcePageviews: boolean;
   skipPageviews:  boolean;
+  skipP31:      boolean;
   batchSize:    string;
   bbox?:        string;
   ids?:         string;
@@ -340,8 +345,22 @@ async function main(opts: CliOpts): Promise<void> {
 
   console.log(chalk.bold('XRoad — recompute-significance'));
   console.log(chalk.gray(
-    `batch=${BATCH_SIZE}  pageviews=${opts.skipPageviews ? 'skip' : opts.forcePageviews ? 'force' : 'cached'}`,
+    `batch=${BATCH_SIZE}  pageviews=${opts.skipPageviews ? 'skip' : opts.forcePageviews ? 'force' : 'cached'}  ` +
+    `p31_bonus=${opts.skipP31 ? 'skip' : 'apply'}`,
   ));
+
+  // A1 fix: pre-fetch geology + nature category UUIDs so we can identify
+  // P31-bonus-eligible POIs without a JOIN in the main SELECT loop.
+  const p31EligibleCategoryIds = new Set<string>();
+  if (!opts.skipP31) {
+    const { data: catRows, error: catErr } = await supabase
+      .from('poi_categories')
+      .select('id, slug')
+      .in('slug', ['geology', 'nature']);
+    if (catErr) throw new Error(`fetch category IDs: ${catErr.message}`);
+    for (const row of catRows ?? []) p31EligibleCategoryIds.add(row.id);
+    console.log(chalk.gray(`p31_bonus eligible categories: geology + nature → ${p31EligibleCategoryIds.size} category_id(s)`));
+  }
 
   // Optional id-list pre-filter (highest precedence — surgical scope).
   let bboxIds: string[] | null = null;
@@ -397,7 +416,7 @@ async function main(opts: CliOpts): Promise<void> {
     // ── Fetch batch ────────────────────────────────────────────────────────
     let query = supabase
       .from('pois')
-      .select('id, name, source_type, significance_score, significance_breakdown, additional_sources, source_citation, venue_metadata')
+      .select('id, name, category_id, source_type, source_id, significance_score, significance_breakdown, additional_sources, source_citation, venue_metadata')
       .is('merged_into', null);
 
     if (bboxIds !== null) {
@@ -431,6 +450,30 @@ async function main(opts: CliOpts): Promise<void> {
       }
       if (qidsToResolve.length > 0) {
         qidTitleMap = await resolveQidsToTitles(qidsToResolve);
+      }
+    }
+
+    // ── A1: Wikidata P31 → soul-doctrine class bonus (batched) ─────────────
+    // Only geology + nature POIs from source_type='wikidata' are eligible
+    // (their source_id is the Q-number directly). Pre-filtering keeps the
+    // SPARQL batch small even on full-corpus runs.
+    let p31BonusMap = new Map<string, number>();  // poi.id → bonus (0 or 10)
+    if (!opts.skipP31) {
+      const eligibleQidsByPoi = new Map<string, string>();  // poi.id → qid
+      for (const poi of typedPois) {
+        if (!p31EligibleCategoryIds.has(poi.category_id ?? '')) continue;
+        if (poi.source_type !== 'wikidata') continue;
+        const qid = poi.source_id && isQid(poi.source_id)
+          ? poi.source_id
+          : extractQid(poi);
+        if (qid) eligibleQidsByPoi.set(poi.id, qid);
+      }
+      if (eligibleQidsByPoi.size > 0) {
+        const uniqQids = Array.from(new Set(eligibleQidsByPoi.values()));
+        const classMap = await resolveQidsToP31(uniqQids);
+        for (const [poiId, qid] of eligibleQidsByPoi) {
+          p31BonusMap.set(poiId, p31BonusForClasses(classMap.get(qid)));
+        }
       }
     }
 
@@ -493,13 +536,15 @@ async function main(opts: CliOpts): Promise<void> {
         }
       }
 
-      const total = Math.min(100, source_base + cross_source + pageviews + route_adjacency);
+      const p31_bonus = p31BonusMap.get(poi.id) ?? 0;
+      const total = Math.min(100, source_base + cross_source + pageviews + route_adjacency + p31_bonus);
 
       const breakdown: SignificanceBreakdown = {
         source_base,
         cross_source,
         pageviews,
         route_adjacency,
+        p31_bonus,
         total,
       };
 
@@ -613,6 +658,7 @@ program
   .option('--dry-run',         'Compute scores but do not write to DB', false)
   .option('--force-pageviews', 'Bypass 7-day Wikipedia pageview cache', false)
   .option('--skip-pageviews',  'Skip Wikipedia pageview lookups entirely', false)
+  .option('--skip-p31',        'Skip Wikidata P31 soul-doctrine class bonus (A1, default: apply)', false)
   .option('--batch-size <n>',  'POIs fetched per DB round-trip', '1000')
   .option('--bbox <minLat,minLon,maxLat,maxLon>', 'Restrict to an explicit bbox')
   .option('--ids <comma-separated-uuids>', 'Restrict to an explicit list of POI ids (overrides --bbox)')

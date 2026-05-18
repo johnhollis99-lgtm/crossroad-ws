@@ -1,0 +1,762 @@
+{
+  "timestamp": "2026-05-18T22:18:13.359Z",
+  "layer_distributions": {
+    "geology": {
+      "b95_100": 0,
+      "b90_94": 0,
+      "b85_89": 0,
+      "b80_84": 1,
+      "b70_79": 0,
+      "b65_69": 0,
+      "b60_64": 1,
+      "below_60": 56,
+      "total": 58
+    },
+    "nature": {
+      "b95_100": 0,
+      "b90_94": 0,
+      "b85_89": 0,
+      "b80_84": 2,
+      "b70_79": 13,
+      "b65_69": 19,
+      "b60_64": 26,
+      "below_60": 11922,
+      "total": 11982
+    },
+    "history": {
+      "b95_100": 1,
+      "b90_94": 2,
+      "b85_89": 1,
+      "b80_84": 14,
+      "b70_79": 38,
+      "b65_69": 47,
+      "b60_64": 84,
+      "below_60": 3356,
+      "total": 3543
+    },
+    "architecture": {
+      "b95_100": 0,
+      "b90_94": 0,
+      "b85_89": 0,
+      "b80_84": 1,
+      "b70_79": 14,
+      "b65_69": 13,
+      "b60_64": 55,
+      "below_60": 2607,
+      "total": 2690
+    },
+    "ALL_LIVE": {
+      "b95_100": 5,
+      "b90_94": 3,
+      "b85_89": 3,
+      "b80_84": 25,
+      "b70_79": 98,
+      "b65_69": 110,
+      "b60_64": 198,
+      "below_60": 21464,
+      "total": 21906
+    }
+  },
+  "top_pois": [
+    {
+      "id": "7d6987cd-002b-4000-aa4a-fc56b3f04f6a",
+      "name": "Grizzly River Run",
+      "category": "hidden_gems",
+      "score": 100,
+      "breakdown": {
+        "total": 100,
+        "pageviews": 0,
+        "source_base": 70,
+        "cross_source": 30,
+        "route_adjacency": 10
+      },
+      "source_type": "osm"
+    },
+    {
+      "id": "0ef620f4-9880-485e-a8b1-d2473ecbe8d7",
+      "name": "Santa Monica Pier",
+      "category": "local_culture",
+      "score": 100,
+      "breakdown": {
+        "total": 100,
+        "pageviews": 14,
+        "source_base": 68,
+        "cross_source": 10,
+        "route_adjacency": 10
+      },
+      "source_type": "wikidata"
+    },
+    {
+      "id": "44d6873c-d06f-4a0a-833a-47f93b7f6407",
+      "name": "Walk of Fame",
+      "category": "hidden_gems",
+      "score": 100,
+      "breakdown": {
+        "total": 100,
+        "pageviews": 0,
+        "source_base": 70,
+        "cross_source": 30,
+        "route_adjacency": 5
+      },
+      "source_type": "osm"
+    },
+    {
+      "id": "add6f7fd-ec7c-4ada-8da2-ed95382d61f6",
+      "name": "Hollywood Walk of Fame",
+      "category": "history",
+      "score": 99,
+      "breakdown": {
+        "total": 99,
+        "pageviews": 19,
+        "source_base": 45,
+        "cross_source": 30,
+        "route_adjacency": 5
+      },
+      "source_type": "wikidata"
+    },
+    {
+      "id": "2e7059ed-37f2-4c34-9599-82a7157a230d",
+      "name": "Hollywood Sign",
+      "category": "local_culture",
+      "score": 95,
+      "breakdown": {
+        "total": 95,
+        "pageviews": 0,
+        "source_base": 60,
+        "cross_source": 30,
+        "route_adjacency": 5
+      },
+      "source_type": "editorial"
+    },
+    {
+      "id": "bfd29316-9df3-42f0-a1a3-ca64b9a825f4",
+      "name": "Mission San Miguel Arcángel",
+      "category": "history",
+      "score": 93,
+      "breakdown": {
+        "total": 93,
+        "pageviews": 3,
+        "source_base": 50,
+        "cross_source": 30,
+        "route_adjacency": 10
+      },
+      "source_type": "state_landmark"
+    },
+    {
+      "id": "415237b7-56e8-4724-9f84-63a6f292461b",
+      "name": "Mission San Buenaventura",
+      "category": "history",
+      "score": 92,
+      "breakdown": {
+        "total": 92,
+        "pageviews": 12,
+        "source_base": 40,
+        "cross_source": 30,
+        "route_adjacency": 10
+      },
+      "source_type": "editorial"
+    },
+    {
+      "id": "4027f0f8-b280-4ec2-bf56-ee937eb826ec",
+      "name": "Marine World/Africa USA",
+      "category": "local_culture",
+      "score": 90,
+      "breakdown": {
+        "total": 90,
+        "pageviews": 12,
+        "source_base": 58,
+        "cross_source": 10,
+        "route_adjacency": 10
+      },
+      "source_type": "wikidata"
+    },
+    {
+      "id": "7453f2d8-dce7-45cd-8c2a-fd98bea08a02",
+      "name": "Adventure City",
+      "category": "local_culture",
+      "score": 88,
+      "breakdown": {
+        "total": 88,
+        "pageviews": 10,
+        "source_base": 68,
+        "cross_source": 10,
+        "route_adjacency": 0
+      },
+      "source_type": "wikidata"
+    },
+    {
+      "id": "0f1e44ea-6d28-48b4-972a-dbe5163182ac",
+      "name": "Museum of Contemporary Art San Diego",
+      "category": "art",
+      "score": 87,
+      "breakdown": {
+        "total": 87,
+        "pageviews": 10,
+        "source_base": 52,
+        "cross_source": 20,
+        "route_adjacency": 5
+      },
+      "source_type": "wikidata"
+    },
+    {
+      "id": "382bd6be-7dfd-4b3a-a5a1-b39388ddd5b0",
+      "name": "Mission San Francisco de Asís",
+      "category": "history",
+      "score": 85,
+      "breakdown": {
+        "total": 85,
+        "pageviews": 15,
+        "source_base": 40,
+        "cross_source": 20,
+        "route_adjacency": 10
+      },
+      "source_type": "editorial"
+    },
+    {
+      "id": "d2814ccd-60fc-40da-9dd6-446bf1d9d74e",
+      "name": "Mission San Diego de Alcalá",
+      "category": "history",
+      "score": 84,
+      "breakdown": {
+        "total": 84,
+        "pageviews": 14,
+        "source_base": 40,
+        "cross_source": 20,
+        "route_adjacency": 10
+      },
+      "source_type": "editorial"
+    },
+    {
+      "id": "739aca24-d217-47a8-b13d-a0e2d0d30214",
+      "name": "Mission San Juan Capistrano",
+      "category": "history",
+      "score": 84,
+      "breakdown": {
+        "total": 84,
+        "pageviews": 14,
+        "source_base": 40,
+        "cross_source": 20,
+        "route_adjacency": 10
+      },
+      "source_type": "editorial"
+    },
+    {
+      "id": "e1bb3c66-76c9-4acf-a7fa-0d191d20b803",
+      "name": "Sleeping Beauty Castle",
+      "category": "hidden_gems",
+      "score": 84,
+      "breakdown": {
+        "total": 84,
+        "pageviews": 14,
+        "source_base": 40,
+        "cross_source": 20,
+        "route_adjacency": 10
+      },
+      "source_type": "wikidata"
+    },
+    {
+      "id": "97cd82ab-6d11-4279-965e-be22435a9914",
+      "name": "Mission San Luis Rey de Francia",
+      "category": "history",
+      "score": 83,
+      "breakdown": {
+        "total": 83,
+        "pageviews": 13,
+        "source_base": 40,
+        "cross_source": 30,
+        "route_adjacency": 0
+      },
+      "source_type": "editorial"
+    },
+    {
+      "id": "47646679-aba7-49d2-971a-981bd96f1194",
+      "name": "Mission Santa Bárbara",
+      "category": "history",
+      "score": 83,
+      "breakdown": {
+        "total": 83,
+        "pageviews": 13,
+        "source_base": 40,
+        "cross_source": 30,
+        "route_adjacency": 0
+      },
+      "source_type": "editorial"
+    },
+    {
+      "id": "186a3dc0-d51d-4090-8138-ee45cd369f45",
+      "name": "Avengers Campus",
+      "category": "local_culture",
+      "score": 82,
+      "breakdown": {
+        "total": 82,
+        "pageviews": 14,
+        "source_base": 58,
+        "cross_source": 0,
+        "route_adjacency": 10
+      },
+      "source_type": "wikidata"
+    },
+    {
+      "id": "fce3679a-955c-4a64-9089-db767144e1ad",
+      "name": "Drum Barracks",
+      "category": "history",
+      "score": 82,
+      "breakdown": {
+        "total": 82,
+        "pageviews": 2,
+        "source_base": 40,
+        "cross_source": 30,
+        "route_adjacency": 10
+      },
+      "source_type": "state_landmark"
+    },
+    {
+      "id": "b185a594-9d62-484f-b604-d17408e97b3f",
+      "name": "Mission La Purísima Concepción",
+      "category": "history",
+      "score": 82,
+      "breakdown": {
+        "total": 82,
+        "pageviews": 12,
+        "source_base": 40,
+        "cross_source": 30,
+        "route_adjacency": 0
+      },
+      "source_type": "editorial"
+    },
+    {
+      "id": "779987b7-0ec8-46d9-80d1-1bceb8ed9639",
+      "name": "Mission San Luis Obispo de Tolosa",
+      "category": "history",
+      "score": 82,
+      "breakdown": {
+        "total": 82,
+        "pageviews": 12,
+        "source_base": 40,
+        "cross_source": 20,
+        "route_adjacency": 10
+      },
+      "source_type": "editorial"
+    },
+    {
+      "id": "3e2b0feb-88e9-455d-a056-2373a52969ef",
+      "name": "Mission Santa Cruz",
+      "category": "history",
+      "score": 82,
+      "breakdown": {
+        "total": 82,
+        "pageviews": 12,
+        "source_base": 40,
+        "cross_source": 20,
+        "route_adjacency": 10
+      },
+      "source_type": "editorial"
+    },
+    {
+      "id": "96f91a79-c0b3-4e2a-930f-1d84622b5501",
+      "name": "Cars Land",
+      "category": "local_culture",
+      "score": 81,
+      "breakdown": {
+        "total": 81,
+        "pageviews": 13,
+        "source_base": 58,
+        "cross_source": 0,
+        "route_adjacency": 10
+      },
+      "source_type": "wikidata"
+    },
+    {
+      "id": "9525dc70-1845-424f-b1a3-9daa1fca0ecb",
+      "name": "Lake Temescal",
+      "category": "nature",
+      "score": 81,
+      "breakdown": {
+        "total": 81,
+        "pageviews": 8,
+        "source_base": 48,
+        "cross_source": 20,
+        "route_adjacency": 5
+      },
+      "source_type": "wikidata"
+    },
+    {
+      "id": "10ea7950-3de5-462e-8a67-1b64f47155bc",
+      "name": "Oceanside City Hall and Fire Station",
+      "category": "history",
+      "score": 81,
+      "breakdown": {
+        "total": 81,
+        "pageviews": 6,
+        "source_base": 55,
+        "cross_source": 10,
+        "route_adjacency": 10
+      },
+      "source_type": "wikidata"
+    },
+    {
+      "id": "a5b48978-fa40-42c0-8daf-dc9fd550f29b",
+      "name": "Adventuredome",
+      "category": "local_culture",
+      "score": 80,
+      "breakdown": {
+        "total": 80,
+        "pageviews": 12,
+        "source_base": 58,
+        "cross_source": 0,
+        "route_adjacency": 10
+      },
+      "source_type": "wikidata"
+    },
+    {
+      "id": "d9329a26-66c8-4220-9599-1fae9eca5a04",
+      "name": "Dallidet Adobe",
+      "category": "history",
+      "score": 80,
+      "breakdown": {
+        "total": 80,
+        "pageviews": 0,
+        "source_base": 50,
+        "cross_source": 20,
+        "route_adjacency": 10
+      },
+      "source_type": "state_landmark"
+    },
+    {
+      "id": "227777ca-522f-4a91-b7fc-741db53da127",
+      "name": "Echo Lake",
+      "category": "nature",
+      "score": 80,
+      "breakdown": {
+        "total": 80,
+        "pageviews": 7,
+        "source_base": 48,
+        "cross_source": 20,
+        "route_adjacency": 5
+      },
+      "source_type": "wikidata"
+    },
+    {
+      "id": "5be2bde2-7b30-409e-ae4f-b174f84a8bfe",
+      "name": "Fire Station No. 23",
+      "category": "history",
+      "score": 80,
+      "breakdown": {
+        "total": 80,
+        "pageviews": 10,
+        "source_base": 55,
+        "cross_source": 10,
+        "route_adjacency": 5
+      },
+      "source_type": "wikidata"
+    },
+    {
+      "id": "740cc5cf-0cf9-4873-8c06-e37436b5229a",
+      "name": "Fremont Peak",
+      "category": "history",
+      "score": 80,
+      "breakdown": {
+        "total": 80,
+        "pageviews": 0,
+        "source_base": 50,
+        "cross_source": 30,
+        "route_adjacency": 0
+      },
+      "source_type": "state_landmark"
+    },
+    {
+      "id": "92df5dbd-5cdc-452a-8a75-fcdeaa309052",
+      "name": "Getty Center",
+      "category": "architecture",
+      "score": 80,
+      "breakdown": {
+        "total": 80,
+        "pageviews": 15,
+        "source_base": 40,
+        "cross_source": 20,
+        "route_adjacency": 5
+      },
+      "source_type": "editorial"
+    },
+    {
+      "id": "051372b6-a252-4d68-9a30-d4386f76921d",
+      "name": "Jurassic World-The Ride",
+      "category": "hidden_gems",
+      "score": 80,
+      "breakdown": {
+        "total": 80,
+        "pageviews": 0,
+        "source_base": 40,
+        "cross_source": 30,
+        "route_adjacency": 10
+      },
+      "source_type": "osm"
+    },
+    {
+      "id": "cbc1ac7f-d9b6-4109-a85c-d6b69a9ed2c2",
+      "name": "Mammoth Mountain Ski Area",
+      "category": "recreation",
+      "score": 80,
+      "breakdown": {
+        "total": 80,
+        "pageviews": 0,
+        "source_base": 60,
+        "cross_source": 20,
+        "route_adjacency": 0
+      },
+      "source_type": "editorial"
+    },
+    {
+      "id": "6dbb1b74-7aac-4f1e-91ad-9df46391e1b0",
+      "name": "Mount Whitney",
+      "category": "geology",
+      "score": 80,
+      "breakdown": {
+        "total": 80,
+        "pageviews": 0,
+        "source_base": 60,
+        "cross_source": 20,
+        "route_adjacency": 0
+      },
+      "source_type": "editorial"
+    },
+    {
+      "id": "244a8a6c-156a-4aee-b1ca-911754e7bb20",
+      "name": "Old Town San Diego State Historic Park",
+      "category": "history",
+      "score": 80,
+      "breakdown": {
+        "total": 80,
+        "pageviews": 10,
+        "source_base": 40,
+        "cross_source": 20,
+        "route_adjacency": 10
+      },
+      "source_type": "editorial"
+    },
+    {
+      "id": "91209444-6418-4e81-b17d-f537b255ef8d",
+      "name": "Pacific Park",
+      "category": "local_culture",
+      "score": 80,
+      "breakdown": {
+        "total": 80,
+        "pageviews": 12,
+        "source_base": 58,
+        "cross_source": 0,
+        "route_adjacency": 10
+      },
+      "source_type": "wikidata"
+    },
+    {
+      "id": "597ad679-49ff-44a0-b90a-0496632ae6b9",
+      "name": "Santa Ana Fire Station Headquarters No. 1",
+      "category": "history",
+      "score": 80,
+      "breakdown": {
+        "total": 80,
+        "pageviews": 5,
+        "source_base": 55,
+        "cross_source": 10,
+        "route_adjacency": 10
+      },
+      "source_type": "wikidata"
+    },
+    {
+      "id": "6ea4408f-cd00-45ad-b298-5876193bf599",
+      "name": "Balboa Park",
+      "category": "architecture",
+      "score": 79,
+      "breakdown": {
+        "total": 79,
+        "pageviews": 14,
+        "source_base": 40,
+        "cross_source": 20,
+        "route_adjacency": 5
+      },
+      "source_type": "editorial"
+    },
+    {
+      "id": "dce330bc-65eb-40e0-bef7-a6546b362b7d",
+      "name": "Balboa Park Gardens",
+      "category": "nature",
+      "score": 79,
+      "breakdown": {
+        "total": 79,
+        "pageviews": 7,
+        "source_base": 52,
+        "cross_source": 10,
+        "route_adjacency": 10
+      },
+      "source_type": "wikidata"
+    },
+    {
+      "id": "3d204afe-b1c7-4508-9831-ae59722c9d95",
+      "name": "Confusion Hill",
+      "category": "local_culture",
+      "score": 79,
+      "breakdown": {
+        "total": 79,
+        "pageviews": 11,
+        "source_base": 58,
+        "cross_source": 0,
+        "route_adjacency": 10
+      },
+      "source_type": "wikidata"
+    },
+    {
+      "id": "eeb1b2b2-5b0d-4ddc-9287-af437cfbc916",
+      "name": "Disneyland Park",
+      "category": "local_culture",
+      "score": 79,
+      "breakdown": {
+        "total": 79,
+        "pageviews": 19,
+        "source_base": 40,
+        "cross_source": 10,
+        "route_adjacency": 10
+      },
+      "source_type": "editorial"
+    },
+    {
+      "id": "3599f61b-a2af-4ab3-8e1e-e102639f1599",
+      "name": "Point San Luis Light",
+      "category": "architecture",
+      "score": 79,
+      "breakdown": {
+        "total": 79,
+        "pageviews": 7,
+        "source_base": 52,
+        "cross_source": 20,
+        "route_adjacency": 0
+      },
+      "source_type": "wikidata"
+    },
+    {
+      "id": "14d851d5-775a-467c-b7a1-2351081d9375",
+      "name": "Legoland California",
+      "category": "local_culture",
+      "score": 78,
+      "breakdown": {
+        "total": 78,
+        "pageviews": 13,
+        "source_base": 40,
+        "cross_source": 20,
+        "route_adjacency": 5
+      },
+      "source_type": "editorial"
+    },
+    {
+      "id": "307b9fa1-3a9c-46aa-b760-a13c85bfeee4",
+      "name": "Mission San José",
+      "category": "history",
+      "score": 78,
+      "breakdown": {
+        "total": 78,
+        "pageviews": 13,
+        "source_base": 40,
+        "cross_source": 20,
+        "route_adjacency": 5
+      },
+      "source_type": "editorial"
+    },
+    {
+      "id": "87b78696-99b9-4865-a6f2-3ec7393f9c1c",
+      "name": "Mission Santa Clara de Asís",
+      "category": "history",
+      "score": 78,
+      "breakdown": {
+        "total": 78,
+        "pageviews": 13,
+        "source_base": 40,
+        "cross_source": 20,
+        "route_adjacency": 5
+      },
+      "source_type": "editorial"
+    },
+    {
+      "id": "e68edcbe-f623-4012-88e7-5220e911ecab",
+      "name": "Black Hill",
+      "category": "nature",
+      "score": 77,
+      "breakdown": {
+        "total": 77,
+        "pageviews": 7,
+        "source_base": 50,
+        "cross_source": 10,
+        "route_adjacency": 10
+      },
+      "source_type": "wikidata"
+    },
+    {
+      "id": "8a7712dd-1968-45bd-b2b4-62871fe00fa3",
+      "name": "Engine Company No. 28",
+      "category": "history",
+      "score": 77,
+      "breakdown": {
+        "total": 77,
+        "pageviews": 7,
+        "source_base": 55,
+        "cross_source": 10,
+        "route_adjacency": 5
+      },
+      "source_type": "wikidata"
+    },
+    {
+      "id": "8c7fcdf8-961a-4bef-9521-2cb32388ee6f",
+      "name": "Golden Gate Bridge",
+      "category": "history",
+      "score": 77,
+      "breakdown": {
+        "total": 77,
+        "pageviews": 7,
+        "source_base": 40,
+        "cross_source": 20,
+        "route_adjacency": 10
+      },
+      "source_type": "state_landmark"
+    },
+    {
+      "id": "a8bc56e0-9d31-43c9-9655-180c464f2a43",
+      "name": "Universal Studios Hollywood",
+      "category": "local_culture",
+      "score": 77,
+      "breakdown": {
+        "total": 77,
+        "pageviews": 17,
+        "source_base": 40,
+        "cross_source": 10,
+        "route_adjacency": 10
+      },
+      "source_type": "editorial"
+    },
+    {
+      "id": "c400a378-e37f-4e78-a55d-9d6e8de93554",
+      "name": "California State Capitol",
+      "category": "architecture",
+      "score": 76,
+      "breakdown": {
+        "total": 76,
+        "pageviews": 1,
+        "source_base": 40,
+        "cross_source": 30,
+        "route_adjacency": 5
+      },
+      "source_type": "state_landmark"
+    },
+    {
+      "id": "a7c1ec07-7a02-479a-aa0f-4b98d6e34388",
+      "name": "Disney California Adventure Park",
+      "category": "local_culture",
+      "score": 76,
+      "breakdown": {
+        "total": 76,
+        "pageviews": 16,
+        "source_base": 40,
+        "cross_source": 10,
+        "route_adjacency": 10
+      },
+      "source_type": "editorial"
+    }
+  ]
+}
