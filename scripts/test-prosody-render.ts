@@ -1,28 +1,33 @@
 /**
  * scripts/test-prosody-render.ts
  *
- * Tier 1 prosody fix test renders. Generates fresh narrator_b × Family
+ * Tier 2 SSML pipeline test renders. Generates fresh narrator_b × Family
  * narrations for Sierra Nevada + Mono Basin with:
- *   - speakingRate override 1.00 → 0.95 (D — D+E per decision doc)
- *   - Modified narrator_b_family.js template (E — punctuation + sci-data)
+ *   - speakingRate 1.0 (no override; voice_configs default respected)
+ *   - Modified narrator_b_family.js template emitting {{PAUSE_500}} /
+ *     {{PAUSE_250}} marker tokens (E — same punctuation discipline +
+ *     marker rules + auto-wrapped numbers)
+ *   - scripts/lib/tts/ssml.ts post-processor converts markers + digits
+ *     to <break/> + <say-as interpret-as="cardinal"> SSML; wraps in
+ *     <speak> doc; XML-escapes the body
+ *   - SSML auto-detected by scripts/lib/tts/providers/google.ts via
+ *     leading <speak> token
  *
- * Side-channel ONLY:
- *   - Storage uploads to regions-prosody-test/{region_id}/narrator_b.opus
- *     (parallel folder — production regions/{region_id}/narrator_b.opus
- *     cuts stay intact per curator's "do not rewrite" hard rule)
- *   - NO narration_audio row writes (no DB pollution; production
- *     skip-if-ready unaffected)
- *   - NO voice_configs mutation (speakingRate passed as override only)
+ * Side-channel ONLY (curator hard rule: do not rewrite existing 108
+ * production narrations):
+ *   - Storage path: regions-prosody-test/{region_id}/narrator_b_ssml_rate1.0.opus
+ *   - NO narration_audio row writes
+ *   - NO voice_configs mutation
+ *
+ * Robustness:
+ *   - On SSML synthesis failure, falls back to stripMarkersAndTags()
+ *     plain-text and retries
+ *   - Failure marker logged to llm_calls with model_or_voice suffix
+ *     "__SSML_PARSE_FAILED" + cost_usd=0
  *
  * Cost-logging discipline (per CLAUDE.md "Three audit / display quirks" §3):
- *   - Claude call logged to llm_calls IMMEDIATELY on return, BEFORE TTS
+ *   - Claude logged to llm_calls IMMEDIATELY on return, BEFORE TTS
  *   - TTS auto-logged by the abstraction (scripts/lib/tts/cost-tracker.ts)
- *   - No double-count: this script does NOT manually log TTS
- *
- * Output: per-region levers diff to stdout (em-dash count, comma count,
- * numeric tokens detected) plus a public Storage URL for each render.
- * Curator A/B-compares against existing production cuts at
- * regions/{region_id}/narrator_b.opus.
  *
  * Run (from project root):
  *   npx tsx scripts/test-prosody-render.ts
@@ -36,6 +41,7 @@ import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
 import { registerProvider, generateNarration } from './lib/tts/index.js';
 import { GoogleTTSProvider } from './lib/tts/providers/google.js';
+import { ssmlize, stripMarkersAndTags, tallyMarkers } from './lib/tts/ssml.js';
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
@@ -70,13 +76,13 @@ const NARRATOR_SLUG = 'narrator_b' as const;
 const AUDIENCE_MODE = 'family' as const;
 const TRIP_MODE = 'driving' as const;
 const DEPTH = 'standard' as const;
-const TIER_1_SPEAKING_RATE = 0.95;
 const HAIKU_MODEL = 'claude-haiku-4-5-20251001';
 const HAIKU_MAX_TOKENS = 900;
 const HAIKU_IN_PER_TOK = 1.00 / 1_000_000;
 const HAIKU_OUT_PER_TOK = 5.00 / 1_000_000;
 const TEST_BUCKET_PREFIX = 'regions-prosody-test';
 const STORAGE_BUCKET = 'narration-audio';
+const TEST_FILE_SUFFIX = 'narrator_b_ssml_rate1.0';
 const INTER_CALL_PAUSE_MS = 500;
 
 // ── Types ──────────────────────────────────────────────────────────────────
@@ -118,11 +124,6 @@ async function sleep(ms: number): Promise<void> {
   return new Promise(r => setTimeout(r, ms));
 }
 
-/**
- * Pulls numeric tokens + named-epoch references from narration text.
- * Used for evidence-based A/B (curator can see what precise sci-facts
- * the new render added vs the production cut).
- */
 function analyzeLevers(text: string): LeverStats {
   const emDashes = (text.match(/—/g) ?? []).length;
   const commas = (text.match(/,/g) ?? []).length;
@@ -130,7 +131,6 @@ function analyzeLevers(text: string): LeverStats {
   const wordCount = text.trim().split(/\s+/).length;
   const charCount = text.length;
 
-  // Numeric-with-unit patterns common to region narrations
   const numericPatterns = [
     /\d[\d,]*\.?\d*\s*million\s*years?/gi,
     /\d[\d,]*\.?\d*\s*(?:Myr|Ma)\b/gi,
@@ -149,15 +149,10 @@ function analyzeLevers(text: string): LeverStats {
     }
   }
 
-  // Named geological epochs / periods (kid-memorable markers per template)
   const epochPattern = /\b(?:Cretaceous|Jurassic|Triassic|Permian|Cambrian|Ordovician|Silurian|Devonian|Carboniferous|Pleistocene|Holocene|Pliocene|Miocene|Oligocene|Eocene|Paleocene|Mesozoic|Cenozoic|Paleozoic|Precambrian|Archean|Proterozoic|Quaternary|Tertiary|Neogene|Paleogene|Anthropocene)\b/gi;
   const namedEpochs = Array.from(new Set(Array.from(text.matchAll(epochPattern)).map(m => m[0])));
 
-  return {
-    emDashes, commas, periods, wordCount, charCount,
-    numericTokens: Array.from(numericTokens),
-    namedEpochs,
-  };
+  return { emDashes, commas, periods, wordCount, charCount, numericTokens: Array.from(numericTokens), namedEpochs };
 }
 
 function formatStats(s: LeverStats): string {
@@ -181,15 +176,19 @@ function formatStats(s: LeverStats): string {
   return lines.join('\n');
 }
 
+function ssmlPreview(ssml: string, maxChars = 280): string {
+  if (ssml.length <= maxChars) return ssml;
+  return ssml.slice(0, maxChars) + ' …(truncated)';
+}
+
 // ── Main ───────────────────────────────────────────────────────────────────
 async function main(): Promise<void> {
-  console.log('=== Prosody Tier 1 test render — narrator_b × Family ===');
+  console.log('=== Prosody Tier 2 SSML test render — narrator_b × Family ===');
   console.log(`  Regions: ${TEST_REGION_NAMES.join(', ')}`);
-  console.log(`  Levers: speakingRate ${TIER_1_SPEAKING_RATE} (vs 1.00 production), template D+E+sci-data`);
-  console.log(`  Storage path: ${TEST_BUCKET_PREFIX}/{region_id}/narrator_b.opus (side-channel — production cuts intact)`);
+  console.log(`  Pipeline: Haiku (markers + digits) → ssmlize() → <speak> SSML → Google TTS @ 1.0`);
+  console.log(`  Storage path: ${TEST_BUCKET_PREFIX}/{region_id}/${TEST_FILE_SUFFIX}.opus (side-channel)`);
   console.log('');
 
-  // Env preflight
   if (!process.env['ANTHROPIC_API_KEY']) fail('ANTHROPIC_API_KEY not set');
   if (!process.env['GOOGLE_APPLICATION_CREDENTIALS']) fail('GOOGLE_APPLICATION_CREDENTIALS not set');
   if (!process.env['SUPABASE_URL']) fail('SUPABASE_URL not set');
@@ -201,7 +200,7 @@ async function main(): Promise<void> {
     { auth: { persistSession: false } },
   );
 
-  // 1. Load region templates (feature-branch narrator_b_family with D+E+sci-data)
+  // 1. Load region templates (feature-branch narrator_b_family with Tier 2 markers)
   const { pickRegionPrompt } = require(REGION_TEMPLATES_PATH) as {
     pickRegionPrompt: (n: string, a: string) => RegionTemplate;
   };
@@ -221,7 +220,7 @@ async function main(): Promise<void> {
   }
   const voice = voiceRows[0] as VoiceRow;
   const productionRate = voice.voice_settings?.speakingRate ?? 1.0;
-  console.log(`  Voice: ${voice.voice_id} (production rate ${productionRate}, test rate ${TIER_1_SPEAKING_RATE})`);
+  console.log(`  Voice: ${voice.voice_id} (voice_configs rate ${productionRate}; runtime override REMOVED — provider default 1.0)`);
   console.log('');
 
   // 3. Look up regions by name
@@ -241,22 +240,26 @@ async function main(): Promise<void> {
   registerProvider(new GoogleTTSProvider());
   const ANTHROPIC_API_KEY = process.env['ANTHROPIC_API_KEY']!;
 
-  const results: Array<{
+  interface Result {
     region: RegionRow;
     productionText: string | null;
     productionStats: LeverStats | null;
-    newText: string;
-    newStats: LeverStats;
+    newText: string;             // raw LLM output (with {{PAUSE}} markers)
+    newStats: LeverStats;        // computed on raw LLM output
+    ssml: string;                // post-processed SSML <speak> doc
+    markerStats: ReturnType<typeof tallyMarkers>;
     storageUrl: string;
     haikuCost: number;
     ttsCost: number;
-  }> = [];
+    fallbackUsed: boolean;
+  }
+  const results: Result[] = [];
 
   for (let i = 0; i < regions.length; i++) {
     const region = regions[i] as RegionRow;
     console.log(`[${i + 1}/${regions.length}] ${region.name} (${region.id})`);
 
-    // 5a. Fetch existing production narration_text for baseline diff
+    // 5a. Fetch production narration_text for baseline diff
     const { data: prodRows } = await supabase
       .from('narration_audio')
       .select('narration_text')
@@ -268,13 +271,8 @@ async function main(): Promise<void> {
       .limit(1);
     const productionText = (prodRows && prodRows.length > 0 ? prodRows[0]!.narration_text : null) as string | null;
     const productionStats = productionText ? analyzeLevers(productionText) : null;
-    if (productionText) {
-      console.log(`  production narration_text found (${productionText.length} chars) — diff baseline available`);
-    } else {
-      console.log(`  no production narration_text found for this region — first-render, no diff baseline`);
-    }
 
-    // 5b. Generate new narration via Haiku — log cost IMMEDIATELY on return
+    // 5b. Generate via Haiku — log cost IMMEDIATELY on return
     const userPrompt = template.buildUserPrompt(region);
     const hr = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
@@ -302,7 +300,6 @@ async function main(): Promise<void> {
     const outTok = hj.usage?.output_tokens ?? 0;
     const haikuCost = +(inTok * HAIKU_IN_PER_TOK + outTok * HAIKU_OUT_PER_TOK).toFixed(6);
 
-    // LOG CLAUDE IMMEDIATELY — before TTS / Storage / parsing
     await supabase.from('llm_calls').insert({
       call_type: 'claude',
       provider: 'anthropic',
@@ -322,37 +319,70 @@ async function main(): Promise<void> {
 
     const newStats = analyzeLevers(newText);
 
-    // 5c. TTS via the abstraction (auto-logs cost — do NOT manually log TTS)
-    const ttsOutput = await generateNarration({
-      text: newText,
-      voiceConfigOverride: {
+    // 5c. Post-process to SSML
+    const ssml = ssmlize(newText);
+    const markerStats = tallyMarkers(newText, ssml);
+
+    // 5d. TTS via abstraction. Auto-detects SSML via leading <speak>.
+    //     speakingRate omitted → provider default 1.0.
+    let ttsOutput;
+    let fallbackUsed = false;
+    try {
+      ttsOutput = await generateNarration({
+        text: ssml,
+        voiceConfigOverride: {
+          provider: 'google',
+          voiceId: voice.voice_id,
+        },
+      });
+    } catch (err) {
+      console.log(`  SSML synthesis threw: ${err instanceof Error ? err.message : String(err)}`);
+      ttsOutput = null;
+    }
+
+    if (!ttsOutput) {
+      console.log(`  SSML synthesis returned null — falling back to plain text`);
+      fallbackUsed = true;
+      await supabase.from('llm_calls').insert({
+        call_type: 'tts',
         provider: 'google',
-        voiceId: voice.voice_id,
-        speakingRate: TIER_1_SPEAKING_RATE,
-      },
-    });
-    if (!ttsOutput) fail(`TTS returned null after retries for ${region.name}`);
+        model_or_voice: `${voice.voice_id}__SSML_PARSE_FAILED`,
+        input_chars: ssml.length,
+        cost_usd: 0,
+        related_id: null,
+      });
+      const plain = stripMarkersAndTags(newText);
+      ttsOutput = await generateNarration({
+        text: plain,
+        voiceConfigOverride: {
+          provider: 'google',
+          voiceId: voice.voice_id,
+        },
+      });
+      if (!ttsOutput) fail(`Plain-text TTS retry also failed for ${region.name}`);
+    }
+
     const audioBuffer = Buffer.isBuffer(ttsOutput.audioBuffer)
       ? ttsOutput.audioBuffer
       : Buffer.from(ttsOutput.audioBuffer);
     const ttsCost = ttsOutput.costUsd;
 
-    // 5d. Upload to SIDE-CHANNEL Storage path (production cuts untouched)
-    const storagePath = `${TEST_BUCKET_PREFIX}/${region.id}/${NARRATOR_SLUG}.opus`;
+    // 5e. Upload to side-channel Storage path
+    const storagePath = `${TEST_BUCKET_PREFIX}/${region.id}/${TEST_FILE_SUFFIX}.opus`;
     const { error: upErr } = await supabase.storage
       .from(STORAGE_BUCKET)
       .upload(storagePath, audioBuffer, { contentType: 'audio/ogg; codecs=opus', upsert: true });
     if (upErr) fail(`Storage upload (${region.name}): ${upErr.message}`);
     const { data: { publicUrl } } = supabase.storage.from(STORAGE_BUCKET).getPublicUrl(storagePath);
 
-    console.log(`  rendered: ${newStats.wordCount} words, ${(audioBuffer.length / 1024).toFixed(0)}KB`);
+    console.log(`  rendered: ${newStats.wordCount} words, markers ${markerStats.pause500}×500ms + ${markerStats.pause250}×250ms (${markerStats.pauseOther} other), SSML ${markerStats.ssmlBreaks} <break/>, ${markerStats.ssmlSayAs} <say-as>, ${(audioBuffer.length / 1024).toFixed(0)}KB${fallbackUsed ? ' [FALLBACK USED]' : ''}`);
     console.log(`  cost: Claude $${haikuCost.toFixed(4)} + TTS $${ttsCost.toFixed(4)} = $${(haikuCost + ttsCost).toFixed(4)}`);
     console.log(`  URL: ${publicUrl}`);
 
     results.push({
       region, productionText, productionStats,
-      newText, newStats, storageUrl: publicUrl,
-      haikuCost, ttsCost,
+      newText, newStats, ssml, markerStats,
+      storageUrl: publicUrl, haikuCost, ttsCost, fallbackUsed,
     });
 
     if (i < regions.length - 1) await sleep(INTER_CALL_PAUSE_MS);
@@ -369,14 +399,17 @@ async function main(): Promise<void> {
     console.log(`── ${r.region.name} ${'─'.repeat(Math.max(0, 60 - r.region.name.length))}`);
     console.log('');
     console.log(`URL: ${r.storageUrl}`);
+    if (r.fallbackUsed) console.log(`!! FALLBACK USED — SSML failed, plain text retry succeeded`);
     console.log('');
     if (r.productionStats) {
-      console.log(`PRODUCTION (existing cut at regions/${r.region.id}/narrator_b.opus):`);
+      console.log(`PRODUCTION (existing cut at regions/${r.region.id}/narrator_b.opus, speakingRate 1.0, no SSML):`);
       console.log(formatStats(r.productionStats));
       console.log('');
     }
-    console.log(`NEW (Tier 1: speakingRate ${TIER_1_SPEAKING_RATE}, template D+E+sci-data):`);
+    console.log(`NEW Tier 2 (speakingRate 1.0, SSML pipeline + markers):`);
     console.log(formatStats(r.newStats));
+    console.log(`  pause markers emitted: ${r.markerStats.pause500}×{{PAUSE_500}} + ${r.markerStats.pause250}×{{PAUSE_250}}${r.markerStats.pauseOther ? ` + ${r.markerStats.pauseOther} other` : ''}`);
+    console.log(`  SSML tags inserted: ${r.markerStats.ssmlBreaks} <break/>, ${r.markerStats.ssmlSayAs} <say-as>`);
     console.log('');
     if (r.productionStats) {
       const dEm = r.newStats.emDashes - r.productionStats.emDashes;
@@ -386,14 +419,17 @@ async function main(): Promise<void> {
       const newNumeric = r.newStats.numericTokens.filter(t => !r.productionStats!.numericTokens.includes(t));
       const droppedNumeric = r.productionStats.numericTokens.filter(t => !r.newStats.numericTokens.includes(t));
       const newEpochs = r.newStats.namedEpochs.filter(e => !r.productionStats!.namedEpochs.includes(e));
-      console.log(`DELTA:`);
+      console.log(`DELTA vs production:`);
       console.log(`  em-dashes ${dEm >= 0 ? '+' : ''}${dEm}, commas ${dCom >= 0 ? '+' : ''}${dCom}, periods ${dPer >= 0 ? '+' : ''}${dPer}, words ${dWord >= 0 ? '+' : ''}${dWord}`);
       if (newNumeric.length > 0) console.log(`  NEW numeric tokens: ${newNumeric.join(' | ')}`);
       if (droppedNumeric.length > 0) console.log(`  dropped numeric tokens: ${droppedNumeric.join(' | ')}`);
       if (newEpochs.length > 0) console.log(`  NEW named epochs: ${newEpochs.join(', ')}`);
       console.log('');
     }
-    console.log(`NEW NARRATION TEXT:`);
+    console.log(`SSML PREVIEW (first 280 chars):`);
+    console.log(ssmlPreview(r.ssml));
+    console.log('');
+    console.log(`NEW NARRATION TEXT (with markers shown verbatim):`);
     console.log(r.newText);
     console.log('');
     if (r.productionText) {
@@ -406,8 +442,10 @@ async function main(): Promise<void> {
   // 7. Summary
   const totalHaiku = results.reduce((s, r) => s + r.haikuCost, 0);
   const totalTts = results.reduce((s, r) => s + r.ttsCost, 0);
+  const fallbackCount = results.filter(r => r.fallbackUsed).length;
   console.log('═══════════════════════════════════════════════════════════════════');
   console.log(`  TOTAL SPEND: $${(totalHaiku + totalTts).toFixed(4)} (Claude $${totalHaiku.toFixed(4)} + TTS $${totalTts.toFixed(4)})`);
+  if (fallbackCount > 0) console.log(`  FALLBACK USED: ${fallbackCount}/${results.length} renders`);
   console.log('═══════════════════════════════════════════════════════════════════');
 }
 

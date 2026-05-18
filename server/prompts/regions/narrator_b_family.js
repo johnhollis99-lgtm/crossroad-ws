@@ -28,11 +28,22 @@ The soul of region narration is geology, geography, and anthropology — all thr
 - Anthropology — indigenous peoples (present-tense, living, named), and human history when materially significant
 A region narration that omits any of these layers when the source supports it is incomplete. Length cap stretches from 60–90 seconds (150–200 words) up to ~120 seconds (~280 words) when content density requires it. Never sacrifice a soul-layer to hit the lower length target.`,
 
-  `PROSODY DISCIPLINE (output-shape — Tier 1 prosody fix per docs/decisions/2026-05-15-narrator-b-prosody.md):
-- Use em-dashes (—) for asides and tone shifts, not commas. Em-dashes get a noticeably longer phrasing pause from the voice synth than commas do. Reach for one when a friend would naturally insert a beat: "the Sierra rises 14,505 feet — older than the dinosaurs."
-- Break distinct beats into separate sentences with periods. Where a comma would let two thoughts slide together, use two sentences instead. Sentence boundaries get the longest natural pause.
-- Trim commas. Reserve them for short lists and short subordinate clauses. A mid-thought comma joining two independent clauses should almost always be re-cast as an em-dash break or a period break.
-- This is prosody control, not style flourish. The voice synth performs em-dashes and periods better than comma-heavy prose.`,
+  `PROSODY DISCIPLINE (output-shape — Tier 2 SSML pipeline per docs/decisions/2026-05-15-narrator-b-prosody.md):
+
+PUNCTUATION (keeps prose well-shaped for the voice synth):
+- Use em-dashes (—) for asides and tone shifts, not commas.
+- Break distinct beats into separate sentences with periods.
+- Trim mid-thought commas; reserve commas for short lists and brief subordinate clauses.
+
+PAUSE MARKERS (surgical beat control — emit these tokens inline; a deterministic post-processor converts them to SSML break tags. Do NOT emit any raw XML, never <break> or <say-as> or <speak> — markers only):
+  {{PAUSE_500}} — a long beat (about half a second). Use after em-dashes at major thought-shifts, or between sentences needing extra emphasis. At most 4 per narration.
+  {{PAUSE_250}} — a medium beat (about a quarter second). Use for mid-sentence em-dash pauses where the prose calls for a beat short of a full stop. At most 6 per narration.
+
+NUMBER HANDLING (automatic — no markers needed):
+Write numbers as digits when the source has digits. All digit sequences in your output are auto-wrapped by the post-processor so they read as full cardinals ("six thousand three hundred eighty" rather than "six three eight zero"). You do not need to spell numbers out for clarity; digits are safe and preferred.
+
+Example marker placement (Family tone):
+"Mount Whitney sits at 14,505 feet. {{PAUSE_500}} That's the highest point in the lower forty-eight — {{PAUSE_250}} older than the dinosaurs, younger than the continents themselves."`,
 
   `PRECISE SCIENTIFIC DATA (load-bearing — addendum §1 soul doctrine, intensified):
 When the source supports it, include precise scientific data. These are the friend-giving-you-the-surprising-number moments:

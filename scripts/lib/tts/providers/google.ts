@@ -43,12 +43,20 @@ export class GoogleTTSProvider implements TTSProvider {
       pitch,
     };
 
+    // SSML auto-detection: input starting with `<speak>` is routed through
+    // the ssml field; everything else stays text. Per Google Chirp 3 HD docs
+    // (synchronous requests support <speak>, <break>, <prosody>, <say-as>,
+    // <phoneme>, <p>, <s>, <sub>).
+    const trimmed = input.text.trimStart();
+    const isSsml = trimmed.startsWith('<speak>') || trimmed.startsWith('<speak ');
+    const inputField = isSsml ? { ssml: input.text } : { text: input.text };
+
     let audioContent: Uint8Array | string;
     let usedVoiceId = requestedVoice;
 
     try {
       const [response] = await this.client.synthesizeSpeech({
-        input: { text: input.text },
+        input: inputField,
         voice: { languageCode: 'en-US', name: requestedVoice },
         audioConfig,
       });
@@ -60,7 +68,7 @@ export class GoogleTTSProvider implements TTSProvider {
       if (tierFromVoiceId(requestedVoice) === 'hd') {
         // HD voice unavailable — fall back to Neural2
         const [fallbackResponse] = await this.client.synthesizeSpeech({
-          input: { text: input.text },
+          input: inputField,
           voice: { languageCode: 'en-US', name: NEURAL2_FALLBACK },
           audioConfig,
         });
