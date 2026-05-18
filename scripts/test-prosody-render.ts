@@ -41,7 +41,7 @@ import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
 import { registerProvider, generateNarration } from './lib/tts/index.js';
 import { GoogleTTSProvider } from './lib/tts/providers/google.js';
-import { ssmlize, stripMarkersAndTags, tallyMarkers } from './lib/tts/ssml.js';
+import { ssmlize, stripMarkersAndTags, tallyMarkers, type SkipReport } from './lib/tts/ssml.js';
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
@@ -70,8 +70,19 @@ function loadEnv(): void {
 
 loadEnv();
 
+// ── CLI args ───────────────────────────────────────────────────────────────
+function parseArgs(): { regionNames: string[]; suffix: string | null } {
+  const argv = process.argv.slice(2);
+  const regionFlag = argv.find(a => a.startsWith('--regions='));
+  const names = regionFlag
+    ? regionFlag.slice('--regions='.length).split(',').map(s => s.trim()).filter(Boolean)
+    : ['Sierra Nevada', 'Mono Basin'];
+  const suffixFlag = argv.find(a => a.startsWith('--suffix='));
+  const suffix = suffixFlag ? suffixFlag.slice('--suffix='.length).trim() : null;
+  return { regionNames: names, suffix };
+}
+
 // ── Test config ────────────────────────────────────────────────────────────
-const TEST_REGION_NAMES = ['Sierra Nevada', 'Mono Basin'] as const;
 const NARRATOR_SLUG = 'narrator_b' as const;
 const AUDIENCE_MODE = 'family' as const;
 const TRIP_MODE = 'driving' as const;
@@ -183,10 +194,12 @@ function ssmlPreview(ssml: string, maxChars = 280): string {
 
 // ── Main ───────────────────────────────────────────────────────────────────
 async function main(): Promise<void> {
+  const { regionNames, suffix } = parseArgs();
+  const fileSuffix = suffix ? `${TEST_FILE_SUFFIX}_${suffix}` : TEST_FILE_SUFFIX;
   console.log('=== Prosody Tier 2 SSML test render — narrator_b × Family ===');
-  console.log(`  Regions: ${TEST_REGION_NAMES.join(', ')}`);
+  console.log(`  Regions: ${regionNames.join(', ')}`);
   console.log(`  Pipeline: Haiku (markers + digits) → ssmlize() → <speak> SSML → Google TTS @ 1.0`);
-  console.log(`  Storage path: ${TEST_BUCKET_PREFIX}/{region_id}/${TEST_FILE_SUFFIX}.opus (side-channel)`);
+  console.log(`  Storage path: ${TEST_BUCKET_PREFIX}/{region_id}/${fileSuffix}.opus (side-channel)`);
   console.log('');
 
   if (!process.env['ANTHROPIC_API_KEY']) fail('ANTHROPIC_API_KEY not set');
@@ -227,13 +240,13 @@ async function main(): Promise<void> {
   const { data: regions, error: regErr } = await supabase
     .from('regions')
     .select('id, name, display_name, description, region_type')
-    .in('name', TEST_REGION_NAMES as unknown as string[]);
+    .in('name', regionNames);
   if (regErr) fail(`regions query: ${regErr.message}`);
   if (!regions || regions.length === 0) fail('no test regions matched by name');
-  if (regions.length < TEST_REGION_NAMES.length) {
-    const got = new Set(regions.map((r: RegionRow) => r.name));
-    const missing = TEST_REGION_NAMES.filter(n => !got.has(n));
-    fail(`missing regions: ${missing.join(', ')}`);
+  const gotNames = new Set(regions.map((r: RegionRow) => r.name));
+  const missingNames = regionNames.filter(n => !gotNames.has(n));
+  if (missingNames.length > 0) {
+    fail(`missing regions (no row with name=): ${missingNames.join(', ')}`);
   }
 
   // 4. Register TTS provider
@@ -247,6 +260,7 @@ async function main(): Promise<void> {
     newText: string;             // raw LLM output (with {{PAUSE}} markers)
     newStats: LeverStats;        // computed on raw LLM output
     ssml: string;                // post-processed SSML <speak> doc
+    skips: SkipReport[];         // cardinal-wrap skips (highway/year safety net)
     markerStats: ReturnType<typeof tallyMarkers>;
     storageUrl: string;
     haikuCost: number;
@@ -320,8 +334,22 @@ async function main(): Promise<void> {
     const newStats = analyzeLevers(newText);
 
     // 5c. Post-process to SSML
-    const ssml = ssmlize(newText);
+    const { ssml, skips } = ssmlize(newText);
     const markerStats = tallyMarkers(newText, ssml);
+
+    // Log skip events to llm_calls for adherence auditing (curator wants
+    // visibility into how often the LLM emits digits despite phonetic-
+    // spelling instructions for highways and years).
+    for (const skip of skips) {
+      await supabase.from('llm_calls').insert({
+        call_type: 'tts',
+        provider: 'google',
+        model_or_voice: `ssmlize_skip_${skip.type}`,
+        input_chars: skip.value.length,
+        cost_usd: 0,
+        related_id: null,
+      });
+    }
 
     // 5d. TTS via abstraction. Auto-detects SSML via leading <speak>.
     //     speakingRate omitted → provider default 1.0.
@@ -368,20 +396,22 @@ async function main(): Promise<void> {
     const ttsCost = ttsOutput.costUsd;
 
     // 5e. Upload to side-channel Storage path
-    const storagePath = `${TEST_BUCKET_PREFIX}/${region.id}/${TEST_FILE_SUFFIX}.opus`;
+    const storagePath = `${TEST_BUCKET_PREFIX}/${region.id}/${fileSuffix}.opus`;
     const { error: upErr } = await supabase.storage
       .from(STORAGE_BUCKET)
       .upload(storagePath, audioBuffer, { contentType: 'audio/ogg; codecs=opus', upsert: true });
     if (upErr) fail(`Storage upload (${region.name}): ${upErr.message}`);
     const { data: { publicUrl } } = supabase.storage.from(STORAGE_BUCKET).getPublicUrl(storagePath);
 
-    console.log(`  rendered: ${newStats.wordCount} words, markers ${markerStats.pause500}×500ms + ${markerStats.pause250}×250ms (${markerStats.pauseOther} other), SSML ${markerStats.ssmlBreaks} <break/>, ${markerStats.ssmlSayAs} <say-as>, ${(audioBuffer.length / 1024).toFixed(0)}KB${fallbackUsed ? ' [FALLBACK USED]' : ''}`);
+    const skipHighway = skips.filter(s => s.type === 'highway').length;
+    const skipYear = skips.filter(s => s.type === 'year').length;
+    console.log(`  rendered: ${newStats.wordCount} words, markers ${markerStats.pause500}×500ms + ${markerStats.pause250}×250ms (${markerStats.pauseOther} other), SSML ${markerStats.ssmlBreaks} <break/>, ${markerStats.ssmlSayAs} <say-as>, skips ${skipHighway} hwy/${skipYear} yr, ${(audioBuffer.length / 1024).toFixed(0)}KB${fallbackUsed ? ' [FALLBACK USED]' : ''}`);
     console.log(`  cost: Claude $${haikuCost.toFixed(4)} + TTS $${ttsCost.toFixed(4)} = $${(haikuCost + ttsCost).toFixed(4)}`);
     console.log(`  URL: ${publicUrl}`);
 
     results.push({
       region, productionText, productionStats,
-      newText, newStats, ssml, markerStats,
+      newText, newStats, ssml, skips, markerStats,
       storageUrl: publicUrl, haikuCost, ttsCost, fallbackUsed,
     });
 
@@ -410,6 +440,14 @@ async function main(): Promise<void> {
     console.log(formatStats(r.newStats));
     console.log(`  pause markers emitted: ${r.markerStats.pause500}×{{PAUSE_500}} + ${r.markerStats.pause250}×{{PAUSE_250}}${r.markerStats.pauseOther ? ` + ${r.markerStats.pauseOther} other` : ''}`);
     console.log(`  SSML tags inserted: ${r.markerStats.ssmlBreaks} <break/>, ${r.markerStats.ssmlSayAs} <say-as>`);
+    if (r.skips.length > 0) {
+      const hwySkips = r.skips.filter(s => s.type === 'highway').map(s => `"${s.value}" (after "${s.context.trim()}")`);
+      const yearSkips = r.skips.filter(s => s.type === 'year').map(s => `"${s.value}" (after "${s.context.trim()}")`);
+      if (hwySkips.length > 0) console.log(`  cardinal-wrap SKIPS (highway): ${hwySkips.join('; ')}`);
+      if (yearSkips.length > 0) console.log(`  cardinal-wrap SKIPS (year): ${yearSkips.join('; ')}`);
+    } else {
+      console.log(`  cardinal-wrap skips: (none — LLM spelled all highway numbers and years phonetically)`);
+    }
     console.log('');
     if (r.productionStats) {
       const dEm = r.newStats.emDashes - r.productionStats.emDashes;

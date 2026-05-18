@@ -3,8 +3,8 @@
  *
  * Per docs/decisions/2026-05-15-narrator-b-prosody.md (Tier 2 enlarged):
  * the LLM emits prose plus two marker tokens; this module converts the
- * marker form to Google Cloud TTS SSML. The LLM never emits raw XML —
- * markers only — which sidesteps the entire malformed-XML risk class.
+ * marker form to Google Cloud TTS SSML. The LLM never emits raw XML --
+ * markers only -- which sidesteps the entire malformed-XML risk class.
  *
  * Markers (LLM emits these inline):
  *   {{PAUSE_500}}  ->  <break time="500ms"/>
@@ -14,6 +14,22 @@
  * Auto-wrapped (no LLM marker required):
  *   Any digit sequence  ->  <say-as interpret-as="cardinal">N</say-as>
  *   Pattern: \d+(?:,\d{3})*(?:\.\d+)?  -- handles "14,495", "100", "0.5"
+ *
+ * Skip rules (Number Format Disambiguation -- decision doc §Number Format):
+ *   - Digits immediately preceded by a highway-prefix word (Highway, Hwy,
+ *     Interstate, Route, Rte, I-, US-, CA-, SR-, State Route) stay
+ *     unwrapped so Google's road-number heuristic reads them naturally.
+ *     The LLM is told to spell highway numbers phonetically; this is the
+ *     downstream safety net for slips.
+ *   - Bare 4-digit calendar years 1500-2199 stay unwrapped (when NOT
+ *     followed by a measurement unit) so Google's native year-reading
+ *     heuristic kicks in. Year-by-year span covers California history
+ *     from Cabrillo (1542) onward. "1849 miles" wraps (distance);
+ *     "1849 Gold Rush" skips (date).
+ *
+ * Skip events are returned in the result so the caller can log them to
+ * llm_calls for LLM-adherence auditing (how often the LLM emits digits
+ * despite phonetic-spelling instructions).
  *
  * XML escaping: every &, <, >, ", ' in the narration body is escaped
  * before tag insertion so the LLM cannot accidentally inject SSML.
@@ -28,7 +44,21 @@ const PAUSE_PATTERN = /\{\{PAUSE_(\d+)\}\}/g;
 const NUMBER_PATTERN = /\d+(?:,\d{3})*(?:\.\d+)?/g;
 const PUA_BASE = 0xE000;
 const PUA_MAX_OFFSET = 0xF8FF - PUA_BASE;
-const PUA_RANGE = /[-]/g;
+// Built via RegExp constructor so the source file doesn't need to contain
+// literal U+E000/U+F8FF characters (which prior tooling stripped silently,
+// reducing the regex to /[-]/g — a bug that nullified placeholder
+// restoration in pass 3). The constructor form is byte-stable.
+const PUA_RANGE = new RegExp('[\\uE000-\\uF8FF]', 'g');
+
+// Highway-context skip: digits immediately preceded (within 0-3 chars of
+// whitespace/hyphen) by a highway-prefix word stay unwrapped.
+const HIGHWAY_CONTEXT = /\b(?:Highway|Hwy|Interstate|Route|Rte|I-|US-|CA-|SR-|State Route)\s*-?\s*$/i;
+
+// Calendar-year skip: bare 4-digit years 1500-2199 stay unwrapped when
+// not followed by a measurement unit. Range covers California history
+// from Cabrillo (1542) onward.
+const YEAR_VALUE = /^(?:1[5-9]\d{2}|20\d{2}|21\d{2})$/;
+const YEAR_UNIT_SUFFIX = /^\s*(?:feet|ft\b|miles?|mi\b|years?|year-old|million|billion|thousand|hundred|sq\s*mi|square|meters?\b|kilometers?|km\b|people|residents|inhabitants|°)/i;
 
 function escapeXml(body: string): string {
   return body
@@ -39,13 +69,26 @@ function escapeXml(body: string): string {
     .replace(/'/g, '&apos;');
 }
 
+export interface SkipReport {
+  type: 'highway' | 'year';
+  value: string;
+  context: string; // up to 30 chars of preceding text (post-escape)
+}
+
+export interface SsmlResult {
+  ssml: string;
+  skips: SkipReport[];
+}
+
 /**
  * Convert marker-syntax narration text to a Google Cloud TTS SSML
- * <speak> document. Pure function.
+ * <speak> document plus the list of cardinal-wrap skips applied. Pure
+ * function (skips are returned, not logged here).
  */
-export function ssmlize(text: string): string {
+export function ssmlize(text: string): SsmlResult {
   let body = escapeXml(text);
   const slots: string[] = [];
+  const skips: SkipReport[] = [];
   const reserve = (ssml: string): string => {
     const idx = slots.length;
     if (idx >= PUA_MAX_OFFSET) {
@@ -59,17 +102,51 @@ export function ssmlize(text: string): string {
   // cannot see the digits in time="500ms".
   body = body.replace(PAUSE_PATTERN, (_, ms) => reserve(`<break time="${ms}ms"/>`));
 
-  // Pass 2: reserve cardinal-number slots. Same PUA-protection rationale.
-  body = body.replace(NUMBER_PATTERN, (n) => reserve(`<say-as interpret-as="cardinal">${n}</say-as>`));
+  // Pass 2: cardinal-wrap with skip rules. Callback receives (match, offset, full).
+  body = body.replace(NUMBER_PATTERN, (match, ...rest) => {
+    // String.replace callback args after the match: [...captureGroups, offset, fullString]
+    // NUMBER_PATTERN has no capture groups, so: [offset, fullString]
+    const offset = rest[rest.length - 2] as number;
+    const full = rest[rest.length - 1] as string;
+
+    // Highway-context skip
+    const precedingChars = full.slice(Math.max(0, offset - 30), offset);
+    if (HIGHWAY_CONTEXT.test(precedingChars)) {
+      skips.push({ type: 'highway', value: match, context: precedingChars.slice(-30) });
+      return match;
+    }
+
+    // Calendar-year skip (when not followed by a measurement unit)
+    if (YEAR_VALUE.test(match)) {
+      const trailing = full.slice(offset + match.length, offset + match.length + 20);
+      if (!YEAR_UNIT_SUFFIX.test(trailing)) {
+        skips.push({ type: 'year', value: match, context: precedingChars.slice(-30) });
+        return match;
+      }
+    }
+
+    // Sanitize cardinal content to digits-only. Google's TTS silently
+    // drops the wrapped content when commas appear inside
+    // <say-as interpret-as="cardinal">N</say-as> — confirmed empirically
+    // 2026-05-18 via scripts/diag-ssml-comma-cardinal.ts (comma-wrapped
+    // "6,380" produced 5336 bytes vs bare "6380" at 11227 bytes; "100,000"
+    // 6247 vs "100000" 9875). The prose body keeps human-readable commas
+    // for the LLM-output narration_text; only the tag's content is stripped.
+    // Non-digit chars stripped include commas, decimal points, hyphens —
+    // see decision doc §Cardinal-content sanitization for decimal-handling
+    // notes if narrations gain decimal measurements.
+    const digitsOnly = match.replace(/[^0-9]/g, '');
+    return reserve(`<say-as interpret-as="cardinal">${digitsOnly}</say-as>`);
+  });
 
   // Pass 3: restore all placeholders to their reserved SSML.
   body = body.replace(PUA_RANGE, (ch) => slots[ch.charCodeAt(0) - PUA_BASE] ?? ch);
 
-  return `<speak>${body}</speak>`;
+  return { ssml: `<speak>${body}</speak>`, skips };
 }
 
 /**
- * Plain-text fallback: strip markers, SSML tags, and unwrap any escaped
+ * Plain-text fallback: strip markers, SSML tags, and unwrap escaped
  * entities so the result reads naturally if used as input.text retry.
  * Called when Google rejects the SSML <speak> doc.
  */
@@ -84,19 +161,19 @@ export function stripMarkersAndTags(text: string): string {
     .replace(/&gt;/g, '>')
     .replace(/&quot;/g, '"')
     .replace(/&apos;/g, "'")
-    .replace(PUA_RANGE, ''); // safety: drop any unrestored placeholders
+    .replace(PUA_RANGE, '');
 }
 
 /**
- * Tally markers/tags in input (raw LLM output or post-processed SSML) for
- * the levers-diff that goes back to the curator.
+ * Tally markers/tags in input (raw LLM output and post-processed SSML)
+ * for the levers-diff that goes back to the curator.
  */
 export interface SsmlMarkerStats {
   pause500: number;
   pause250: number;
-  pauseOther: number; // {{PAUSE_NNN}} where NNN is neither 500 nor 250
-  ssmlBreaks: number; // <break/> in the post-processed SSML
-  ssmlSayAs: number;  // <say-as ...> in the post-processed SSML
+  pauseOther: number;
+  ssmlBreaks: number;
+  ssmlSayAs: number;
 }
 
 export function tallyMarkers(rawLlmOutput: string, ssmlOutput: string): SsmlMarkerStats {

@@ -45,14 +45,51 @@ PUNCTUATION (keeps prose well-shaped for the voice synth):
 - Trim mid-thought commas; reserve commas for short lists and brief subordinate clauses.
 
 PAUSE MARKERS (surgical beat control — emit these tokens inline; a deterministic post-processor converts them to SSML break tags. Do NOT emit any raw XML, never <break> or <say-as> or <speak> — markers only):
-  {{PAUSE_500}} — a long beat (about half a second). Use after em-dashes at major thought-shifts, or between sentences needing extra emphasis. At most 4 per narration.
-  {{PAUSE_250}} — a medium beat (about a quarter second). Use for mid-sentence em-dash pauses where the prose calls for a beat short of a full stop. At most 6 per narration.
+  {{PAUSE_500}} — a long beat (about half a second). Use after numerical facts that need to settle, between distinct beats at sentence boundaries, after em-dashes at major thought-shifts. AT LEAST 2 per narration; at most 4.
+  {{PAUSE_250}} — a medium beat (about a quarter second). Use for mid-sentence em-dash pauses, at transitional beats, between rapid-succession facts. AT LEAST 3 per narration; at most 6.
+Emit these liberally where the prose supports them — especially after numerical facts and at transitional beats. The "at least" floors exist because under-using markers reads as prematurity on numerical calls.
 
-NUMBER HANDLING (automatic — no markers needed):
-Write numbers as digits when the source has digits. All digit sequences in your output are auto-wrapped by the post-processor so they read as full cardinals ("six thousand three hundred eighty" rather than "six three eight zero"). You do not need to spell numbers out for clarity; digits are safe and preferred.
+NUMBER HANDLING (mostly automatic — TWO NARROW EXCEPTIONS that you DO need to spell phonetically; everything else stays as digits):
 
-Example marker placement (Kids tone — cool older cousin pointing things out):
-"The Sierra Nevada rises 14,505 feet at its highest point. {{PAUSE_500}} That's Mount Whitney — {{PAUSE_250}} taller than ten Empire State Buildings stacked on top of each other."`,
+DEFAULT (REQUIRED — applies to ALL measurements): write numbers as digits, with all precision the source supports. The post-processor auto-wraps every digit sequence in <say-as interpret-as="cardinal">, so cardinals read correctly ("six thousand three hundred seventy-eight feet" rather than "six three seven eight feet"). Measurements include elevations, distances, populations, areas, ages, durations, counts, square mileages, percentages. ALL of these stay as digits.
+
+ANTI-EXAMPLES (DO NOT do these — they are precision regressions):
+  Write "6,378 feet" — NOT "seven thousand feet"
+  Write "634 square miles" — NOT "six hundred square miles"
+  Write "13,061 feet" — do NOT omit precise data when the source has it
+  Write "14,505 feet" — matches the approved Sierra Nevada renders
+  Write "100 million years ago" — digits stay even for huge durations
+  Write "10,000 years ago" — digits stay in durations
+  Write "1,500 species" — digits stay in counts
+  Write "39%" — digits stay in percentages
+
+DO NOT generalize the phonetic rule beyond the two narrow exceptions below. Spelling out measurements ("seven thousand feet" instead of "6,378 feet") is a PRECISION REGRESSION and an error. Always digits for measurements. The two exceptions are California highways and calendar years 1500–2100 — and only those two.
+
+EXCEPTION 1 — CALIFORNIA HIGHWAY NUMBERS (and only highway numbers): spell phonetically as a natural speaker would. Examples:
+  I-5 / I-10 / I-15 / I-40 / I-80 → "the five" / "the ten" / "the fifteen" / "the forty" / "the eighty"
+  I-110 / I-210 / I-710 → "the one-ten" / "the two-ten" / "the seven-ten"
+  I-405 / I-605 / I-805 → "the four-oh-five" / "the six-oh-five" / "the eight-oh-five"
+  US-101 → "the one-oh-one"
+  US-395 → "three ninety-five"
+  CA-1 → "Highway 1" or "PCH"
+  CA-49 → "Highway forty-nine"
+  CA-99 → "Highway ninety-nine"
+  Unlisted 2-digit highways → "Highway [name]" (e.g., 46 → "Highway forty-six")
+  Unlisted 3-digit middle-zero → "the [first]-oh-[third]" (e.g., 305 → "the three-oh-five")
+  Unlisted 3-digit middle-nonzero → "the [first]-[two_three]" (e.g., 215 → "the two-fifteen")
+
+EXCEPTION 2 — CALENDAR YEARS 1500–2100 (and only calendar years in that range): spell phonetically. Range covers California history from Cabrillo (1542) onward:
+  1542 → "fifteen forty-two"
+  1769 → "seventeen sixty-nine"
+  1849 → "eighteen forty-nine"
+  1906 → "nineteen oh-six"
+  2024 → "twenty twenty-four"
+Note: measurement durations like "10,000 years ago" or "100 million years" stay as digits (they are quantities, not dates).
+
+The post-processor has safety nets for both exceptions, but spelling phonetically in the narration is the primary path for those two cases — phonetic forms sound natural; the safety nets just catch slips.
+
+Example marker placement (Kids tone — cool older cousin; note the marker floor of 2×500 + 3×250 and digits-for-all-measurements):
+"The Sierra Nevada rises 14,505 feet at its highest point. {{PAUSE_500}} That's Mount Whitney — {{PAUSE_250}} taller than ten Empire State Buildings stacked on top of each other. {{PAUSE_500}} The granite up there is about 100 million years old — {{PAUSE_250}} older than any dinosaur fossil. {{PAUSE_250}} Way older."`,
 
   `PRECISE SCIENTIFIC DATA (load-bearing — addendum §1 soul doctrine, intensified for kids):
 When the source supports it, include precise scientific data — these are the moments a kid carries with them after the trip:
