@@ -1439,6 +1439,26 @@ npx tsx sweep-orphaned-narration.ts --dry-run  # preview only
 
 **Intended cadence:** hourly cron. Schedule via `crontab` or a task scheduler once the server is deployed.
 
+## Open architectural concerns — required before launch
+
+Items that aren't bugs but are load-bearing decisions that must land before the v1 public launch. Resolve, document the resolution, and remove from this section.
+
+### Curator-gated POI TTS before Phase H bulk runs (raised 2026-05-15)
+
+The addendum's significance-floor model (global 70, architecture 80–85 per [docs/roadstory-narration-curation-addendum.md §2.2](docs/roadstory-narration-curation-addendum.md)) is the **automated** floor. Curator wants a **human-review step in front of bulk TTS generation** for the upcoming POI narration phase — not auto-bulk-TTS for every POI that clears the significance floor.
+
+Specific concern: even with the architecture floor at 80–85, the long tail of NRHP-listed Methodist churches, generic Mission Revival churches, and anonymous mid-century office buildings is large enough that bulk TTS would burn Claude + Google TTS spend on narrations no listener would value. Curator wants to **see the list and greenlight per-POI (or per-category-slice)** before TTS fires.
+
+Implementation options to evaluate before Phase H starts (not yet picked):
+
+- **CLI list-export-review-greenlight loop** — script emits a CSV/JSON of POIs that would generate, curator marks approve/reject in a spreadsheet, script reads it back and generates only approved rows. Cheapest path. Iteration cycle per slice ~hours.
+- **Curator-facing admin UI** — extend [admin/](admin/) with a per-POI approve/reject queue, similar to `poi_review_queue` but for TTS gating. Higher implementation cost; better iteration cycle once built.
+- **Hybrid** — UI for slices likely to be high-volume (architecture, religious_complex), CLI for one-off curation.
+
+Decision required: pick an approach during Phase H planning. The current addendum text presumes auto-bulk-TTS-above-floor; that presumption is overridden by this note. Sub-floor POIs (significance < category floor) are still imported into the catalog and remain queryable, just don't generate audio unprompted — that part of the addendum stands.
+
+This concern is independent of [docs/decisions/2026-05-15-narrator-b-prosody.md](docs/decisions/2026-05-15-narrator-b-prosody.md) (which addresses *region* narration prosody) — they share the "don't auto-spend without curator eyes" principle but operate on different content surfaces.
+
 ## Session workflow
 
 When context fills (PreCompact hook fires), update this CLAUDE.md with current project state, then `/clear` to restart fresh. Proactively save when significant new screens, migrations, or server routes are completed. This file is the single source of truth — MEMORY.md just points here.
