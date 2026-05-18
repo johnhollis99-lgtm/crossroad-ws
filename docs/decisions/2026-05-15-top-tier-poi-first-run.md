@@ -137,6 +137,46 @@ The first-run set is the curator's choice. The recommendation in this doc is exa
 6. **Curator listens** to all narrations in the set. Approves or flags individual items.
 7. **On approval:** post-launch readiness checkpoint; audience expansion (kids / unfiltered / local) and region matrix re-evaluate.
 
+## Soul-doctrine misalignment finding (2026-05-18 follow-up)
+
+Curator review of the inventory deliverables flagged a structural problem: the ≥80 top-tier is **heavily history-biased**. 18 of 36 candidates are history-category POIs (Missions, NRHP buildings) vs. only 3 in geology + geography combined and 0 in anthropology. The ranking algorithm is promoting one soul-layer disproportionately. **Captured as a known issue going into the first POI run, not a blocker.** First run proceeds with the ≥80 cutoff + 6 noise exclusions; the broader-cutoff and other-audience runs hold until the misalignment is resolved.
+
+Diagnostic report: [docs/poi-soul-doctrine-diagnostic-2026-05-18.md](../poi-soul-doctrine-diagnostic-2026-05-18.md). Script: [scripts/admin/poi-soul-doctrine-diagnostic.mjs](../../scripts/admin/poi-soul-doctrine-diagnostic.mjs). Headline findings:
+
+### Where the bias lives
+
+| Layer | n | mean score | mean source_base | median source_base | max source_base |
+|---|---:|---:|---:|---:|---:|
+| History | 3,543 | **29.04** | 22.43 | **30** | 55 |
+| Architecture | 2,690 | **36.11** | 29.92 | **30** | 55 |
+| Geography (nature) | 11,982 | 17.24 | 14.40 | 10 | 52 |
+| Geology | 58 | 15.26 | 11.81 | **8** | 60 |
+| Anthropology | **0** | — | — | — | — |
+
+The `source_base` median for history/architecture is **3-4× higher** than for geology/geography. NRHP + state_landmark + editorial sources seed historical POIs at 30-50 pts before any signal aggregation; OSM/Wikidata sources for natural features top out around 20 absent Wikipedia backing. This single component drives most of the surface ranking.
+
+### Structural gaps
+
+1. **Anthropology corpus is empty.** `native_history` slug has 0 live POIs. The slug is reserved for narrative-extracted / editorial content per CLAUDE.md "Aspirational poi_categories slugs"; bulk importers will never populate it. Phase F+ narrative-extraction work is the only path. **This is the soul-doctrine's biggest structural gap and not solvable by significance tuning.**
+2. **GNIS importer has 0 live rows.** CLAUDE.md says the importer is implemented (`scripts/poi-import/sources/gnis.ts`, summit/falls/cape/etc. whitelist) but no GNIS rows are live. Either it didn't run, or all rows merged into Wikidata/OSM primaries and lost their source_type tag. Either way: the corpus is missing the prominence-ranked geological feature catalog GNIS would provide.
+3. **Geology corpus is mostly caves.** 10 of the top 20 geology entries are caves. Mountains, volcanoes, fault scarps are underrepresented or absent — even Mt. Whitney sits at score 80 (editorial seed) without strong cross-source signal from peak-specific sources.
+4. **Geography top is heavy on Nevada peaks via Wikidata.** Half the top-20 nature entries are Nevada mountain ranges (Monte Cristo, Verdi Peaks, Badger Mountains, Broken Hills, etc.) — bleed from the bbox-based Wikidata SPARQL query into adjacent state, not actually California-relevant.
+
+### Diagnose-before-broaden plan
+
+Four proposals captured in the diagnostic report. **None applied yet — curator reviews and picks.** Summary recommendation order:
+
+1. **B1 — lower geology + nature `category_significance_floors` to 60/65.** Pure trigger-policy change, no recompute. Surfaces existing high-quality candidates the global 70 floor is hiding (e.g., Junipero Serra Peak at 69, Cerro San Luis Obispo at 68 — both legitimately significant California peaks just under the cutoff). Trivial, reversible.
+2. **A1 — Wikidata P31-class bonus for geology + nature** (+10 pts when a POI has a significance-indicating P31 class like `Q8502 mountain`, `Q60504 lake`, `Q34038 waterfall`). Adds ~10 pts to legitimately-significant geological features without disturbing existing scores. Requires recompute + top-25 baseline re-validation (precedent: `scripts/poi-import/baselines/`).
+3. **C1 — wider GNIS feature-class whitelist** (add Volcano, Basin, Plateau, Cliff, Canyon, Valley to current Summit/Falls/Cape/etc.). Improves the input corpus for future dedup passes. Long-term lift, not a v1 first-run fix.
+4. **C3 — anthropology corpus** via narrative extraction. The hard problem. Roadmap Phase F+ scope; not a significance-tuning fix.
+
+### Hold for curator decision
+
+The history-skew is acknowledged. The first run proceeds with the ≥80 set as-is (high-quality history + Hollywood landmarks + missions = a meaningful v1 surface even if not balanced across layers). All subsequent POI runs — broader cutoffs, other audiences, narrator_a — hold until curator picks which of B1/A1/C1/C3 to apply and the recompute lands.
+
+The lesson for future re-tuning cycles: **the ranking algorithm makes the corpus's structural source biases visible.** History/architecture have authoritative cataloging (NRHP, state_landmark) that geology/geography don't. The soul doctrine demands all four layers; the cataloging infrastructure favors two. Either rebalance the scoring or accept that some layers need editorial-curation effort that bulk importers can't provide. This is the soul-doctrine vs. importer-coverage tradeoff captured for future arc planning.
+
 ## Out of scope for this decision
 
 - POI narration template authoring (`server/prompts/pois/*.js` if separate, or surface modifier on region templates) — implementation arc post-cutoff.
