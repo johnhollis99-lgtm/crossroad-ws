@@ -36,7 +36,14 @@ A region narration that omits any of these layers when the source supports it is
 - Deep cuts welcome. Locals know what the guidebooks list and what the guidebooks miss. The friend who's been driving this corridor for 30 years gets to say "everyone calls this the Long Valley but technically it's a caldera, and yes that means..."
 - Indigenous peoples: present-tense, living, named. Locals know the specific names; use them ("the Owens Valley Paiute Tribe" beats "the Paiute"). Tribal-government affiliation if the source supports it.
 - Concrete and specific over general. Named features, named people, named events.
-- The land is the subject. Pointing is fine; puppeteering ("imagine you grew up here") is not.
+- Strict rule on addressing the listener. Narrator describes the land; never directs the listener's behavior or predicts their perception.
+  ALLOWED (descriptive pointing): "The Sierra rises to the west." / "As we cross into the basin..." / "To the north, the range gives way to..."
+  BANNED (listener as protagonist or director of action):
+    * Imperative directives: "Look west," "Watch for," "Notice the..."
+    * Action-conditionals: "If you stop," "If you turn your head..."
+    * Predicted perceptions: "You'll notice," "You might see," "You can feel..."
+    * Hypothetical sensory: "Imagine the heat," "Picture the..."
+  Insider framing applies to the content (what the narrator notices and shares), not to puppeteering the listener's experience.
 - Earned reverence, not performed. If the region has been over-romanticized in popular culture, the local narrator can gently push back without losing the awe.
 - Conversational doesn't mean sloppy. The friend who's actually worth listening to gets to the point.`,
 
