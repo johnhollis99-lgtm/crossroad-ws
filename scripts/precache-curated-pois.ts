@@ -261,6 +261,7 @@ async function main(): Promise<void> {
     haikuCost: 0, ttsCost: 0,
     skipTotal: 0,
     fallbacks: 0,
+    parseRetries: 0,
     startedAt: Date.now(),
   };
   const results: Array<{ poi: PoiRow; url: string; narration: string; markers: ReturnType<typeof tallyMarkers>; haikuCost: number; ttsCost: number }> = [];
@@ -292,50 +293,97 @@ async function main(): Promise<void> {
         source_citation: poi.source_citation,
       });
 
-      // Haiku
-      const hr = await fetch('https://api.anthropic.com/v1/messages', {
-        method: 'POST',
-        headers: {
-          'content-type': 'application/json',
-          'x-api-key': ANTHROPIC_API_KEY,
-          'anthropic-version': '2023-06-01',
-        },
-        body: JSON.stringify({
-          model: HAIKU_MODEL,
-          max_tokens: HAIKU_MAX_TOKENS,
-          system: template.systemPrompt,
-          messages: [{ role: 'user', content: userPrompt }],
-        }),
-      });
-      if (!hr.ok) {
-        const errText = await hr.text().catch(() => '');
-        throw new Error(`Haiku HTTP ${hr.status}: ${errText.slice(0, 200)}`);
+      // Haiku — call-and-parse with single-shot retry on JSON parse failure.
+      //
+      // Background: cycle-3 + cycle-4 each hit ~1% Haiku output drift, where
+      // the model returns prose-outside-JSON or unescaped newlines in the
+      // narration string that break JSON.parse. Different POIs each cycle,
+      // same failure class. A single retry with a tightened reminder
+      // recovers most cases; the second-attempt prompt explicitly cites
+      // "the previous response was unparseable" so the model corrects.
+      //
+      // Both attempts log to llm_calls so cost is tracked even for retries.
+      // Empty narration also counts as a "needs retry" condition.
+      let narrationText: string | null = null;
+      let haikuCost = 0;
+      let retryUsed = false;
+      let lastParseErr: string | null = null;
+
+      for (let attempt = 1; attempt <= 2; attempt++) {
+        const systemForAttempt =
+          attempt === 1
+            ? template.systemPrompt
+            : template.systemPrompt +
+              '\n\nRETRY NOTE: The previous response could not be parsed as JSON. ' +
+              'Return ONLY a single valid JSON object exactly matching the schema {"narration": "...", "key_themes": [...]}. ' +
+              'No prose outside the JSON, no markdown fences, no commentary. ' +
+              'Escape any embedded newlines or quotes inside the narration string.';
+
+        const hr = await fetch('https://api.anthropic.com/v1/messages', {
+          method: 'POST',
+          headers: {
+            'content-type': 'application/json',
+            'x-api-key': ANTHROPIC_API_KEY,
+            'anthropic-version': '2023-06-01',
+          },
+          body: JSON.stringify({
+            model: HAIKU_MODEL,
+            max_tokens: HAIKU_MAX_TOKENS,
+            system: systemForAttempt,
+            messages: [{ role: 'user', content: userPrompt }],
+          }),
+        });
+        if (!hr.ok) {
+          const errText = await hr.text().catch(() => '');
+          throw new Error(`Haiku HTTP ${hr.status} (attempt ${attempt}): ${errText.slice(0, 200)}`);
+        }
+        const hj = (await hr.json()) as {
+          content?: Array<{ type: string; text?: string }>;
+          usage?: { input_tokens?: number; output_tokens?: number };
+        };
+        const inTok = hj.usage?.input_tokens ?? 0;
+        const outTok = hj.usage?.output_tokens ?? 0;
+        const attemptCost = +(inTok * HAIKU_IN_PER_TOK + outTok * HAIKU_OUT_PER_TOK).toFixed(6);
+        haikuCost += attemptCost;
+
+        // Log every attempt to llm_calls (retry attempts disambiguated by
+        // model_or_voice suffix for adherence-audit queries).
+        await supabase.from('llm_calls').insert({
+          call_type: 'claude',
+          provider: 'anthropic',
+          model_or_voice: attempt === 1 ? HAIKU_MODEL : `${HAIKU_MODEL}__parse_retry`,
+          input_chars: (attempt === 1 ? userPrompt : userPrompt).length,
+          input_tokens: inTok,
+          output_tokens: outTok,
+          cost_usd: attemptCost,
+          related_id: null,
+        });
+
+        const raw = (hj.content ?? [])
+          .filter(b => b.type === 'text')
+          .map(b => b.text ?? '')
+          .join('')
+          .trim();
+        const cleanedJson = raw.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
+        try {
+          const parsed = JSON.parse(cleanedJson) as { narration: string; key_themes?: string[] };
+          if (!parsed.narration) {
+            lastParseErr = 'empty narration field';
+            continue; // retry path
+          }
+          narrationText = parsed.narration;
+          if (attempt === 2) retryUsed = true;
+          break;
+        } catch (e: unknown) {
+          lastParseErr = e instanceof Error ? e.message : String(e);
+          // fall through to retry (if attempt 1) or throw (if attempt 2)
+        }
       }
-      const hj = await hr.json() as {
-        content?: Array<{ type: string; text?: string }>;
-        usage?: { input_tokens?: number; output_tokens?: number };
-      };
-      const inTok = hj.usage?.input_tokens ?? 0;
-      const outTok = hj.usage?.output_tokens ?? 0;
-      const haikuCost = +(inTok * HAIKU_IN_PER_TOK + outTok * HAIKU_OUT_PER_TOK).toFixed(6);
 
-      // LOG CLAUDE IMMEDIATELY (cost-logging discipline per CLAUDE.md)
-      await supabase.from('llm_calls').insert({
-        call_type: 'claude',
-        provider: 'anthropic',
-        model_or_voice: HAIKU_MODEL,
-        input_chars: userPrompt.length,
-        input_tokens: inTok,
-        output_tokens: outTok,
-        cost_usd: haikuCost,
-        related_id: null,
-      });
-
-      const raw = (hj.content ?? []).filter(b => b.type === 'text').map(b => b.text ?? '').join('').trim();
-      const cleaned = raw.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
-      const parsed = JSON.parse(cleaned) as { narration: string; key_themes?: string[] };
-      const narrationText = parsed.narration;
-      if (!narrationText) throw new Error('Haiku returned empty narration');
+      if (!narrationText) {
+        throw new Error(`Haiku JSON parse failed after retry: ${lastParseErr}`);
+      }
+      if (retryUsed) stats.parseRetries++;
 
       // SSML
       const { ssml, skips } = ssmlize(narrationText);
@@ -399,7 +447,7 @@ async function main(): Promise<void> {
       stats.ttsCost += ttsCost;
       results.push({ poi, url: publicUrl, narration: narrationText, markers: markerStats, haikuCost, ttsCost });
 
-      console.log(`OK ${markerStats.pause500}+${markerStats.pause250}m ${markerStats.ssmlBreaks}b ${markerStats.ssmlSayAs}sa skips=${skips.length} ${(audioBuffer.length / 1024).toFixed(0)}KB${fallbackUsed ? ' [FB]' : ''}`);
+      console.log(`OK ${markerStats.pause500}+${markerStats.pause250}m ${markerStats.ssmlBreaks}b ${markerStats.ssmlSayAs}sa skips=${skips.length} ${(audioBuffer.length / 1024).toFixed(0)}KB${fallbackUsed ? ' [FB]' : ''}${retryUsed ? ' [PR]' : ''}`);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       console.log(`FAIL ${msg.slice(0, 80)}`);
@@ -418,6 +466,7 @@ async function main(): Promise<void> {
   console.log(`  Failed:    ${stats.failed}`);
   console.log(`  Skips (Layer 2 highway/year): ${stats.skipTotal}`);
   console.log(`  SSML fallbacks: ${stats.fallbacks}`);
+  console.log(`  Haiku parse retries: ${stats.parseRetries}`);
   console.log(`  Runtime:   ${runtimeMin} min`);
   console.log(`  Total spend: $${totalCost.toFixed(4)} (Claude $${stats.haikuCost.toFixed(4)} + TTS $${stats.ttsCost.toFixed(4)})`);
   if (failures.length > 0) {
@@ -438,7 +487,7 @@ async function main(): Promise<void> {
   // Telegram ping
   await notifyTelegram(
     `Curated POI TTS run complete. ${stats.generated}/${pois.length} narrations generated, ${stats.failed} failures. ` +
-    `Spend: $${totalCost.toFixed(2)}. Runtime: ${runtimeMin}min. Skips: ${stats.skipTotal} / Fallbacks: ${stats.fallbacks}. ` +
+    `Spend: $${totalCost.toFixed(2)}. Runtime: ${runtimeMin}min. Skips: ${stats.skipTotal} / Fallbacks: ${stats.fallbacks} / Parse retries: ${stats.parseRetries}. ` +
     `9 prioritized sampler URLs posted to build chat.`,
   );
 }

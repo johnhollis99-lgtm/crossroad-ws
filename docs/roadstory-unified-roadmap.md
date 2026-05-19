@@ -291,6 +291,32 @@ There are five separate open-question lists across the docs. Some overlap. Conso
 
 ## 4. The Unified Execution Roadmap
 
+### Phase status (2026-05-19, catalog v1 closed)
+
+Quick scan of where each phase actually stands. Detail in each phase's section below.
+
+| Phase | Status | Note |
+|---|---|---|
+| A — Reconciliation | ✓ DONE | Pre-session doc work landed |
+| B — POI Data Pipeline | ◐ PARTIAL | B1 schema ✓, B2 all 5 importers live ✓, B3 dedup + 5-component significance ✓, B4 GNIS basic ✓. v1.1 backlog: GNIS expansion + Nevada-bleed SPARQL fix |
+| C — Venue Tour | ◐ PARTIAL | V1 ✓ (75 venues seeded, 1,634 children classified). V2 (importer integration) not started — blocker for CA-outside imports |
+| D — Addendum Migrations | ◐ PARTIAL | D1 all 7 migrations ✓. D2 partial (detect_regions, get_nearby_pois confidence filter, depth-alias mapping ✓; narrative_focus/pace param wiring not done). D3 voice_configs done for narrator_b × Family/Local (Sadachbia 1.0); other 6 audience×narrator combos deferred to audience expansion |
+| E — Regions Import & Generation | ✓ DONE | E1a USGS, E1b EPA, E1d named valleys all live (51 regions). E1c NLD deferred to v2. E1e watersheds (HUC8) deferred to v2. E2 production region narrations: 108 generated (54 regions × narrator_b × Family/Local) |
+| F — Iconic Local Curation | ○ NOT STARTED | Schema in place (`iconic_local`, `iconic_local_reasons`, `signature_hook`); importer not built; 0 POIs flagged |
+| G — Depth Assignment + Significance Tuning | ◐ PARTIAL | G2 done (B1 floors + A1 P31 bonus + editorial-curation slate = 189 POIs `editorial_curated=TRUE`). G1 NOT done — all 21,906 live POIs sit at `intrinsic_depth='standard'`; brief/long heuristic outstanding |
+| H — Narration Engine + Templates | ◐ PARTIAL | narrator_b × Family POI template + region templates live (with full SSML prosody pipeline). Audience × narrator matrix (Kids/Unfiltered/Local × narrator_a/b) not built. Google TTS Chirp 3 HD primary — already settled per CLAUDE.md TTS roadmap |
+| I — Lookahead Worker | ○ NOT STARTED | Current worker doesn't implement addendum §10 ranking pipeline (regions, narrator weights, iconic override, pace rules, resonance, gap rules). Cluster-suppression rule (addendum §10.3) captured in CLAUDE.md open concerns |
+| J — UI Refits | ◐ PARTIAL | Pine redesign landed lots (home, customize, drive, components, motion infra). Trip-setup narrator/focus/pace pickers per addendum NOT done. Driving page Skip + Tell Me More + narrator chip NOT done. Settings additions NOT done |
+| K — Feedback Loop & Reports | ○ NOT STARTED | `narration_plays` schema in place; event wiring + cron reports not built |
+| L — Venue Tour V3 | ○ NOT STARTED | Awaits Phase H expansion (audience × narrator matrix) and venue-tour narration templates |
+| M — UI Handoff Phase 3 Remainder | ◐ PARTIAL | Pine landed most of Phase 3 surface work. Trip Summary screen + Group features (Prompts 14 + 16) not done |
+| N — Pre-Launch | ○ NOT STARTED | E2E test trips, cache warming, perf testing, offline cache verification, cost review |
+| v1.5 Backlog | — | Conversational Query Mode (decision doc landed); other deferred items |
+
+**Catalog v1 status** — closed 2026-05-19. 295 v1 narrations live (108 regions + 187 POIs). $15.64 lifetime spend per `llm_calls` audit. See [docs/decisions/2026-05-15-top-tier-poi-first-run.md](decisions/2026-05-15-top-tier-poi-first-run.md) §Catalog v1 closed for full close-out detail.
+
+
+
 Sequencing all the pending work into a single plan. Each step is independently shippable. Items in the same numbered block can run in parallel; items in different blocks have dependencies.
 
 ### Phase A — Reconciliation (1–2 days, no code)

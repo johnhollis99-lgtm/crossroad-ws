@@ -726,6 +726,74 @@ After verification listen:
 - If one of the three fixes still surfaces issues → targeted iteration on that specific fix (likely a tighter rule in the template or a sharper skip in the SSML)
 - The 2 new JSON-drift failures (Monte Cristo Range + Burnt Peak) are non-blocking but the single-retry-on-parse-failure follow-up should land before the next bulk run
 
+## Catalog v1 closed (2026-05-19)
+
+Curator approved the cycle-4 verification samplers. Catalog v1 is closed; no further policy changes or generation cycles until the curator picks the next priority.
+
+### Final v1 narration footprint
+
+| Surface | Narrations | Storage path pattern |
+|---|---:|---|
+| Regions (54 × narrator_b × Family/Local) | 108 | `regions/{region_id}/...` (production) + `regions-prosody-test/{region_id}/...` (smoke) |
+| POIs (curator-approved set × narrator_b × Family) | 187 | `pois/{poi_id}/narrator_b_family_standard.opus` |
+| **Total v1 narrations** | **295** | |
+
+POI gap-from-curated: 187 generated against 189 curated (curator gate at `editorial_curated = TRUE`). 2 POIs (Monte Cristo Range, Burnt Peak) failed Haiku JSON output drift in cycle-4 and are recovery candidates for the parse-retry follow-up in the next bulk run. Curator-marked rejections (53 POIs at `editorial_curated = FALSE`) and the long-tail unreviewed (~21.7k POIs at `editorial_curated IS NULL`) remain in the catalog but do not generate audio.
+
+### Cumulative spend
+
+Per `llm_calls` audit at close (2026-05-19):
+
+| | Calls | USD |
+|---|---:|---:|
+| Claude (Anthropic, all narration + audit work) | 630 | $2.52 |
+| Google TTS (audio generation, all surfaces) | 984 | $13.12 |
+| **Total lifetime spend** | **1,614** | **$15.64** |
+
+Recent breakdown (this session, POI cycles 3 + 4):
+- POI cycle-3 (initial run): $4.26 (187 gen)
+- POI cycle-4 (re-render after sampler verdict): $4.43 (187 gen)
+- POI subtotal: **$8.69** for 187 unique POIs × 2 generations
+
+Earlier work (region prosody arc, smoke testing, narrator audition, region narration production): **~$6.95** of the lifetime total, dating from 2026-05-10 through 2026-05-15.
+
+Per-narration cost: $15.64 / 295 narrations = **~$0.053 / narration** (Claude + TTS, all audit overhead included). Per the prosody arc + first-run learnings: ~$0.022 / POI narration at steady state, ~$0.06 / region narration (region descriptions are 2-3× longer).
+
+### Final pipeline state
+
+The SSML mode pipeline ships with all sub-fixes from the prosody arc + cycle-3 + cycle-4 landed:
+
+- **Marker syntax** → SSML conversion (`{{PAUSE_500}}` / `{{PAUSE_250}}` → `<break time="…ms"/>`)
+- **Auto-wrap cardinal numbers** with PUA-protected placeholder pass (sidesteps the "digits inside attribute values get re-wrapped" bug class)
+- **Cardinal-content sanitization** — strips commas from inside `<say-as>` content (Google TTS silently drops comma-wrapped cardinals; confirmed empirically)
+- **Highway-context skip** — digits preceded by `Highway / Hwy / Interstate / I- / US- / CA- / etc.` stay unwrapped so Google's road-number heuristic fires
+- **Calendar-year skip** — bare 4-digit years 1500–2199 stay unwrapped (when not followed by a measurement unit) so Google's year-reading heuristic fires
+- **Decimal skip** (cycle-4) — digits containing `.` stay unwrapped so "7.9" reads as "seven point nine" instead of being sanitized into "79"
+- **Marker-frequency floors** in the template (≥2 PAUSE_500, ≥3 PAUSE_250 per narration) — prevents under-pacing on numerical calls
+- **Highway and year phonetic spelling** in the template — primary path, with the skip rules as downstream safety nets for model slips
+- **Cardinal-content sanitization fix** (skips the wrap entirely for decimals) closes the last known SSML edge case for the v1 surface
+- **Plain-text fallback** on SSML parse failure — `stripMarkersAndTags()` produces a usable retry payload; never fires in practice but is the safety net
+
+### Editorial curation slate as the v1 artifact
+
+The curator-marked-up [docs/poi-curation/2026-05-18-v1-launch-slate.md](../poi-curation/2026-05-18-v1-launch-slate.md) is the v1 catalog artifact. It captures every decision the curator made: which POIs the algorithm surfaced, which were approved/rejected/boosted, and which net-new editorial seeds the curator added. The companion [.imported.md](../poi-curation/2026-05-18-v1-launch-slate.imported.md) is the audit trail of what the import script actually did (matches, tiebreakers, new-seed inserts) with per-line `<!-- IMPORT: ... -->` annotations.
+
+These two files are the canonical record of the v1 curation. Future cycles will produce their own dated slates following the same pattern; the v1 slate is the reference for what the launch surface looked like at first-listen-approval.
+
+### Parse-retry follow-up landed
+
+The cycle-4 observation of ~1% Haiku output drift (different POIs each cycle, same parse-failure class) was filed as a non-blocking follow-up. Landed in this same commit: single-shot retry inside the precache loop. On JSON parse failure, the second attempt runs with an appended `RETRY NOTE` in the system prompt explicitly citing "the previous response was unparseable" and reiterating the JSON envelope requirement. Both attempts log to `llm_calls` (retry attempts disambiguated by `model_or_voice = '<model>__parse_retry'` suffix for adherence-audit queries). Expected lift: ~99% → ~99.9% generation success rate.
+
+`stats.parseRetries` exposed in the run summary + Telegram ping. Per-POI log line shows `[PR]` suffix when a retry was used.
+
+### Holds in effect post-close
+
+- **No audience expansion** (Kids / Unfiltered / Local) until curator picks the priority
+- **No region matrix expansion** (54 × kids/unfiltered/local = 162 regions outstanding) until curator picks the priority
+- **No bulk-POI runs** beyond the curated 189 until curator picks the next slice
+- **No narrator_a renders** until curator audition decision lands
+- **No v1.5 work** (Conversational Query Mode, etc.) until v1 ships and proves itself
+
 ## Out of scope for this decision
 
 - POI narration template authoring (`server/prompts/pois/*.js` if separate, or surface modifier on region templates) — implementation arc post-cutoff.
