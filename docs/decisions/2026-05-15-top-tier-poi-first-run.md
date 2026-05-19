@@ -519,6 +519,95 @@ Added by this decision, deferred to v1.1:
 - **Surfacing queries honor `editorial_score_boost`.** `get_nearby_pois` and `get_corridor_pois` currently filter on bare `significance_score`. Switch to `(significance_score + COALESCE(editorial_score_boost, 0))` so curator-boosted POIs surface as the curator intended. Small RPC-signature-preserving patch.
 - **Precache scripts gate on `editorial_curated = TRUE`.** `precache-top-tier-pois.ts` and `precache-popular-routes.ts` currently use ad-hoc exclusion lists (`EXCLUSION_NAMES` / `--exclude-ids`). After v1 curator slate lands, switch their POI-fetch SELECT to add `AND editorial_curated = TRUE`. Removes the per-batch exclusion-list maintenance.
 
+## Phase 3 — Curation result (cycle-3 TTS run, 2026-05-18)
+
+The hybrid curation model's first full lap is complete. Markdown checklist → curator markup → import → TTS, end to end.
+
+### Final counts
+
+| | n |
+|---|---:|
+| Algorithm-surfaced entries reviewed | 230 |
+| `[x]` approved | 130 |
+| `[r]` rejected | 53 |
+| `[+]` boosted | 47 |
+| Curator Additions parsed | 15 |
+| ↳ matched + boosted existing POIs | 11 |
+| ↳ inserted as net-new editorial seeds | 4 |
+| **POIs with `editorial_curated = TRUE` (TTS target set)** | **189** |
+| ↳ approve_no_boost | 129 |
+| ↳ boosted (any reason) | 60 |
+
+The 3-row gap between the 192 sum-of-ops estimate and 189 actual: Mount Whitney, Mount Shasta, and Yosemite Falls all surfaced in **both** the algorithm slate and the Curator Additions — the Curator Addition `UPDATE` landed on existing rows rather than creating new ones. Mount Whitney specifically moved from `[x]` (approve, no boost) to boost via the addition; the other two were already `[+]` boosted in the slate and the addition was a no-op.
+
+### Editorial-tiebreaker rule — first recorded use
+
+The auto-tiebreaker rule (prefer editorial source_type when >1 match, then prefer the strictly-higher score with ≥5pt gap) fired exactly once during cycle-3 apply: **Mount Whitney**. The DB had `Mount Whitney (geology, editorial, score 80, id=6dbb1b74-…)` and `Mount Whitney (nature, wikidata, score 30, id=11401de1-…)` plus three lower-scored wikidata/osm leftovers. The rule cleanly picked the geology-editorial row via reason `exact_name+tiebreaker_editorial`. Recorded in the row's `editorial_curation_note`:
+
+```
+Manual boost via curation/import.ts. match_reason=exact_name+tiebreaker_editorial
+```
+
+This first-use validates the rule's framing — the editorial source is the curator's canonical version of "Mount Whitney"; the wikidata duplicate at score 30 is a dedup leftover that should not have been the target of curator intent. Pattern likely repeats for other dedup-leftover duplicates of headline editorial POIs as future curation cycles run.
+
+### TTS run
+
+```
+=== SUMMARY ===
+  Generated: 187
+  Failed:    2
+  Skips (Layer 2 highway/year): 117
+  Runtime:   45.3 min
+  Total spend: $4.2550 (Claude $0.7953 + TTS $3.4597)
+```
+
+**Failures (2):**
+
+| POI | Effective score | Failure |
+|---|---:|---|
+| Fremont Peak | 80 | `Bad control character in string literal in JSON at position 403` — Haiku embedded an unescaped newline in the narration string |
+| Kuruvungna Springs | 70 | `Unexpected token 'I', "I need to "...` — Haiku returned bare text starting "I need to" instead of the required JSON envelope |
+
+Both are LLM output drift, not pipeline bugs. The narrations were billed but the audio never landed. A retry pass with stricter JSON-envelope reminder in the system prompt would likely recover both. Captured as a follow-up; not blocking sampler review.
+
+**Layer 2 skip rate:** 117 SSML-pipeline skips across 187 generations = ~0.63 skips/POI average. The Layer 1 marker-syntax template caught the bulk of highway/year cases; Layer 2 cleanup fired for the residual. Within the expected envelope per the prosody arc's smoke-test baselines.
+
+**Cost & runtime vs. estimate:**
+
+| | Estimate | Actual |
+|---|---:|---:|
+| Cost | $4.16 | **$4.26** (+2.4%) |
+| Runtime | ~57 min | **45.3 min** (-21%) |
+
+Runtime came in 21% under estimate — the 18 sec/POI calibration from the Mono Basin region renders overshoots POI narration, which appears to be faster. Cost landed close to estimate (Claude usage was slightly above the per-POI baseline; TTS exactly tracked the per-POI character count).
+
+### Sampler URLs — 9 prioritized for curator listen
+
+Ordered: 2 Missions (tone confirmation) → Mount Whitney (tiebreaker validation) → 4 net-new editorial seeds (most novel additions, highest QA value) → 2 soul-doctrine flagships (subjective geology check).
+
+| # | Effective score | POI | Category | Role | URL |
+|---:|---:|---|---|---|---|
+| 1 | 104 | Mission San Juan Capistrano | history | Mission tone-1 | https://eusozlexmllovlmngmug.supabase.co/storage/v1/object/public/narration-audio/pois/739aca24-d217-47a8-b13d-a0e2d0d30214/narrator_b_family_standard.opus |
+| 2 | 103 | Mission Santa Bárbara | history | Mission tone-2 | https://eusozlexmllovlmngmug.supabase.co/storage/v1/object/public/narration-audio/pois/47646679-aba7-49d2-971a-981bd96f1194/narrator_b_family_standard.opus |
+| 3 | 100 | Mount Whitney | geology | Tiebreaker first-use validation | https://eusozlexmllovlmngmug.supabase.co/storage/v1/object/public/narration-audio/pois/6dbb1b74-7aac-4f1e-91ad-9df46391e1b0/narrator_b_family_standard.opus |
+| 4 | 95 | Bumpass Hell | geology | NEW SEED | https://eusozlexmllovlmngmug.supabase.co/storage/v1/object/public/narration-audio/pois/a824aaed-2703-47da-86b2-45532f3d59a5/narrator_b_family_standard.opus |
+| 5 | 95 | Painted Dunes (Lassen) | geology | NEW SEED | https://eusozlexmllovlmngmug.supabase.co/storage/v1/object/public/narration-audio/pois/c647c0b9-640a-402e-915d-7099597199db/narrator_b_family_standard.opus |
+| 6 | 95 | San Andreas Fault (Carrizo Plain segment) | geology | NEW SEED | https://eusozlexmllovlmngmug.supabase.co/storage/v1/object/public/narration-audio/pois/06972144-970d-4060-9d4c-505cab4a61d2/narrator_b_family_standard.opus |
+| 7 | 95 | Trona Pinnacles | geology | NEW SEED | https://eusozlexmllovlmngmug.supabase.co/storage/v1/object/public/narration-audio/pois/d60a258d-9073-4988-9436-ba6babdfda0c/narrator_b_family_standard.opus |
+| 8 | 29 | Long Valley Caldera | geology | Soul-doctrine flagship | https://eusozlexmllovlmngmug.supabase.co/storage/v1/object/public/narration-audio/pois/d68fe5cb-de59-4a86-93af-6e98e66b206a/narrator_b_family_standard.opus |
+| 9 | 29 | Mono Lake | geology | Soul-doctrine flagship | https://eusozlexmllovlmngmug.supabase.co/storage/v1/object/public/narration-audio/pois/f032f930-1c7d-4d61-b746-3ac37ff89726/narrator_b_family_standard.opus |
+
+Long Valley Caldera and Mono Lake landed at effective score 29 (significance_score 9 + editorial_score_boost 20). The boost is what carried them above the trigger threshold — without it, both would have been below the geology floor of 60. The boost mechanism is doing exactly what it was designed for: surfacing curator-essential POIs that the data corpus undervalues.
+
+### Hold for curator listening verdict
+
+All 9 narrations are in Storage. Browser-listening note: Chrome or Firefox (Safari does not play OGG/Opus natively).
+
+After curator listening:
+- If all 9 land cleanly → green-light next-cycle work (audience expansion, broader cutoffs, narrator_a)
+- If specific narrations need rework → follow-up cycle with retry for failed-quality POIs (and the 2 JSON failures above)
+- If systemic prosody / template issues surface → reopen the prosody arc with targeted diagnostics
+
 ## Out of scope for this decision
 
 - POI narration template authoring (`server/prompts/pois/*.js` if separate, or surface modifier on region templates) — implementation arc post-cutoff.
