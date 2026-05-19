@@ -684,7 +684,47 @@ Per-fix verification samplers (4 priority POIs, tighter than the 9-sampler cycle
 3. **Mount Whitney** — verify the ~84-mile Badwater distance lands correctly (factuality correction)
 4. **Mono Lake** OR **Long Valley Caldera** — soul-doctrine flagship spot-check for motion framing
 
-URLs and stats land in this section as a sub-block once the re-render completes.
+### Cycle-4 re-render result
+
+```
+=== SUMMARY ===
+  Generated: 187
+  Failed:    2
+  Skips (Layer 2 highway/year/decimal): 128
+  Runtime:   46.2 min
+  Total spend: $4.4318 (Claude $0.8778 + TTS $3.5541)
+```
+
+**Failure pattern observation.** Cycle-3 failed Fremont Peak + Kuruvungna Springs; cycle-4 failed Monte Cristo Range + Burnt Peak. Different POIs, same failure class (Haiku JSON output drift — unescaped newline in narration string, or response not wrapped in the requested JSON envelope). Cycle-3's failures retried cleanly in cycle-4 but cycle-4 hit two new ones. **~1% Haiku output-drift base rate** appears intrinsic to the model; a single-shot retry-on-parse-failure inside the precache loop would recover most cases, captured as a follow-up worth landing before the next bulk run.
+
+**Cost / runtime vs. cycle-3:**
+
+| | Cycle-3 | Cycle-4 | Δ |
+|---|---:|---:|---:|
+| Generated | 187 | 187 | 0 |
+| Cost | $4.26 | $4.43 | +$0.17 (+4.0%) |
+| Runtime | 45.3 min | 46.2 min | +0.9 min |
+| Layer 2 skips | 117 | 128 | +11 |
+
+The +$0.17 cost delta is consistent with the additional 250-ish tokens of the new MOTION & DISTANCE FRAMING template section × 189 Haiku calls. The +11 skip delta is consistent with the new `decimal` skip type firing on decimal-bearing measurements that previously got sanitized into broken cardinals.
+
+**4 verification sampler URLs:**
+
+| # | POI | Fix being verified | URL |
+|---:|---|---|---|
+| 1 | Bumpass Hell (geology) | Motion-aware framing — fumaroles described factually, no "you can feel" | https://eusozlexmllovlmngmug.supabase.co/storage/v1/object/public/narration-audio/pois/a824aaed-2703-47da-86b2-45532f3d59a5/narrator_b_family_standard.opus |
+| 2 | San Andreas Fault (Carrizo Plain segment) (geology) | SSML decimal — magnitude reads as "seven point nine" not "seventy-nine" | https://eusozlexmllovlmngmug.supabase.co/storage/v1/object/public/narration-audio/pois/06972144-970d-4060-9d4c-505cab4a61d2/narrator_b_family_standard.opus |
+| 3 | Mount Whitney (geology) | Fact anchor — ~84-mile Whitney-to-Badwater distance | https://eusozlexmllovlmngmug.supabase.co/storage/v1/object/public/narration-audio/pois/6dbb1b74-7aac-4f1e-91ad-9df46391e1b0/narrator_b_family_standard.opus |
+| 4 | Mono Lake (geology) | Soul-doctrine flagship — motion framing spot-check + Paiute anthropology layer | https://eusozlexmllovlmngmug.supabase.co/storage/v1/object/public/narration-audio/pois/f032f930-1c7d-4d61-b746-3ac37ff89726/narrator_b_family_standard.opus |
+
+Browser-listening note: Chrome or Firefox (Safari does not play OGG/Opus natively).
+
+### Hold for curator listening verdict
+
+After verification listen:
+- If all 4 land cleanly → cycle closes; curation infrastructure and pipeline are launch-ready for v1 (curator picks the audience-expansion next move)
+- If one of the three fixes still surfaces issues → targeted iteration on that specific fix (likely a tighter rule in the template or a sharper skip in the SSML)
+- The 2 new JSON-drift failures (Monte Cristo Range + Burnt Peak) are non-blocking but the single-retry-on-parse-failure follow-up should land before the next bulk run
 
 ## Out of scope for this decision
 
