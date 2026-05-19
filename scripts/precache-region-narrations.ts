@@ -238,10 +238,13 @@ async function main(): Promise<void> {
   }
   console.log(`  Total planned generations: ${planned.length} (= ${regions.length} regions × ${voices.length} voices)`);
 
-  // 5. Skip-if-ready: query existing narration_audio for these tuples
+  // 5. Skip-if-ready: query existing narration_audio for these tuples.
+  // audience_mode added to the keying tuple 2026-05-19 (H1.6.2) — without it
+  // the skip-if-ready bucket would collide across audiences sharing a
+  // narrator_slug (e.g. kids + local both at narrator_a).
   const { data: existing, error: exErr } = await supabase
     .from('narration_audio')
-    .select('region_id, narrator_slug, mode')
+    .select('region_id, narrator_slug, mode, audience_mode')
     .in('region_id', regions.map((r: RegionRow) => r.id))
     .eq('mode', TRIP_MODE)
     .eq('depth', DEPTH)
@@ -250,10 +253,10 @@ async function main(): Promise<void> {
 
   const existingSet = new Set<string>();
   for (const e of existing || []) {
-    existingSet.add(`${e.region_id}|${e.narrator_slug}`);
+    existingSet.add(`${e.region_id}|${e.narrator_slug}|${e.audience_mode}`);
   }
   const toGenerate = planned.filter(
-    p => !existingSet.has(`${p.region.id}|${p.voice.narrator_slug}`)
+    p => !existingSet.has(`${p.region.id}|${p.voice.narrator_slug}|${p.voice.mode}`)
   );
   const skipped = planned.length - toGenerate.length;
   console.log(`  Already cached (skip-if-ready): ${skipped}`);
@@ -355,13 +358,17 @@ async function main(): Promise<void> {
       const narrationText = parsed.narration;
       if (!narrationText) throw new Error('Haiku returned empty narration');
 
-      // b) Insert pending narration_audio row
+      // b) Insert pending narration_audio row.
+      // audience_mode added 2026-05-19 (H1.6.2). For regions, audience_mode is
+      // sourced from the voice_config.mode (which is the audience-mode column
+      // per voice_configs schema, NOT the trip-mode that lives on narration_audio).
       const { data: pendingRow, error: insErr } = await supabase
         .from('narration_audio')
         .upsert({
           region_id: item.region.id,
           poi_id: null,
           narrator_slug: item.voice.narrator_slug,
+          audience_mode: item.voice.mode,
           depth: DEPTH,
           mode: TRIP_MODE,
           audio_url: null,
@@ -369,7 +376,7 @@ async function main(): Promise<void> {
           provider: 'google',
           prompt_version: 1,
           generated_at: new Date().toISOString(),
-        }, { onConflict: 'poi_id,region_id,narrator_slug,depth,mode', ignoreDuplicates: false })
+        }, { onConflict: 'poi_id,region_id,narrator_slug,audience_mode,depth,mode', ignoreDuplicates: false })
         .select('id')
         .single();
       if (insErr || !pendingRow) throw new Error(`narration_audio pending: ${insErr?.message ?? 'no row returned'}`);

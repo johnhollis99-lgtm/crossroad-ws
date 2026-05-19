@@ -24,6 +24,7 @@ const SERVER = process.env.EXPO_PUBLIC_SERVER_URL ?? 'http://localhost:3001';
 
 export type NarrationDepth = 'glance' | 'ride_along' | 'deep_dive';
 export type NarrationMode = 'driving' | 'hiking' | 'city';
+export type AudienceMode = 'family' | 'kids' | 'unfiltered' | 'local';
 
 interface VoiceConfigRow {
   voiceId: string;
@@ -36,6 +37,14 @@ export interface TTSOptions {
   mode: NarrationMode;
   /** Default depth applied when narratePOI is called without an explicit depth */
   depth: NarrationDepth;
+  /**
+   * Audience mode — added 2026-05-19 alongside the narrator collapse + na_unique
+   * widening (migration 20260519000002). Required for correct narration_audio
+   * lookup now that two audiences can share a narrator_slug. Defaults to 'family'
+   * if not supplied so legacy callers (driving.tsx, trail.tsx, filters.tsx)
+   * keep working until the trip-setup audience picker lands.
+   */
+  audienceMode?: AudienceMode;
 }
 
 export function useTTS(options: TTSOptions) {
@@ -94,16 +103,22 @@ export function useTTS(options: TTSOptions) {
     poi.narration_cache?.[cacheKey] ?? null;
 
   // ── Step 2: narration_audio table (authoritative, includes prompt_version) ─
+  // audience_mode filter added 2026-05-19 (H1.6.2) — two audiences can now
+  // share the same narrator_slug (e.g. kids + local both at narrator_a in the
+  // current voice_configs), so the audience_mode column disambiguates which
+  // narration to return.
   const checkNarrationAudioTable = async (
     poiId: string,
     depth: NarrationDepth,
     voiceId: string,
+    audienceMode: AudienceMode,
   ): Promise<string | null> => {
     const { data } = await supabase
       .from('narration_audio')
       .select('audio_url')
       .eq('poi_id', poiId)
       .eq('narrator_slug', voiceId)
+      .eq('audience_mode', audienceMode)
       .eq('depth', depth)
       .eq('status', 'ready')
       .order('generated_at', { ascending: false })
@@ -114,10 +129,13 @@ export function useTTS(options: TTSOptions) {
   };
 
   // ── Step 3: server generation (only when generateIfMissing=true) ──────────
+  // audience_mode added 2026-05-19 (H1.6.2) so the server can write the new
+  // narration_audio.audience_mode column.
   const generateOnServer = async (
     poi: POI,
     depth: NarrationDepth,
     voiceId: string,
+    audienceMode: AudienceMode,
   ): Promise<string | null> => {
     if (!(await hasSignal())) {
       console.warn('[useTTS] no signal — skipping server generation');
@@ -128,13 +146,14 @@ export function useTTS(options: TTSOptions) {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        poi_id:       poi.id,
-        poi_name:     poi.name,
-        poi_category: poi.category,
-        poi_tags:     poi.tags ?? [],
-        mode:         options.mode,
+        poi_id:        poi.id,
+        poi_name:      poi.name,
+        poi_category:  poi.category,
+        poi_tags:      poi.tags ?? [],
+        mode:          options.mode,
         depth,
-        voice_id:     voiceId,
+        voice_id:      voiceId,
+        audience_mode: audienceMode,
       }),
     });
 
@@ -158,6 +177,7 @@ export function useTTS(options: TTSOptions) {
       const voiceConfig = await lookupVoiceConfig(options.mode);
       const voiceId = voiceConfig.voiceId;
       const cacheKey = buildCacheKey(options.mode, depth, voiceId);
+      const audienceMode: AudienceMode = options.audienceMode ?? 'family';
 
       // 1. JSON cache on the POI row (fastest path — no extra query)
       if (poi) {
@@ -166,14 +186,14 @@ export function useTTS(options: TTSOptions) {
       }
 
       // 2. narration_audio table (authoritative — used for prompt_version invalidation)
-      const fromTable = await checkNarrationAudioTable(poiId, depth, voiceId);
+      const fromTable = await checkNarrationAudioTable(poiId, depth, voiceId, audienceMode);
       if (fromTable) return fromTable;
 
       // 3. Generate on server (opt-in)
       if (!generateIfMissing || !poi) return null;
-      return generateOnServer(poi, depth, voiceId);
+      return generateOnServer(poi, depth, voiceId, audienceMode);
     },
-    [options.mode],
+    [options.mode, options.audienceMode],
   );
 
   // ── Audio playback ────────────────────────────────────────────────────────

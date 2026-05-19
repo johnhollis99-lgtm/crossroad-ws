@@ -178,7 +178,9 @@ async function uploadAudio(poiId, mode, depth, voiceId, audioBuffer) {
 // ── Phase 1: insert pending row before generation begins (Fix 2) ─────────────
 // Upserts status='pending' so a row exists with a stable ID for cost tracking.
 // Caller must have already confirmed no 'ready' row exists (hook cache lookup).
-async function insertNarrationAudioPending({ poiId, voiceId, depth, mode }) {
+// audienceMode added 2026-05-19 (H1.6.2) — required column per migration
+// 20260519000002 widening na_unique to include audience_mode.
+async function insertNarrationAudioPending({ poiId, voiceId, depth, mode, audienceMode }) {
   const { data, error } = await supabase
     .from('narration_audio')
     .upsert(
@@ -187,13 +189,14 @@ async function insertNarrationAudioPending({ poiId, voiceId, depth, mode }) {
         narrator_slug:  voiceId,
         depth,
         mode,
+        audience_mode:  audienceMode,
         audio_url:      null,
         status:         'pending',
         provider:       'google',
         prompt_version: PROMPT_VERSION,
         generated_at:   new Date().toISOString(),
       },
-      { onConflict: 'poi_id,region_id,narrator_slug,depth,mode', ignoreDuplicates: false },
+      { onConflict: 'poi_id,region_id,narrator_slug,audience_mode,depth,mode', ignoreDuplicates: false },
     )
     .select('id')
     .single();
@@ -262,6 +265,13 @@ router.post('/generate', async (req, res) => {
   const { poi_id, poi_name, poi_category, poi_tags, mode, depth } = req.body;
   // voice_id is optional — derived from voice_configs when absent (Fix 1)
   let { voice_id } = req.body;
+  // audience_mode added 2026-05-19 (H1.6.2); defaults to 'family' to preserve
+  // backward compatibility with v1 mobile clients that don't yet send it.
+  const audience_mode = req.body.audience_mode || 'family';
+  const ALLOWED_AUDIENCES = ['family', 'kids', 'unfiltered', 'local'];
+  if (!ALLOWED_AUDIENCES.includes(audience_mode)) {
+    return res.status(400).json({ error: `audience_mode must be one of ${ALLOWED_AUDIENCES.join(', ')}` });
+  }
 
   if (!poi_id || !poi_name || !mode || !depth) {
     return res.status(400).json({ error: 'poi_id, poi_name, mode, depth are required' });
@@ -280,7 +290,9 @@ router.post('/generate', async (req, res) => {
   // Fix 2: insert pending row first so we have a stable ID for cost tracking
   let pendingId;
   try {
-    pendingId = await insertNarrationAudioPending({ poiId: poi_id, voiceId: voice_id, depth, mode });
+    pendingId = await insertNarrationAudioPending({
+      poiId: poi_id, voiceId: voice_id, depth, mode, audienceMode: audience_mode,
+    });
   } catch (err) {
     console.error('[narration] pending insert failed:', err);
     return res.status(500).json({ error: err.message });

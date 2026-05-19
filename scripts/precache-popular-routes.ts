@@ -221,8 +221,12 @@ async function uploadAudio(
 }
 
 // ── Upsert narration_audio row ────────────────────────────────────────────────
+// audienceMode added 2026-05-19 (H1.6.2) — disambiguates rows that share a
+// narrator_slug across audiences. Unique index na_unique widened to include
+// audience_mode by migration 20260519000002.
 async function upsertNarrationAudio(args: {
   poiId: string; voiceId: string; depth: NarrationDepth; mode: NarrationMode;
+  audienceMode: AudienceMode;
   audioUrl: string; charCount: number; costUsd: number; narrationText: string;
 }): Promise<string | undefined> {
   const { data, error } = await getAdminClient()
@@ -231,6 +235,7 @@ async function upsertNarrationAudio(args: {
       {
         poi_id:          args.poiId,
         narrator_slug:   args.voiceId,
+        audience_mode:   args.audienceMode,
         depth:           args.depth,
         mode:            args.mode,
         audio_url:       args.audioUrl,
@@ -241,7 +246,7 @@ async function upsertNarrationAudio(args: {
         prompt_version:  PROMPT_VERSION,
         narration_text:  args.narrationText,
       },
-      { onConflict: 'poi_id,region_id,narrator_slug,depth,mode', ignoreDuplicates: false },
+      { onConflict: 'poi_id,region_id,narrator_slug,audience_mode,depth,mode', ignoreDuplicates: false },
     )
     .select('id')
     .single();
@@ -681,11 +686,14 @@ async function main() {
       }
 
       // Check narration_audio table (only count ready rows — pending/failed are not usable)
+      // audience_mode filter added 2026-05-19 (H1.6.2) so two audiences sharing
+      // a narrator_slug don't false-positive the skip-if-ready check.
       const { data: existing } = await getAdminClient()
         .from('narration_audio')
         .select('id')
         .eq('poi_id', poi.id)
         .eq('narrator_slug', voiceId)
+        .eq('audience_mode', audience)
         .eq('depth', depth)
         .eq('status', 'ready')
         .limit(1)
@@ -726,6 +734,7 @@ async function main() {
         // Upsert narration_audio row
         const narrationId = await upsertNarrationAudio({
           poiId: poi.id, voiceId: ttsOutput.voiceId, depth, mode,
+          audienceMode: audience,
           audioUrl, charCount: ttsOutput.characterCount, costUsd: ttsCost,
           narrationText: text,
         });
