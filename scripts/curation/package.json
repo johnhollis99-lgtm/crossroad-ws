@@ -1,0 +1,23 @@
+{
+  "name": "xroad-curation",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Curator gate for POI TTS generation — markdown checklist export/import",
+  "type": "module",
+  "scripts": {
+    "export": "tsx export.ts",
+    "import": "tsx import.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.105.1",
+    "dotenv": "^16.4.5",
+    "pg": "^8.13.3"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "@types/pg": "^8.11.11",
+    "tsx": "^4.19.0",
+    "typescript": "~5.9.2"
+  }
+}

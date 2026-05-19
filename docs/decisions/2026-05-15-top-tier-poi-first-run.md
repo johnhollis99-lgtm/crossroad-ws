@@ -368,6 +368,157 @@ The rebalance is captured. Curator reviews the post-rebalance top 30 + diff and 
 
 All POI generation holds until curator approves.
 
+## Curation Model — Hybrid Algorithm + Editorial Gate (2026-05-18)
+
+**Decision:** The algorithm continues surfacing POIs based on `significance_score >= category_significance_floors[category]` (with the B1 floors landed earlier this doc: geology=60, nature=65, others=70). The curator gates which surface picks get TTS via a markdown-checklist review loop. **TTS scripts must gate on `editorial_curated = TRUE`, not on raw significance.**
+
+### Schema additions — migration `20260518000003_pois_editorial_curation.sql`
+
+Added 5 columns to `public.pois` (all default-safe; 0 rows touched on apply, 21,906 live POIs default to `editorial_curated = NULL`):
+
+| Column | Type | Default | Meaning |
+|---|---|---|---|
+| `editorial_curated` | boolean | NULL | NULL = unreviewed, TRUE = approved, FALSE = rejected |
+| `editorial_curation_note` | text | NULL | Free-text curator note (rejection reason, boost rationale) |
+| `editorial_curated_at` | timestamptz | NULL | When the decision landed |
+| `editorial_curated_by` | text | 'curator' | Identity that committed the decision |
+| `editorial_score_boost` | smallint | 0 (NOT NULL) | Additive bump applied at surfacing-time (`significance_score + editorial_score_boost`); set by `[+]` markings |
+
+Plus partial index `idx_pois_editorial_curated_true ON pois(id) WHERE editorial_curated = TRUE` for fast TTS-gate lookups (the FALSE/NULL rows dominate the table and aren't worth indexing).
+
+Migration applied 2026-05-18 via `scripts/poi-import/apply-editorial-curation.mjs`. All verifications passed (columns, index, sanity counts).
+
+### Export/import flow — `scripts/curation/`
+
+New standalone package (own `package.json`, `pg` + `dotenv` + `tsx`, mirrors `scripts/poi-import/` convention).
+
+**`scripts/curation/export.ts`** — pulls live POIs that clear the active per-category floor (or global 70) and emits a markdown checklist grouped by category. Pre-marks the 14 known noise items (6 originals + 8 post-v1-listen) as `[r]` with curator's previously-captured rejection notes. Three "Curator Additions" entry shapes documented inline in the output for net-new editorial seeds and manual boosts.
+
+CLI:
+```
+cd scripts/curation
+npx tsx export.ts --output ../../docs/poi-curation/2026-05-18-v1-launch-slate.md \
+                  --use-category-floors --nevada-filter
+```
+
+Decision marks recognized:
+
+| Mark | Meaning |
+|---|---|
+| `[x]` | Approve for TTS generation |
+| `[r]` | Reject — do not generate |
+| `[+]` | Approve **and** boost (default +20) |
+| `[+N]` | Approve **and** boost by N (1–100) |
+| `[ ]` | Unmarked — skip for this batch; remains `editorial_curated = NULL` |
+
+**`scripts/curation/import.ts`** — reads the marked-up markdown back. Default mode is `--dry-run`; commit with `--apply`. For existing POI entries, parses `POI id`, decision mark, and note line and writes the UPDATE. For Curator Additions:
+
+1. **Bare name** (`- [+] Mt. Whitney`): exact / normalized / token-set fuzzy match against `pois.name`. If exactly one matches, set `editorial_curated = TRUE` + `editorial_score_boost = N`. Multiple matches flagged for clarification.
+2. **Name + hint** (`- [+] Mono Lake (Eastern Sierra)`): match w/ substring hint filter on POI name.
+3. **Net-new editorial seed** (`- [+] Painted Dunes — Lassen Volcanic NP — coords 40.491,-121.421 — category geology — score 80`): INSERT new POI row with `source_type='editorial'`, `confidence_score=1.0`, `editorial_status='verified'`, baseline score (default 75 or `--score-default N` or `score N` segment), coords required.
+
+Each entry's success/failure is logged inline as `<!-- IMPORT: ... -->` comments in an annotated sibling file (`<input>.imported.md` for `--apply`, `<input>.import-preview.md` for dry-run). The original file is never mutated.
+
+### V1 launch sequence
+
+1. Migration applied ✓
+2. Both scripts written ✓
+3. V1 launch slate exported ✓ at [docs/poi-curation/2026-05-18-v1-launch-slate.md](../poi-curation/2026-05-18-v1-launch-slate.md) — **230 POIs** in scope across 8 categories, **13 pre-marked rejections** matched (3 Jurassic World naming variants didn't resolve to a live row, which is expected — only one variant exists in the catalog after dedup).
+
+   Distribution:
+
+   | Category | Count | Effective floor |
+   |---|---:|---:|
+   | architecture | 15 | 70 |
+   | art | 13 | 70 |
+   | geology | 2 | 60 |
+   | hidden_gems | 9 | 70 |
+   | history | 56 | 70 |
+   | local_culture | 24 | 70 |
+   | nature | 110 | 65 |
+   | recreation | 1 | 70 |
+   | **total** | **230** | |
+
+4. **HOLD** — Telegram-pinged curator. No TTS generation until curator returns the marked-up checklist and `import.ts --apply` lands the decisions.
+
+5. After curator approves: precache script(s) gate change — switch `precache-top-tier-pois.ts` and similar from raw-score gating to `WHERE editorial_curated = TRUE`. Captured as a code-change todo, not part of this migration.
+
+## Geology v1 path — editorial curation
+
+**Decision:** rather than wait for the structural fix (Path 1: extend the P31 bonus to editorial-source rows with `venue_metadata.wikidata` QIDs — bumped to v1.1 backlog), use the new Curator Additions mechanism to land curator-authority geology entries directly in the v1 slate. The geology corpus is structurally small (58 live POIs, only Mt. Whitney clears 60) and the algorithm cannot fix that on its own.
+
+Examples the curator is likely to add via `[+]` boost or new editorial seed:
+
+| Geological feature | Likely shape | Notes |
+|---|---|---|
+| Mt. Whitney | `[+]` (already in catalog at editorial 80, boost surfaces it above the v1 slate noise) | Tallest in contiguous US |
+| Half Dome | `[+]` boost or new seed | Yosemite icon |
+| El Capitan | `[+]` boost or new seed | Yosemite |
+| Mono Lake | `[+] (Eastern Sierra)` | Tufa formations, ancient saline lake |
+| Long Valley Caldera | New seed | Active caldera near Mammoth |
+| Anza-Borrego badlands | New seed | Desert badlands |
+| Mount Shasta | New seed if not present | Volcano |
+| Mount Lassen | `[+]` or new seed | Active volcano |
+| Devils Postpile | New seed | Columnar basalt |
+| Trona Pinnacles | New seed | Tufa spires |
+| Pinnacles National Park | `[+]` | Volcanic remnants |
+| Yosemite Falls | `[+] (Yosemite National Park)` | Already in catalog at 65 (post-A1) |
+| Sequoia / General Sherman | `[+]` | World's largest tree by volume |
+| Bristlecone Pines | New seed | Oldest trees on earth |
+| Painted Dunes | New seed (Lassen VNP) | Iron-oxide cinder cones |
+| Bumpass Hell | New seed (Lassen VNP) | Hydrothermal area |
+| San Andreas Fault (Carrizo Plain) | New seed | Most photogenic fault exposure |
+| Death Valley (as POI) | `[+]` or new seed | Lowest point in NA |
+
+This is the v1 path. The structural fix (Path 1 — P31 bonus extended to editorial rows) remains the right long-term play and is in the v1.1 backlog below; until it lands, the curator's `[+]` and new-seed authority covers the gap.
+
+## Nevada longitude pre-filter (v1) + SPARQL P131=Q99 (v1.1)
+
+**Decision:** ship the export script with an optional `--nevada-filter` flag that applies `ST_X(location::geometry) <= -114.5` at SELECT time. This is a coarse quick-fix; the proper importer-level fix is bundled with C1 (GNIS importer expansion) in the v1.1 backlog.
+
+**Spec correction noted at implementation time:** the curator's original spec text was `ST_X >= -114.5`, which mathematically excludes California (CA longitudes are at -118 to -122, all less than -114.5). The operator was inverted; intent was "exclude POIs east of the rough CA–NV border", which is `<=` in SQL syntax. Implementation uses `<=`. **Flagged to curator** alongside the launch-slate ping.
+
+**Limits of the coarse filter:**
+- Las Vegas (-115.14) is west of -114.5 and is NOT excluded by this filter
+- Central-Nevada peaks at -118 to -119 share longitudes with eastern California and CANNOT be cleanly separated by longitude alone
+
+The v1 launch slate ran with `--nevada-filter` on. Eight Las Vegas / central-NV bleed POIs may still appear in the 230-row slate; the curator can `[r]` them during review. The proper fix in v1.1 is `?item wdt:P131+ wd:Q99` (transitive admin-tree filter) added to `scripts/poi-import/sources/wikidata.ts` `buildQuery()`, plus re-import + dedup + recompute, plus a sweep to flag already-imported NV rows for cleanup.
+
+## Editorial boost mechanism
+
+**Decision:** `[+]` (with optional `[+N]` magnitude override) is the curator's authority to lift a POI above the floor without disturbing the underlying `significance_score`. The mechanism stores the magnitude in `editorial_score_boost` (smallint, default 0) and the import script writes:
+
+```sql
+UPDATE pois
+   SET editorial_curated     = TRUE,
+       editorial_score_boost = N,
+       editorial_curation_note = 'Manual boost via curation/import.ts. match_reason=...',
+       editorial_curated_at  = NOW()
+ WHERE id = <matched-id>
+```
+
+Surfacing-time queries that want to honor boosts should read `(significance_score + editorial_score_boost)` instead of bare `significance_score`. (The lookahead RPCs `get_nearby_pois` and `get_corridor_pois` haven't been updated yet — separate code change, captured in v1.1 backlog.)
+
+**Three Curator Additions entry shapes the import script handles:**
+
+| Shape | Use case | Example | Action |
+|---|---|---|---|
+| Bare name | Boost an existing POI (one match) | `- [+] Mt. Whitney` | Fuzzy-match by exact/normalized/token-set; UPDATE existing row |
+| Name + hint | Disambiguate multi-match by region | `- [+] Mono Lake (Eastern Sierra)` | Match w/ substring hint filter on POI name |
+| Full seed | Insert net-new editorial POI | `- [+] Painted Dunes — Lassen VNP — coords 40.491,-121.421 — category geology` | INSERT new row, `source_type='editorial'` |
+
+Match results are logged inline in the annotated output sibling file so the curator sees what happened on each line.
+
+## v1.1 backlog tracker
+
+Added by this decision, deferred to v1.1:
+
+- **Path 1 — extend P31 bonus to editorial-source rows.** Currently `recompute-significance.ts` only awards the +10 P31 bonus when `source_type = 'wikidata'`. Editorial rows that carry a `venue_metadata.wikidata` QID (the 75 audited editorial venues from 2026-05-07) should also be eligible. This is the structural fix for the geology layer not benefiting from A1 in the post-rebalance distribution.
+- **SPARQL `?item wdt:P131+ wd:Q99` California filter** on `scripts/poi-import/sources/wikidata.ts` `buildQuery()`. Verification of property-path × `wikibase:box` combinatorics already complete in the Nevada-bleed tracking item above. Implementation deferred to bundle with C1.
+- **C1 — GNIS importer expansion** to add Volcano, Basin, Plateau, Cliff, Canyon, Valley to the current Summit/Falls/Cape/etc. whitelist. Pairs naturally with the SPARQL fix (both are importer-scope; both will require re-import + dedup + recompute).
+- **Surfacing queries honor `editorial_score_boost`.** `get_nearby_pois` and `get_corridor_pois` currently filter on bare `significance_score`. Switch to `(significance_score + COALESCE(editorial_score_boost, 0))` so curator-boosted POIs surface as the curator intended. Small RPC-signature-preserving patch.
+- **Precache scripts gate on `editorial_curated = TRUE`.** `precache-top-tier-pois.ts` and `precache-popular-routes.ts` currently use ad-hoc exclusion lists (`EXCLUSION_NAMES` / `--exclude-ids`). After v1 curator slate lands, switch their POI-fetch SELECT to add `AND editorial_curated = TRUE`. Removes the per-batch exclusion-list maintenance.
+
 ## Out of scope for this decision
 
 - POI narration template authoring (`server/prompts/pois/*.js` if separate, or surface modifier on region templates) — implementation arc post-cutoff.
