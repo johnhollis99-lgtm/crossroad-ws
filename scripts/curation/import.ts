@@ -406,6 +406,69 @@ function normalizeName(s: string): string {
     .trim();
 }
 
+/**
+ * Loose-match normalization. Goes beyond `normalizeName` to also:
+ *   - Strip parenthetical disambiguators (e.g. "Bristlecone Pines (Schulman Grove)" → "bristlecone pines")
+ *   - Expand abbreviations: Mt./Mt → Mount, St./St → Saint, Ft./Ft → Fort
+ *   - Strip well-known park/monument suffixes so "Devils Postpile" matches
+ *     "Devils Postpile National Monument", "Yosemite National Park" matches "Yosemite"
+ *
+ * The same transformation is applied to DB names via `loosePoiNameSqlExpr()` so
+ * the bidirectional comparison ("curator's bare name" ↔ "full DB name") works
+ * regardless of which side carries the suffix or abbreviation.
+ *
+ * Limits: this does NOT handle different-name cases (e.g. "Mount Lassen" →
+ * "Lassen Peak"), naive stemming (pines/pine), or articles ("Ancient"
+ * prefix). Those still fall through to the token-set fuzzy pass or require
+ * curator coords + category for a net-new editorial seed.
+ */
+function normalizeNameLoose(s: string): string {
+  let t = s.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
+  // Strip parens content
+  t = t.replace(/\([^)]*\)/g, ' ');
+  // Expand abbreviations (with or without trailing dot)
+  t = t.replace(/\bmt\.?\b/g, 'mount');
+  t = t.replace(/\bst\.?\b/g, 'saint');
+  t = t.replace(/\bft\.?\b/g, 'fort');
+  // Strip park/monument suffixes
+  t = t.replace(/\s+(national park|national monument|national historic park|national historical park|state park|state historic park|state historical park|state beach|state historic site)\s*$/i, '');
+  // Collapse non-alphanumeric to spaces
+  t = t.replace(/[^a-z0-9]+/g, ' ').trim();
+  return t;
+}
+
+/**
+ * Build the SQL expression that mirrors `normalizeNameLoose` for a column
+ * reference (e.g. `p.name`). Used inside WHERE clauses for the loose-match
+ * pass. Postgres regex \m and \M are word boundaries.
+ *
+ * Backslashes here are doubled because they're in a JS string that will be
+ * sent as SQL — `\\m` in JS becomes `\m` in the wire-level SQL.
+ */
+function loosePoiNameSqlExpr(columnExpr: string): string {
+  return `
+    btrim(regexp_replace(
+      regexp_replace(
+        regexp_replace(
+          regexp_replace(
+            regexp_replace(
+              regexp_replace(
+                regexp_replace(lower(${columnExpr}), '\\(([^)]*)\\)', '', 'g'),
+                '\\mmt\\.?\\M', 'mount', 'g'
+              ),
+              '\\mst\\.?\\M', 'saint', 'g'
+            ),
+            '\\mft\\.?\\M', 'fort', 'g'
+          ),
+          '\\s+(national park|national monument|national historic park|national historical park|state park|state historic park|state historical park|state beach|state historic site)\\s*$', '', 'gi'
+        ),
+        '[^a-zA-Z0-9]+', ' ', 'g'
+      ),
+      '^\\s+|\\s+$', '', 'g'
+    ))
+  `;
+}
+
 function tokenSetRatio(a: string, b: string): number {
   const A = new Set(normalizeName(a).split(/\s+/).filter(Boolean));
   const B = new Set(normalizeName(b).split(/\s+/).filter(Boolean));
@@ -463,7 +526,29 @@ async function fuzzyMatchName(
     return resolve(normRows.rows as PoiLookup[], 'normalized_name');
   }
 
-  // Third pass: token-set ratio >= 0.6 with first-token-anchor (avoids
+  // Third pass: loose-normalized exact match (abbreviations + park-suffix
+  // bidirectional + parens-strip). Lets curator write the natural form
+  // ("Mt. Whitney" or "Devils Postpile") and still hit the DB's
+  // canonical name ("Mount Whitney" / "Devils Postpile National Monument").
+  const looseInput = normalizeNameLoose(name);
+  if (looseInput) {
+    const looseRows = await pool.query(
+      `SELECT p.id, p.name, pc.slug AS category_slug,
+              CASE WHEN p.location IS NULL THEN NULL ELSE ST_Y(p.location::geometry) END AS lat,
+              CASE WHEN p.location IS NULL THEN NULL ELSE ST_X(p.location::geometry) END AS lon,
+              p.source_type, p.significance_score::int AS significance_score
+         FROM public.pois p
+         JOIN public.poi_categories pc ON pc.id = p.category_id
+        WHERE p.merged_into IS NULL
+          AND ${loosePoiNameSqlExpr('p.name')} = $1`,
+      [looseInput],
+    );
+    if (looseRows.rows.length > 0) {
+      return resolve(looseRows.rows as PoiLookup[], 'loose_normalized');
+    }
+  }
+
+  // Fourth pass: token-set ratio >= 0.6 with first-token-anchor (avoids
   // hitting every "Bridge" in the catalog when curator types "Foo Bridge").
   const firstToken = normTarget.split(/\s+/)[0] ?? '';
   if (!firstToken) return { matches: [], reason: 'no_tokens' };
