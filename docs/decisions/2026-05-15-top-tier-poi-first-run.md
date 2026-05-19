@@ -608,6 +608,84 @@ After curator listening:
 - If specific narrations need rework → follow-up cycle with retry for failed-quality POIs (and the 2 JSON failures above)
 - If systemic prosody / template issues surface → reopen the prosody arc with targeted diagnostics
 
+## Motion & Distance Framing Discovery (2026-05-18, cycle-3 sampler listen)
+
+The cycle-3 sampler listen surfaced a systemic framing failure across the first POI run: many narrations produced **sensory-proximity language** that assumed the listener was standing at the feature ("you can feel the heat," "you can see the black sand," "the smell of fumaroles"). In driving mode the listener is moving past at speed, possibly miles from the feature. The proximity language reads as off — sometimes outright incorrect — for the actual listening context.
+
+### Root cause
+
+The narrator_b × Family POI template already had a CONTENT GUIDELINES section that banned "predicted perceptions" and "hypothetical sensory" patterns in a negative-only list:
+
+```
+* Predicted perceptions: "You'll notice," "You might see," "You can feel..."
+* Hypothetical sensory: "Imagine the heat," "Picture the..."
+```
+
+The ban wasn't sufficient. The model kept producing these patterns because:
+
+1. **No positive alternatives were named.** Banning a verb without offering a substitute leaves the model with a hole — it falls back to the banned pattern because it doesn't know what else to write.
+2. **The driving-mode context wasn't surfaced as load-bearing.** The template never said "the listener is moving past at speed, possibly miles from the feature." Without that frame, sensory-proximity reads as a natural way to engage; with it, the pattern reads as a clear category error.
+
+### Template change
+
+Added a new dedicated section, "MOTION & DISTANCE FRAMING (driving-mode default — non-negotiable)" between PROSODY DISCIPLINE and PRECISE SCIENTIFIC AND HISTORICAL DATA. The new section:
+
+- Opens with the load-bearing context: "Narrations are heard during MOTION — the listener is driving past at highway or surface-road speed, possibly miles from the feature."
+- AVOID list: the same "you can feel / see / smell / sound of / right in front of you" patterns from the CONTENT GUIDELINES ban, restated.
+- USE list (the addition): "lies / rises / extends / sits / spreads across / off to the east / ahead on your route / back behind us / the road parallels / you've just crossed / you're passing." Plus bare descriptive framing: "The Carrizo Plain segment of the San Andreas Fault is the most visible..."
+- Sensory-relevant features (geothermal, painted landscapes) get a factual-rephrase pattern:
+  - NOT: "you can feel the heat from the fumaroles"
+  - YES: "Fumaroles vent steam at 250°F from a hydrothermal system fed by Lassen's magma chamber"
+
+The section ends by scoping the rule: driving-mode default for the current run. Hiking and city-sightseeing modes will get separate templates when audio is generated for those modes — those CAN use proximity language since the user is actually at the feature.
+
+### SSML decimal handling sub-fix
+
+Surfaced in the same sampler listen: "magnitude 7.9" in the San Andreas Fault narration read as "magnitude seventy-nine."
+
+**Root cause (analogous to the comma-stripping subsection in the prosody arc decision doc):** the cardinal-content sanitizer at [scripts/lib/tts/ssml.ts](../../scripts/lib/tts/ssml.ts) strips non-digit characters from `<say-as interpret-as="cardinal">N</say-as>` content because Google's TTS silently drops cardinal blocks containing commas (confirmed empirically 2026-05-18 via `scripts/diag-ssml-comma-cardinal.ts`; "6,380" produced 5336 bytes vs bare "6380" at 11227 bytes). The sanitizer was a `replace(/[^0-9]/g, '')` — it stripped the comma as designed but ALSO stripped the decimal point. "7.9" became "79" inside the cardinal wrap, read as "seventy-nine."
+
+**Fix:** detect decimals BEFORE wrapping. When the matched number token contains `.`, skip the cardinal-wrap entirely and emit the bare number as plain text. Google's default reader handles "7.9" correctly as "seven point nine" and "4.5 billion years" as "four point five billion years" without SSML help — the whole-number wrap is only needed for large comma-separated numbers (where Google's default would read "14,495" as "fourteen comma four hundred ninety-five").
+
+New `SkipReport.type='decimal'` value lets the precache log decimal-skip events to `llm_calls` the same way it logs highway and year skips, for adherence-audit purposes.
+
+Validated with 10 unit tests at `scripts/lib/tts/__tests__/ssml.test.ts` covering decimal skip + regression guards for the existing cardinal/year/highway/pause behaviors. The bug class is structurally the same as the comma-stripping subsection from the prosody arc: Google's `<say-as cardinal>` is touchier than its API docs suggest, and inside-tag sanitization has to be specifically chartered for every non-digit character that might appear.
+
+### Mount Whitney factuality correction
+
+The cycle-3 Mount Whitney render gave an incorrect distance from Mount Whitney to Badwater Basin in Death Valley. The source description (Wikipedia / Wikidata-derived) mentions the elevation but doesn't give the Whitney-to-Badwater distance directly; the model filled in a number from training data and got it wrong.
+
+**Fix (per-POI, scoped):** added a `FACT_OVERRIDES` map to `scripts/precache-curated-pois.ts` keyed by POI id. Per-POI fact-anchor strings prepend to the description before it reaches `template.buildUserPrompt`. The template's existing "Reference description (factual, neutral — your primary grounding; do not recite verbatim)" framing wraps the augmented description, so the anchor reads as part of the grounding context, not a directive.
+
+First entry — Mount Whitney (`6dbb1b74-7aac-4f1e-91ad-9df46391e1b0`):
+
+```
+FACT ANCHOR: Mount Whitney sits about 84 miles west of Badwater Basin in
+Death Valley — the highest point in the contiguous United States and the
+lowest point in North America, separated by roughly that distance.
+```
+
+**The pattern is reusable** for any future POI where the source description leaves a high-confidence-to-LLM fact ambiguous or absent. Build chat verifies each entry against an authoritative source before adding it to the map. Anchors should:
+
+- Be specific (named numerical fact, not generic context)
+- Mirror the source-description register (factual / neutral, no narration shape)
+- Stay short — the bulk of grounding stays in the source description
+
+This is **not** a substitute for fixing the upstream data quality (data quality issues for individual POIs go into [docs/data-quality-issues.md](../data-quality-issues.md)). It's a small-blast-radius mechanism for one-off fact corrections that arise during sampler review, without touching DB rows or re-running entire importers.
+
+### Cycle-4 re-render
+
+All three fixes bundled into commit `2b0e085`. Re-render of all 189 curated POIs fired immediately afterward; same `pois/{poi_id}/narrator_b_family_standard.opus` storage paths (upsert=true, no DB row changes). The 2 previously-failed POIs (Fremont Peak, Kuruvungna Springs) get fresh attempts as part of the full re-render and should land cleanly with the corrected pipeline.
+
+Per-fix verification samplers (4 priority POIs, tighter than the 9-sampler cycle-3 set):
+
+1. **Bumpass Hell** — verify motion-aware framing landed (sensory-proximity gone; fumaroles described factually)
+2. **San Andreas Fault (Carrizo Plain)** — verify "magnitude 7.9" reads as "seven point nine" (SSML decimal fix)
+3. **Mount Whitney** — verify the ~84-mile Badwater distance lands correctly (factuality correction)
+4. **Mono Lake** OR **Long Valley Caldera** — soul-doctrine flagship spot-check for motion framing
+
+URLs and stats land in this section as a sub-block once the re-render completes.
+
 ## Out of scope for this decision
 
 - POI narration template authoring (`server/prompts/pois/*.js` if separate, or surface modifier on region templates) — implementation arc post-cutoff.
