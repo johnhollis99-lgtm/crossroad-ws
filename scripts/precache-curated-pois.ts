@@ -157,14 +157,18 @@ async function main(): Promise<void> {
     { auth: { persistSession: false } },
   );
 
-  // Template lookup (same as top-tier — single voice, single template)
+  // Template lookup (same as top-tier — single voice, single template).
+  // Signature changed in H1.5.1 (2026-05-19) — flat audience-keyed registry;
+  // narrator_slug derivable from template.narratorSlug (NARRATOR_SLUG const
+  // kept for Storage-path filename construction).
   const { pickPoiPrompt } = require(POI_TEMPLATES_PATH) as {
-    pickPoiPrompt: (n: string, a: string, d: string) => {
+    pickPoiPrompt: (a: string, d: string) => {
       systemPrompt: string;
       buildUserPrompt: (poi: any) => string;
+      narratorSlug: string;
     };
   };
-  const template = pickPoiPrompt(NARRATOR_SLUG, AUDIENCE_MODE, DEPTH);
+  const template = pickPoiPrompt(AUDIENCE_MODE, DEPTH);
 
   // Voice config lookup
   const { data: voiceRows, error: vcErr } = await supabase
