@@ -1459,6 +1459,18 @@ Decision required: pick an approach during Phase H planning. The current addendu
 
 This concern is independent of [docs/decisions/2026-05-15-narrator-b-prosody.md](docs/decisions/2026-05-15-narrator-b-prosody.md) (which addresses *region* narration prosody) — they share the "don't auto-spend without curator eyes" principle but operate on different content surfaces.
 
+**Resolution path landed 2026-05-18:** the hybrid curation model + `editorial_curated` schema + `scripts/curation/{export,import}.ts` markdown-checklist loop. See [docs/decisions/2026-05-15-top-tier-poi-first-run.md](docs/decisions/2026-05-15-top-tier-poi-first-run.md) §Curation Model. Removal from this section pending v1 launch + first full curator workflow lap proving the model end-to-end (currently mid-lap: 189 POIs curated, TTS run in progress).
+
+### Driving-mode cluster suppression in the lookahead worker (raised 2026-05-18)
+
+The curator-gated editorial set provides per-POI quality filtering but does not encode per-mode surfacing density. Per [docs/roadstory-narration-curation-addendum.md §10.3](docs/roadstory-narration-curation-addendum.md), the same POI can be **prime drive-by material** in a sparse rural segment yet **redundant noise** in a dense urban one — curator approves liberally for the catalog; the runtime decides per-mode whether to surface.
+
+**Concrete rule the lookahead worker must implement (driving mode only):** when ≥3 same-category approved POIs (defaults: `cluster_min_count=3`, `cluster_radius_corridor_mi=5`) fall within a corridor distance window along the route, only the top-of-cluster entry (highest `significance_score + editorial_score_boost`) surfaces in driving mode for that trip. Suppressed POIs **remain in the catalog** and surface normally in Walking/Hiking (80m proximity + walking pace naturally bound the trigger set) and City Sightseeing (tap-to-hear; user controls density).
+
+**Why this lives here, not in the addendum-only:** the cluster-suppression pass is a **server-side lookahead worker change** with code surface in the WS server's queue pipeline, not a pure spec/curation concern. It needs an implementation prompt during Phase I.
+
+**v1 status — not blocking.** The 189-POI v1 launch slate is sparse enough across California that driving-mode density rarely fires. The rule is captured here so the runtime work is scoped before the slate grows. Bundles with other lookahead-worker work in Phase I (per addendum §10).
+
 ## Session workflow
 
 When context fills (PreCompact hook fires), update this CLAUDE.md with current project state, then `/clear` to restart fresh. Proactively save when significant new screens, migrations, or server routes are completed. This file is the single source of truth — MEMORY.md just points here.

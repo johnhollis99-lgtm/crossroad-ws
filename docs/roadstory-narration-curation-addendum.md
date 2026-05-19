@@ -661,6 +661,32 @@ When the user is on the Hiking page, swap step 2b for the hiking RPC variant (80
 
 Standard behavior. Already in spec.
 
+### 10.3. Mode-dependent significance and density-aware ranking
+
+**Principle:** significance is mode-aware. The same POI has different signal value depending on trip mode and the density of surrounding catalog. The curator approves a POI for the catalog as a single binary decision (`editorial_curated = TRUE`); the runtime decides per-mode whether to surface, narrate, or suppress based on local context.
+
+**Canonical illustration — the green church.** A small green-painted historic church on US-395 in eastern Sierra ranchland is **prime drive-by material**: 30 miles of empty highway makes it a meaningful inflection point in the trip, and the listener has the attention budget for a 90-second narration about it. The same listener walking through downtown LA past 15 historic churches in a six-block radius does **not** want an auto-narration for every one of them — but does want them on the map as **radar dots they can tap when one catches their eye**. Same POI, same significance score, fundamentally different surfacing behavior. This is the load-bearing example for everything in this section.
+
+**Per-mode policy:**
+
+- **Walking / Hiking mode.** Density is a feature. The 80m proximity trigger radius (§10.1 hiking override) and walking pace (≤4 mph) naturally bound the trigger set — even in a dense district, only POIs the listener is physically walking past get queued. **All approved POIs in scope; no cluster suppression.**
+
+- **City Sightseeing mode.** Auto-queue is disabled (§10.1); the user taps a radar dot to hear about a POI. The user controls density by choosing what to tap. **All approved POIs in scope, surfaced as radar dots; no cluster suppression.**
+
+- **Driving mode.** Needs cluster-aware ranking. When **N ≥ 3 same-category approved POIs** fall within **5 corridor-miles** of each other along the route, only the **top-of-cluster** entry (highest `significance_score + editorial_score_boost`) surfaces for that trip. Suppressed POIs **remain in the catalog** and surface normally in Walking/Hiking and City Sightseeing modes.
+
+**Defaults (curator-tunable):**
+
+| Param | Default | Notes |
+|---|---:|---|
+| `cluster_min_count` | 3 | Minimum same-category POIs to trigger suppression |
+| `cluster_radius_corridor_mi` | 5 | Corridor-distance window |
+| `cluster_top_n_kept` | 1 | How many top-of-cluster entries survive (curator may set 2 for very dense urban segments) |
+
+**Curation implication.** Approve liberally for the catalog. **Do not** withhold approval on a POI because it might be redundant in some mode — the runtime handles mode-specific suppression. Editorial-gate decisions are about per-POI quality, not per-mode appropriateness. A `[+]` boost on a POI in a dense cluster correctly elevates it as top-of-cluster in driving mode and as a higher-ranked radar dot in city mode; the underlying catalog state is the same.
+
+**Implementation status — v1.5 / Phase I, not v1-blocking.** The cluster-suppression pass lands in the lookahead worker (per §10 step 2b/3) and is captured in CLAUDE.md "Open architectural concerns" as a v1 lookahead requirement. v1 ships without suppression — the curator's editorial-gate decisions (`editorial_curated = TRUE` set) provide adequate first-cut filtering for the launch slate (189 POIs across California is sparse enough that driving-mode density rarely fires). The rule is captured here so curation behavior aligns with future runtime behavior from day one.
+
 ---
 
 ## 11. Migration Order
@@ -710,6 +736,7 @@ The build chat should flag these back for human decision when relevant:
 - Group trip / shared narration synchronization (no changes needed; group narrator selection follows the lead user's pick)
 - The voice audition workflow (unchanged; covered in SKILL.md)
 - Monetization tier gating (TBD — likely the Free tier gets Soul-only Light Touch with Narrator A; Road Pass unlocks all of the above)
+- **Conversational Query Mode** (v1.5, captured in [docs/decisions/2026-05-18-conversational-query-mode.md](decisions/2026-05-18-conversational-query-mode.md)). This addendum covers the **push** narration model — unsolicited audio triggered by GPS, region transitions, iconic-local overrides, and the lookahead queue. The query mode is a parallel **pull** model — STT-activated user questions ("hungry, anything good around here?"), same brain answering with current trip context. The push and pull models share the catalog, voice config, and SSML pipeline but are distinct interaction paradigms. v1 ships push-only; v1.5 layers pull on top.
 
 ---
 

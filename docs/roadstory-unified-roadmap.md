@@ -523,6 +523,30 @@ Final cleanup, content QA, performance.
 
 ---
 
+## v1.5 Backlog
+
+Items deferred past v1 public launch. Sequencing happens in a v1.5 design lap after 2–4 weeks of real-user push-narration data.
+
+### Conversational Query Mode (Voice Assistant)
+
+**Decision doc:** [docs/decisions/2026-05-18-conversational-query-mode.md](decisions/2026-05-18-conversational-query-mode.md)
+
+Parallel **pull** interaction paradigm to v1's **push** narration. STT-activated user questions ("hungry, anything good around here?") answered using current location + trip context, same brain as the narration system, same voice and SSML pipeline.
+
+- **v1 anti-preclusion checklist (must land before v1 ships):**
+  - Audio queue priority enum supports a `query_response` tier above Iconic Local Override (lookahead-worker work in Phase I leaves room for one more priority slot)
+  - Reserve `server/prompts/queries/` as an empty directory tree with README explaining planned use
+  - Driving page UI (`app/drive.tsx`) reserves a button position for an "Ask" affordance (icon-only mic button, top-right of now-playing card); hidden under `__DEV__` or feature flag in v1
+- **v1.5 design lap resolves:** external-data policy (Option A editorial-only / Option B partner data / Option C hybrid-with-opt-in), tier-gating numbers (queries-per-trip on Free vs. unlimited on Road Pass), single-turn vs. multi-turn, regional-caching policy
+- **Cost envelope:** ~$0.02/query (Haiku + Google TTS), ~$0.10/trip per Road Pass user at typical usage of 5 queries/trip
+
+### Other v1.5 backlog items already noted
+
+- **Push notifications** — captured at [1.3 UI/UX section](#13-ui--ux-handoff-xroad_ui_ux_cd_pdfpdf)
+- **Kids mode sub-tiers by age (5yo vs 11yo)** — captured at §6 decisions-that-can-wait #8
+
+---
+
 ## 5. Critical Path & Parallel Tracks
 
 Visualizing what blocks what:
