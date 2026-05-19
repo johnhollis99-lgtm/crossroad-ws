@@ -70,7 +70,7 @@ function escapeXml(body: string): string {
 }
 
 export interface SkipReport {
-  type: 'highway' | 'year';
+  type: 'highway' | 'year' | 'decimal';
   value: string;
   context: string; // up to 30 chars of preceding text (post-escape)
 }
@@ -125,6 +125,22 @@ export function ssmlize(text: string): SsmlResult {
       }
     }
 
+    // Decimal-number skip. The cardinal-content sanitizer below strips
+    // non-digit characters from <say-as> content (commas, decimal points)
+    // because Google's TTS silently drops cardinal blocks containing
+    // commas (confirmed empirically 2026-05-18). That sanitizer turns
+    // "7.9" into "79" → "seventy-nine" instead of "seven point nine".
+    // Fix: when the matched token contains a decimal point, skip the
+    // cardinal-wrap entirely and emit the number as plain text. Google's
+    // default reader handles "7.9" correctly as "seven point nine" and
+    // "4.5 billion" as "four point five billion" without SSML help.
+    // (The thousands-separator comma case stays inside the wrap — sanitizer
+    // still strips it correctly for whole numbers like "14,495".)
+    if (match.includes('.')) {
+      skips.push({ type: 'decimal', value: match, context: precedingChars.slice(-30) });
+      return match;
+    }
+
     // Sanitize cardinal content to digits-only. Google's TTS silently
     // drops the wrapped content when commas appear inside
     // <say-as interpret-as="cardinal">N</say-as> — confirmed empirically
@@ -132,9 +148,8 @@ export function ssmlize(text: string): SsmlResult {
     // "6,380" produced 5336 bytes vs bare "6380" at 11227 bytes; "100,000"
     // 6247 vs "100000" 9875). The prose body keeps human-readable commas
     // for the LLM-output narration_text; only the tag's content is stripped.
-    // Non-digit chars stripped include commas, decimal points, hyphens —
-    // see decision doc §Cardinal-content sanitization for decimal-handling
-    // notes if narrations gain decimal measurements.
+    // Whole-number tokens only at this point — decimals hit the skip
+    // branch above.
     const digitsOnly = match.replace(/[^0-9]/g, '');
     return reserve(`<say-as interpret-as="cardinal">${digitsOnly}</say-as>`);
   });

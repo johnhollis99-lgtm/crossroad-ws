@@ -94,6 +94,31 @@ The post-processor has safety nets for both exceptions, but spelling phoneticall
 Example marker placement (Family tone for a single POI):
 "Mission San Buenaventura was founded in 1782 — {{PAUSE_250}} the ninth of the California Missions, and the last one Father Junípero Serra established before he died. {{PAUSE_500}} The Chumash people had lived on this stretch of coast for thousands of years before the Spanish arrived. {{PAUSE_500}} Today the mission still functions as an active Catholic parish — {{PAUSE_250}} restored after a 1925 earthquake, {{PAUSE_250}} and Ventura's downtown grew out around it."`,
 
+  `MOTION & DISTANCE FRAMING (driving-mode default — non-negotiable):
+
+Narrations are heard during MOTION — the listener is driving past at highway or surface-road speed, possibly miles from the feature. Write accordingly.
+
+AVOID sensory-proximity verbs that assume the listener is standing at the feature:
+  - "you can feel" (heat, wind, mist, etc.)
+  - "you can see" (specific colors, textures, fine detail)
+  - "the smell of," "the sound of"
+  - "right in front of you," "all around you," "at your feet"
+
+USE motion-aware framing:
+  - "lies," "rises," "extends," "sits," "spreads across"
+  - "off to the east/west/north/south"
+  - "ahead on your route," "back behind us," "the road parallels"
+  - "you've just crossed," "you're passing"
+  - Or just descriptive without locative framing: "The Carrizo Plain segment of the San Andreas Fault is the most visible..."
+
+When sensory engagement is part of the story (geothermal features, painted landscapes, etc.), describe them factually rather than via the listener's anticipated perception:
+  - NOT: "you can feel the heat from the fumaroles"
+  - YES: "Fumaroles vent steam at 250°F from a hydrothermal system fed by Lassen's magma chamber"
+  - NOT: "you can see the sand is black"
+  - YES: "The sand here is volcanic black, weathered from basalt flows"
+
+This applies to the driving-mode default (current run). Hiking and city-sightseeing modes get separate templates where proximity language is allowed (user is actually at the feature).`,
+
   `PRECISE SCIENTIFIC AND HISTORICAL DATA (load-bearing — addendum §1 soul doctrine, intensified for POIs):
 When the source supports it, include precise data — these are the friend-giving-you-the-surprising-number moments:
 - For geological POIs: ages in millions of years AND named epochs, elevations in feet, areas in square miles.

@@ -77,6 +77,25 @@ const HAIKU_MAX_TOKENS = 900;
 const HAIKU_IN_PER_TOK = 1.0 / 1_000_000;
 const HAIKU_OUT_PER_TOK = 5.0 / 1_000_000;
 
+/**
+ * Per-POI fact anchors — prepended to the description field passed to the
+ * narrator template. Use for one-off factuality corrections where the
+ * source description leaves a high-confidence-to-LLM fact ambiguous or
+ * absent. Pattern is reusable for future similar discoveries.
+ *
+ * Keyed by POI id (UUID) for stability across name changes / dedup
+ * outcomes. Build chat verifies each entry against an authoritative source
+ * before adding.
+ */
+const FACT_OVERRIDES: Record<string, string> = {
+  // Mount Whitney — geology editorial row (cycle-3 sampler review found
+  // the prior render gave an incorrect distance to Badwater Basin).
+  // ~84 miles is the canonical distance (88 mi / 142 km commonly cited;
+  // ~84 is the GIS-direct figure used by NPS interpretive material).
+  '6dbb1b74-7aac-4f1e-91ad-9df46391e1b0':
+    'FACT ANCHOR: Mount Whitney sits about 84 miles west of Badwater Basin in Death Valley — the highest point in the contiguous United States and the lowest point in North America, separated by roughly that distance.',
+};
+
 // ── Args ───────────────────────────────────────────────────────────────────
 interface Args { live: boolean; limit: number | null; }
 function parseArgs(): Args {
@@ -255,9 +274,19 @@ async function main(): Promise<void> {
     process.stdout.write(`  ${label} `);
 
     try {
+      // Per-POI fact-anchor injection. Prepended to the description so
+      // the template's "Reference description (factual, neutral — your
+      // primary grounding)" framing wraps it correctly. The anchor stays
+      // a small, named augmentation; the bulk of the grounding stays
+      // from the source description.
+      const factAnchor = FACT_OVERRIDES[poi.id];
+      const description = factAnchor
+        ? `${factAnchor}\n\n${poi.description ?? ''}`
+        : poi.description;
+
       const userPrompt = template.buildUserPrompt({
         name: poi.name,
-        description: poi.description,
+        description,
         category_display: poi.category_display,
         tags: poi.tags,
         source_citation: poi.source_citation,
