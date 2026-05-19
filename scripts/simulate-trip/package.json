@@ -1,0 +1,22 @@
+{
+  "name": "xroad-simulate-trip",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Phase I lookahead worker MVP — CLI simulator for virtual road trips through the curated catalog",
+  "type": "module",
+  "scripts": {
+    "simulate": "tsx index.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.105.1",
+    "dotenv": "^16.4.5",
+    "pg": "^8.13.3"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "@types/pg": "^8.11.11",
+    "tsx": "^4.19.0",
+    "typescript": "~5.9.2"
+  }
+}
