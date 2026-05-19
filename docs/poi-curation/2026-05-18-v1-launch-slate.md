@@ -2169,19 +2169,19 @@ Use this section for **net-new editorial seeds** or **manual boosts** of POIs th
 
 <!-- Add lines below; importer parses each `-` bullet. -->
 
-- [+] Mt. Whitney — soul-doctrine flagship, highest peak in the contiguous US, granite batholith story
+- [+] Mount Whitney — soul-doctrine flagship, highest peak in the contiguous US, granite batholith story
 - [+] Mono Lake — alkaline lake, tufa towers, Paiute anthropology layer, Sierra rain-shadow ecology
 - [+] Long Valley Caldera — supervolcano, geothermal activity, geologic-time-scale story
-- [+] Anza-Borrego badlands — desert geology, paleontology, Cahuilla anthropology
+- [+] Anza-Borrego Desert State Park — desert geology, paleontology, Cahuilla anthropology
 - [+] Mount Shasta — stratovolcano, sacred mountain, Modoc/Wintu anthropology
-- [+] Mount Lassen — most recent CA eruption (1914-1917), volcanic landscape
-- [+] Devils Postpile — columnar basalt, glacial geology
-- [+] Trona Pinnacles — tufa spires, Searles Lake paleoclimate
+- [+] Lassen Peak — most recent CA eruption (1914-1917), volcanic landscape
+- [+] Devils Postpile National Monument — columnar basalt, glacial geology
+- [+] Trona Pinnacles — tufa spires, Searles Lake paleoclimate (lat=35.6172, lon=-117.3658, cat=geology)
 - [+] Pinnacles National Park — Neenach Volcano transported by San Andreas Fault
 - [+] Yosemite Falls — Sierra granite, glacial sculpting
-- [+] Bristlecone Pines (Schulman Grove) — oldest individual trees on Earth, White Mountains
-- [+] Painted Dunes (Lassen) — volcanic ash + lichen, photographic landscape
-- [+] Bumpass Hell — hydrothermal area in Lassen, geothermal soul-doctrine
-- [+] San Andreas Fault (Carrizo Plain segment) — most visible fault expression in CA
+- [+] Ancient Bristlecone Pine Forest — oldest individual trees on Earth, White Mountains
+- [+] Painted Dunes (Lassen) — volcanic ash + lichen, photographic landscape (lat=40.5708, lon=-121.4244, cat=geology)
+- [+] Bumpass Hell — hydrothermal area in Lassen, geothermal soul-doctrine (lat=40.4575, lon=-121.4017, cat=geology)
+- [+] San Andreas Fault (Carrizo Plain segment) — most visible fault expression in CA (lat=35.1167, lon=-119.7833, cat=geology)
 - [+] Death Valley — lowest point in North America, Pleistocene lake, badwater geology
 

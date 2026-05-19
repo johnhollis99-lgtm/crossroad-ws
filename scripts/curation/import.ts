@@ -280,17 +280,46 @@ function parseAdditionRemainder(remainder: string): {
   seedScore: number | null;
   isNewSeed: boolean;
 } {
-  // Long-form: `Name — region — coords LAT,LON — category SLUG [— score N]`
-  // We split on em-dash (—) OR hyphen-surrounded-by-spaces ( - ) to be lenient.
-  const parts = remainder.split(/\s+[—–-]\s+/).map(s => s.trim()).filter(Boolean);
-  let name = parts[0] ?? remainder.trim();
-  let hint: string | null = null;
+  // Two notation styles are supported:
+  //   (a) Curator-preferred: `Name — note text (lat=N, lon=M, cat=SLUG[, score=N])`
+  //       — a single parens block with key=value pairs, scanned anywhere in remainder.
+  //   (b) Long-form em-dash:  `Name — region — coords LAT,LON — category SLUG [— score N]`
+  //       — kept for backward compat; the export.ts user-facing template documents (b)
+  //       but (a) is what the curator actually writes.
+  //
+  // The kv-parens block must START with one of {lat, lon, cat, category, score} —
+  // a bare hint like `(Eastern Sierra)` or `(Schulman Grove)` is NOT matched.
   let lat: number | null = null;
   let lon: number | null = null;
   let categorySlug: string | null = null;
   let seedScore: number | null = null;
 
-  // If single segment, check for parens hint at end of name
+  let cleanedRemainder = remainder;
+  const kvParenRe = /\(\s*((?:lat|lon|cat|category|score)\s*=[^()]*)\)/i;
+  const kvMatch = kvParenRe.exec(remainder);
+  if (kvMatch) {
+    const inside = kvMatch[1]!;
+    for (const pair of inside.split(',')) {
+      const eq = /^\s*(lat|lon|cat|category|score)\s*=\s*(.+?)\s*$/i.exec(pair);
+      if (!eq) continue;
+      const key = eq[1]!.toLowerCase();
+      const val = eq[2]!;
+      if (key === 'lat') lat = Number(val);
+      else if (key === 'lon') lon = Number(val);
+      else if (key === 'cat' || key === 'category') categorySlug = val.toLowerCase();
+      else if (key === 'score') seedScore = parseInt(val, 10);
+    }
+    cleanedRemainder = (
+      remainder.slice(0, kvMatch.index) + remainder.slice(kvMatch.index + kvMatch[0].length)
+    ).replace(/\s{2,}/g, ' ').trim();
+  }
+
+  const parts = cleanedRemainder.split(/\s+[—–-]\s+/).map(s => s.trim()).filter(Boolean);
+  let name = parts[0] ?? cleanedRemainder.trim();
+  let hint: string | null = null;
+
+  // If single segment, check for parens hint at end of name (only when no
+  // kv-parens block was extracted from the same position).
   if (parts.length === 1) {
     const parenM = /^(.+?)\s*\(([^)]+)\)\s*$/.exec(parts[0]!);
     if (parenM) {
@@ -299,26 +328,26 @@ function parseAdditionRemainder(remainder: string): {
     }
   }
 
-  // Parse subsequent segments
+  // Long-form em-dash segments (style b) — only fill slots not already
+  // set by the kv-parens scan.
   for (let i = 1; i < parts.length; i++) {
     const seg = parts[i]!;
     const coordM = /^coords?\s+(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)/i.exec(seg);
-    if (coordM) {
+    if (coordM && lat === null) {
       lat = Number(coordM[1]);
       lon = Number(coordM[2]);
       continue;
     }
     const catM = /^category\s+([a-z_]+)/i.exec(seg);
-    if (catM) {
+    if (catM && !categorySlug) {
       categorySlug = catM[1]!.toLowerCase();
       continue;
     }
     const scoreM = /^score\s+(\d+)/i.exec(seg);
-    if (scoreM) {
+    if (scoreM && seedScore === null) {
       seedScore = parseInt(scoreM[1]!, 10);
       continue;
     }
-    // Treat first non-keyword segment as the hint if no parens-hint already
     if (!hint) hint = seg;
   }
 
@@ -334,6 +363,38 @@ interface PoiLookup {
   category_slug: string;
   lat: number | null;
   lon: number | null;
+  source_type: string | null;
+  significance_score: number;
+}
+
+/**
+ * Tiebreaker for ambiguous fuzzy matches.
+ *
+ * When multiple rows match a curator's bare name, prefer:
+ *   1. The single editorial-source row, if exactly one exists in the set.
+ *      Curator's intent for `[+]` boosts is almost always the editorial-curated
+ *      headline POI, not a wikidata dedup leftover.
+ *   2. Otherwise, the row with the strictly-highest significance_score.
+ *      A clear score gap (>= 5 pts) signals the curator likely meant the
+ *      prominent one; a tight margin keeps the ambiguity flag on so the
+ *      curator can disambiguate explicitly.
+ *
+ * Returns the disambiguated single match + a reason tag, or null if neither
+ * rule fires cleanly (caller falls back to the multi-match path).
+ */
+function applyAmbiguityTiebreaker(rows: PoiLookup[]): { winner: PoiLookup; reason: string } | null {
+  if (rows.length <= 1) return null;
+  const editorial = rows.filter(r => r.source_type === 'editorial');
+  if (editorial.length === 1) {
+    return { winner: editorial[0]!, reason: 'tiebreaker_editorial' };
+  }
+  const sorted = [...rows].sort((a, b) => b.significance_score - a.significance_score);
+  const top = sorted[0]!;
+  const second = sorted[1]!;
+  if (top.significance_score - second.significance_score >= 5) {
+    return { winner: top, reason: 'tiebreaker_score' };
+  }
+  return null;
 }
 
 function normalizeName(s: string): string {
@@ -360,11 +421,21 @@ async function fuzzyMatchName(
   name: string,
   hint: string | null,
 ): Promise<{ matches: PoiLookup[]; reason: string }> {
+  // Apply the editorial>score tiebreaker before returning multi-match results.
+  // Single-match results pass through unchanged.
+  const resolve = (matches: PoiLookup[], baseReason: string): { matches: PoiLookup[]; reason: string } => {
+    if (matches.length <= 1) return { matches, reason: baseReason };
+    const t = applyAmbiguityTiebreaker(matches);
+    if (t) return { matches: [t.winner], reason: `${baseReason}+${t.reason}` };
+    return { matches, reason: baseReason };
+  };
+
   // First pass: exact normalized match
   const allRows = await pool.query(
     `SELECT p.id, p.name, pc.slug AS category_slug,
             CASE WHEN p.location IS NULL THEN NULL ELSE ST_Y(p.location::geometry) END AS lat,
-            CASE WHEN p.location IS NULL THEN NULL ELSE ST_X(p.location::geometry) END AS lon
+            CASE WHEN p.location IS NULL THEN NULL ELSE ST_X(p.location::geometry) END AS lon,
+            p.source_type, p.significance_score::int AS significance_score
        FROM public.pois p
        JOIN public.poi_categories pc ON pc.id = p.category_id
       WHERE p.merged_into IS NULL
@@ -372,7 +443,7 @@ async function fuzzyMatchName(
     [name],
   );
   if (allRows.rows.length > 0) {
-    return { matches: allRows.rows as PoiLookup[], reason: 'exact_name' };
+    return resolve(allRows.rows as PoiLookup[], 'exact_name');
   }
 
   // Second pass: normalized exact (strip diacritics + punctuation)
@@ -380,7 +451,8 @@ async function fuzzyMatchName(
   const normRows = await pool.query(
     `SELECT p.id, p.name, pc.slug AS category_slug,
             CASE WHEN p.location IS NULL THEN NULL ELSE ST_Y(p.location::geometry) END AS lat,
-            CASE WHEN p.location IS NULL THEN NULL ELSE ST_X(p.location::geometry) END AS lon
+            CASE WHEN p.location IS NULL THEN NULL ELSE ST_X(p.location::geometry) END AS lon,
+            p.source_type, p.significance_score::int AS significance_score
        FROM public.pois p
        JOIN public.poi_categories pc ON pc.id = p.category_id
       WHERE p.merged_into IS NULL
@@ -388,7 +460,7 @@ async function fuzzyMatchName(
     [normTarget],
   );
   if (normRows.rows.length > 0) {
-    return { matches: normRows.rows as PoiLookup[], reason: 'normalized_name' };
+    return resolve(normRows.rows as PoiLookup[], 'normalized_name');
   }
 
   // Third pass: token-set ratio >= 0.6 with first-token-anchor (avoids
@@ -398,7 +470,8 @@ async function fuzzyMatchName(
   const candRows = await pool.query(
     `SELECT p.id, p.name, pc.slug AS category_slug,
             CASE WHEN p.location IS NULL THEN NULL ELSE ST_Y(p.location::geometry) END AS lat,
-            CASE WHEN p.location IS NULL THEN NULL ELSE ST_X(p.location::geometry) END AS lon
+            CASE WHEN p.location IS NULL THEN NULL ELSE ST_X(p.location::geometry) END AS lon,
+            p.source_type, p.significance_score::int AS significance_score
        FROM public.pois p
        JOIN public.poi_categories pc ON pc.id = p.category_id
       WHERE p.merged_into IS NULL
@@ -420,16 +493,16 @@ async function fuzzyMatchName(
     const hintNorm = normalizeName(hint);
     const hintFiltered = fuzzy.filter(x => normalizeName(x.row.name).includes(hintNorm));
     if (hintFiltered.length > 0) {
-      return { matches: hintFiltered.map(x => x.row), reason: 'fuzzy_with_hint' };
+      return resolve(hintFiltered.map(x => x.row), 'fuzzy_with_hint');
     }
   }
 
   // Without hint: return all >=0.8 if uniquely identifiable; else all >=0.6
   const tight = fuzzy.filter(x => x.ratio >= 0.8);
   if (tight.length > 0) {
-    return { matches: tight.map(x => x.row), reason: 'fuzzy_tight' };
+    return resolve(tight.map(x => x.row), 'fuzzy_tight');
   }
-  return { matches: fuzzy.map(x => x.row), reason: 'fuzzy_loose' };
+  return resolve(fuzzy.map(x => x.row), 'fuzzy_loose');
 }
 
 async function applyPoiDecision(
@@ -468,6 +541,7 @@ async function applyCuratorAddition(
   add: CuratorAddition,
   boostDefault: number,
   scoreDefault: number,
+  dryRun: boolean,
 ): Promise<{ ok: boolean; message: string; action: string }> {
   if (!add.decision || add.decision.kind === 'skip') {
     return { ok: true, message: 'skipped (no decision)', action: 'skip' };
@@ -477,12 +551,13 @@ async function applyCuratorAddition(
   }
 
   const boost = add.decision.kind === 'boost' ? (add.decision.boostMagnitude ?? boostDefault) : 0;
+  const dryPrefix = dryRun ? '[dry-run] would ' : '';
 
   if (add.isNewSeed) {
     if (!add.categorySlug || add.lat == null || add.lon == null) {
       return { ok: false, message: 'new seed needs category + coords', action: 'seed_invalid' };
     }
-    // Resolve category_id
+    // Resolve category_id (read-only — safe to run in dry-run)
     const catRes = await pool.query(
       `SELECT id FROM public.poi_categories WHERE slug = $1`,
       [add.categorySlug],
@@ -491,8 +566,15 @@ async function applyCuratorAddition(
       return { ok: false, message: `unknown category slug: ${add.categorySlug}`, action: 'seed_invalid' };
     }
     const categoryId = catRes.rows[0].id;
-    const newId = randomUUID();
     const score = add.seedScore ?? scoreDefault;
+    if (dryRun) {
+      return {
+        ok: true,
+        message: `${dryPrefix}insert new editorial seed (category=${add.categorySlug} @ ${add.lat},${add.lon}, score=${score}, boost=${boost})`,
+        action: 'seed_will_insert',
+      };
+    }
+    const newId = randomUUID();
     const sourceId = `editorial:${newId}`;
     const noteText = `Curator-added editorial seed via curation/import.ts. ${add.hint ? `hint=${add.hint}; ` : ''}coords=${add.lat},${add.lon}`;
     await pool.query(
@@ -520,6 +602,7 @@ async function applyCuratorAddition(
         noteText,
       ],
     );
+    void categoryId; // categoryId is the lookup result; used in the INSERT above
     return {
       ok: true,
       message: `inserted new editorial seed id=${newId.slice(0, 8)}… score=${score} boost=${boost}`,
@@ -527,10 +610,14 @@ async function applyCuratorAddition(
     };
   }
 
-  // Manual boost path — fuzzy-match against existing POIs.
+  // Manual boost path — fuzzy-match against existing POIs (read-only — safe in dry-run).
   const match = await fuzzyMatchName(pool, add.name, add.hint);
   if (match.matches.length === 0) {
-    return { ok: false, message: `no POI matches "${add.name}"${add.hint ? ` (hint: ${add.hint})` : ''}`, action: 'match_none' };
+    return {
+      ok: false,
+      message: `no POI matches "${add.name}"${add.hint ? ` (hint: ${add.hint})` : ''} — supply coords + category to create as a net-new editorial seed`,
+      action: 'match_none',
+    };
   }
   if (match.matches.length > 1) {
     const previews = match.matches.slice(0, 5).map(m => `${m.name} (${m.category_slug}, id=${m.id.slice(0, 8)}…)`);
@@ -541,6 +628,13 @@ async function applyCuratorAddition(
     };
   }
   const m = match.matches[0]!;
+  if (dryRun) {
+    return {
+      ok: true,
+      message: `${dryPrefix}boost "${m.name}" (${m.category_slug}, id=${m.id.slice(0, 8)}…) by +${boost} via ${match.reason}`,
+      action: 'match_will_boost',
+    };
+  }
   const noteText = `Manual boost via curation/import.ts. match_reason=${match.reason}${add.hint ? `; hint=${add.hint}` : ''}`;
   await pool.query(
     `UPDATE public.pois
@@ -683,7 +777,9 @@ async function main(): Promise<void> {
     console.log(`  Applied: ${poiApplied}  Skipped: ${poiSkipped}  Failed: ${poiFailed}`);
     console.log('');
 
-    // Curator additions
+    // Curator additions — dry-run also runs read-only resolution so
+    // the curator can see match/no-match results per entry without
+    // committing.
     console.log('=== Applying Curator Additions ===');
     for (const add of parsed.additions) {
       if (!add.decision) {
@@ -695,23 +791,16 @@ async function main(): Promise<void> {
         addSkipped++;
         continue;
       }
-      if (args.apply) {
-        try {
-          const r = await applyCuratorAddition(pool, add, args.boostDefault, args.scoreDefault);
-          addOutcomes.set(add.lineNum, `${r.action}: ${r.message}`);
-          if (r.ok) addApplied++;
-          else addFailed++;
-        } catch (err: unknown) {
-          const msg = err instanceof Error ? err.message : String(err);
-          addOutcomes.set(add.lineNum, `DB error: ${msg}`);
-          addFailed++;
-        }
-      } else {
-        const summary = add.isNewSeed
-          ? `[dry-run] would insert new editorial seed (${add.categorySlug} @ ${add.lat},${add.lon}, score=${add.seedScore ?? args.scoreDefault})`
-          : `[dry-run] would fuzzy-match "${add.name}"${add.hint ? ` (hint: ${add.hint})` : ''} and boost`;
-        addOutcomes.set(add.lineNum, summary);
-        addApplied++;
+      try {
+        const r = await applyCuratorAddition(pool, add, args.boostDefault, args.scoreDefault, !args.apply);
+        addOutcomes.set(add.lineNum, `${r.action}: ${r.message}`);
+        console.log(`    ${r.ok ? '✓' : '✗'} "${add.name}"  → ${r.action}: ${r.message}`);
+        if (r.ok) addApplied++;
+        else addFailed++;
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        addOutcomes.set(add.lineNum, `DB error: ${msg}`);
+        addFailed++;
       }
     }
     console.log(`  Applied: ${addApplied}  Skipped: ${addSkipped}  Failed: ${addFailed}`);
