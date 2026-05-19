@@ -1471,6 +1471,8 @@ The curator-gated editorial set provides per-POI quality filtering but does not 
 
 **v1 status — not blocking.** The 189-POI v1 launch slate is sparse enough across California that driving-mode density rarely fires. The rule is captured here so the runtime work is scoped before the slate grows. Bundles with other lookahead-worker work in Phase I (per addendum §10).
 
+**Implementation status (2026-05-19):** the rule is **live in the Phase I.1 MVP simulator** at [scripts/simulate-trip/lookahead.ts](scripts/simulate-trip/lookahead.ts) (`clusterByCategory()` + the `POI_SUPPRESSED_CLUSTER` event type). Defaults: `cluster_min_count=3`, `cluster_radius_corridor_mi=5`, `cluster_top_n_kept=1`. The LA-Mammoth simulation confirmed 4 cluster-suppression firings in LA (history cluster downtown, nature cluster Hollywood hills) — pattern works as designed. **Still not in the server-side runtime worker** — the simulator is offline-only; the server-side path (WebSocket-emitting lookahead) is Phase I.3 work.
+
 ## Completed v1 work (catalog v1 closed 2026-05-19)
 
 Snapshot of what's landed in main as of catalog-v1-close. Curator-approved verification samplers cleared the final cycle; no further policy changes or generation cycles in flight. See [docs/decisions/2026-05-15-top-tier-poi-first-run.md](docs/decisions/2026-05-15-top-tier-poi-first-run.md) §Catalog v1 closed for the full close-out detail.
@@ -1485,8 +1487,47 @@ Snapshot of what's landed in main as of catalog-v1-close. Curator-approved verif
 - **Phase E (Regions Import & Generation) — done.** All region polygon imports, parent resolution, region-narration generation completed. NLD (`indigenous_territory`) deferred to v2 per commercial-license outreach in flight ([docs/decisions/2026-05-14-nld-deferral.md](docs/decisions/2026-05-14-nld-deferral.md)).
 - **Most of Phase G (Depth Assignment + Significance Tuning) — done.** Significance tuning fully reconciled (B1 + A1 applied + curator-gated editorial layer on top). Depth-assignment job NOT done; all 21,906 live POIs sit at `intrinsic_depth = 'standard'` per default. Brief / long depth heuristic remains an open Phase G1 item.
 - **Partial Phase B (POI Data Pipeline) — done up through editorial curation.** 5 importers live (OSM, Wikidata, NRHP, CHL, GNIS). Dedup Phase A (spatial) + Phase B (name-collapse) live. Significance recompute live (5 components: source_base / cross_source / pageviews / route_adjacency / p31_bonus). Editorial seed mechanism via `scripts/curation/import.ts` Curator Additions (manual boost + net-new seed with coords). **Not done:** narrative extraction phase (Phase B6), GNIS importer expansion (C1 — bundles with the Nevada-bleed SPARQL fix in v1.1).
+- **Phase I.1 + I.2 MVP (lookahead worker + CLI simulator) — done.** Landed post-catalog-v1-close (commit `ab33921`). Pure-function ranking pipeline at `scripts/simulate-trip/lookahead.ts` implementing addendum §10 + §10.3: effective_score = (sig + boost) × narrator_weight[category], cluster suppression (driving mode, N≥3 same-category within 5 corridor-mi), density gap (drop sig<75 within 60s of last narration end), region rate-limit (1 per 20 min). **Key design decision:** the editorial-gate IS the gate; the runtime lookahead does NOT re-apply `category_significance_floors` (the floor was the algorithm-surface filter at export.ts SELECT time; once the curator marks a POI `editorial_curated = TRUE`, the floor is done). Iconic Local Override + Pace=Light Touch + WebSocket emission + mobile UI + real GPS deferred to Phase I.3. First simulation artifact at [docs/simulations/2026-05-19-la-mammoth.md](docs/simulations/2026-05-19-la-mammoth.md) (LA → Mammoth via I-5/CA-14/US-395; 11 POI fires + 7 region fires; 8.2% airtime ratio).
 
 **Cumulative spend at close: $15.64** ($2.52 Claude + $13.12 TTS, per `llm_calls` lifetime audit). Per-narration cost averages ~$0.053 across all 295 v1 narrations.
+
+## Trip simulator (Phase I.1 + I.2 MVP, `scripts/simulate-trip/`)
+
+Self-contained package mirroring the poi-import / curation / region-import convention. Own `package.json` (pg + dotenv + tsx + @supabase/supabase-js), own `tsconfig.json`. Run from its own directory:
+
+```
+cd scripts/simulate-trip && npm install   # first time only
+npx tsx index.ts --route la-mammoth --pace full-drive \
+                 --narrator narrator_b --audience family \
+                 --output ../../docs/simulations/<timestamp>-la-mammoth.md
+```
+
+### Module layout
+
+| File | Purpose |
+|------|---------|
+| `index.ts` | CLI entry. Locked to v1 narrator_b × family × standard × full-drive (other combos rejected with explicit messages). Required: `--route`, `--output`. Optional: `--corridor-mi` (default 10). |
+| `routes.ts` | `PRESETS` map of route definitions. Each has `waypoints` (lat/lon + label), `speed_profile` (piecewise-constant mph breakpoints), `notes`. Only `la-mammoth` this cycle; namespace reserved for future presets (`pch-sf-to-la`, `sf-yosemite`, etc.). |
+| `geo.ts` | `haversineMi`, `routeLengthMi`, `milesToMinutes` (piecewise-constant speed profile), `densifyRoute`, `fmtElapsed`. |
+| `narrator-weights.ts` | Addendum §5.3 category-weight profiles for both narrator_a and narrator_b mapped to current DB category slugs (`history`→1.3 narrator_b, `hidden_gems`→1.6, etc.). Unmapped slugs default to 1.0. |
+| `queries.ts` | Direct pg PostGIS queries (Supabase JS client can't read geography or call inline PostGIS). One corridor query for POIs (`ST_DWithin` + `ST_LineLocatePoint` for route position), one intersect query for regions (`ST_Intersection` + first-segment `ST_StartPoint` for entry fraction), one for category floors, one for cached audio metadata from `storage.objects`. |
+| `lookahead.ts` | Pure-function ranking pipeline. `runLookahead(input) → { events, stats }`. Implements §10 + §10.3 rules; emits typed `TimelineEvent[]` (TRIP_START, REGION_ENTRY, REGION_RATE_LIMITED, POI_FIRED, POI_SUPPRESSED_CLUSTER, POI_SUPPRESSED_GAP, TRIP_END). |
+| `render.ts` | Markdown emitter. Timeline with `## hh:mm — Mile X, label` headings per event; suppression as `###` sub-entries; trailing summary block. Mile-based label fallback for events without lat/lon (regions). |
+
+### Hard rules baked into the simulator
+
+- **Editorial gate IS the gate.** Lookahead does NOT re-apply `category_significance_floors`. Long Valley Caldera (sig=9 + boost=20) and Devils Postpile NM (sig=8 + boost=20) fire correctly because the curator marked them `editorial_curated = TRUE`; the runtime trusts that decision.
+- **Cluster suppression in driving mode** per addendum §10.3. Defaults `cluster_min_count=3`, `cluster_radius_corridor_mi=5`, `cluster_top_n_kept=1`. Top-of-cluster by `effective_score = (sig + boost) × narrator_weight[category]`.
+- **Density gap** drops sig<75 POIs within 60s of last narration end (override threshold tunable per `cfg.densityGapSigOverride`).
+- **Region rate-limit** 20 min between region entries — first-fire wins within window. Known limitation: doesn't prefer higher-tier regions when multiple intersect at trip-start (LA-Mammoth simulation showed the tier-60 ecoregion firing first while the tier-80 LA Basin geomorphic province got rate-limited). Future enhancement: "highest-tier wins within window" instead of "first wins."
+
+### Out of scope for I.1+I.2 (deferred to I.3)
+
+WebSocket emission of `narration_queued` events; mobile UI integration; actual audio playback; real GPS / `update_location` event handling; group trip synchronization; `narration_plays` event capture on skip / tell-me-more. Pace=Light Touch (currently rejected by CLI with `--pace=light-touch deferred` message). Iconic Local Override (Phase F not done; no POIs flagged `iconic_local=true`).
+
+### Per-route corridor profile — open question
+
+The LA-Mammoth simulation found Mt. Whitney (~13mi off Lone Pine), Bristlecone Pines (~12mi off Bishop), Trona Pinnacles (~25mi off Inyokern) all sit just outside the default 10mi corridor. **Worth considering per-route corridor profiles** — urban segments stay at 10mi to avoid noise, rural Eastern Sierra widens to 15-20mi to catch the soul-doctrine flagships. Currently the CLI accepts a single `--corridor-mi` for the whole route. Future enhancement: per-waypoint corridor override or segment-based profile.
 
 ## Session workflow
 
