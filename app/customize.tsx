@@ -619,9 +619,9 @@ export default function CustomizeScreen() {
           </Text>
         </Text>
 
-        {/* Row 3 — Strip B: 4-col stats with hairline borders. POIS + PACE
-            are live-bound to curatedCount / avgPaceMin and update as the
-            user adjusts filters in the scroll area below. */}
+        {/* Row 3 — Strip B: 4-col stats with hairline borders. POIS +
+            STORIES PER are live-bound to curatedCount / avgPaceMin and
+            update as the user adjusts filters in the scroll area below. */}
         <View
           style={[
             styles.statsStrip,
@@ -634,7 +634,7 @@ export default function CustomizeScreen() {
           <TripStat label="DISTANCE" value={fmtMiles(routeInfo.distance_mi)} />
           <TripStat label="DURATION" value={fmtDuration(Math.round(tripDurationMin))} />
           <TripStat label="POIS"     value={curatedCount === null ? '…' : String(curatedCount)} />
-          <TripStat label="PACE"     value={paceLabel} />
+          <TripStat label="STORIES PER" value={paceLabel} />
         </View>
       </View>
 
