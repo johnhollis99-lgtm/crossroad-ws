@@ -740,4 +740,148 @@ The build chat should flag these back for human decision when relevant:
 
 ---
 
-**End of addendum.** Hand to build chat for incremental implementation per §11.
+---
+
+## 14. v1.1 Amendments (post-lock refinements)
+
+The §0–§13 sections above are the locked v1.0 design dated this addendum's original lock. The sections below capture post-lock refinements — curator decisions, implementation drift, and design extensions that landed after v1.0 was committed. **The v1.0 sections are preserved unmodified as historical record**; this section is the running update.
+
+### 14.1. §11 migration plan — current status
+
+The original §11 listed 15 numbered steps. Status as of 2026-05-20:
+
+| Step | Description | Status |
+|---|---|---|
+| 1 | `pois.intrinsic_depth` column + default 'standard' | ✓ DONE (migration `20260514000002`) |
+| 2 | `pois.iconic_local`, `iconic_local_reasons`, `signature_hook` columns | ✓ DONE (migration `20260514000003`); flag still at 0 rows pending Phase F importer |
+| 3 | `category_significance_floors` lookup table | ✓ DONE (migration `20260514000004` schema; seed at `20260518000002` B1; full curator-tuned seed at `20260519000003` G2) |
+| 4 | `regions` table + spatial index | ✓ DONE (migration `20260514000005` + follow-ups) |
+| 5 | `narration_plays` table | ✓ DONE (migration `20260514000006` schema); event wiring NOT done (Phase K) |
+| 6 | `voice_configs` partial unique index swap | ✓ DONE (migration `20260514000012` + `20260518000001` D3 lockdown); only narrator_b active for Family/Local currently |
+| 7 | Update `get_nearby_pois` / `get_route_pois` (actually `get_corridor_pois`) RPCs | ✓ DONE — landed via G2 (`c5d0a1e`, migration `20260519000004`) for the floor + tier work; C1 (`d7a78aa`, migration `20260520000001`) for the spatial curator-bypass. `narrative_focus` and `pace` RPC params NOT wired — superseded in practice by server-side floor + spatial enforcement (the per-category floor + curator bypass make the per-call param wiring less load-bearing) |
+| 8 | Import region data | ✓ DONE for USGS provinces, EPA ecoregions, named valleys (51 regions). NLD indigenous territories deferred to v2 per [docs/decisions/2026-05-14-nld-deferral.md](decisions/2026-05-14-nld-deferral.md). Watersheds (HUC8) deferred to v2 |
+| 9 | Pre-generate region narrations | ◐ PARTIAL — 108 generated (54 regions × narrator_b × Family/Local). Other audience × narrator combos await Phase H expansion |
+| 10 | Import iconic curation sources | ○ NOT STARTED (Phase F) |
+| 11 | Depth-assignment job | ✓ DONE (`scripts/poi-import/assign-intrinsic-depth.ts`, 2026-05-19). All 21,935 active POIs assigned: brief 5,057 / standard 16,612 / long 266 |
+| 12 | Update lookahead worker with full ranking pipeline | ◐ PARTIAL — Block I.1 + I.2 MVP done as offline simulator (`scripts/simulate-trip/`, commit `ab33921`). I.3 production wiring NOT started |
+| 13 | Update mobile UI (trip setup pickers + driving page + settings) | ◐ PARTIAL — Trip Setup pickers landed via J1a (`54eea84`) + J1a-followups (`f2fbe51`). Driving page Skip + Tell Me More NOT done (gated on Phase I.3). Settings NEW BUILD queued (J4) |
+| 14 | Wire skip/tell-me-more events | ○ NOT STARTED (Phase K) |
+| 15 | Ship report cron jobs | ○ NOT STARTED (Phase K) |
+
+### 14.2. Per-category significance floors — curator-tuned seed (G2, commit `c5d0a1e`)
+
+§2.2 listed placeholder values. The curator-tuned final seed (migration `20260519000003`, applied live 2026-05-20):
+
+| Category | Floor | Notes |
+|---|---:|---|
+| geology | 60 | Smaller corpus; surface peaks 60–69 (Junipero Serra Peak, Cerro San Luis Obispo, Cone Peak) |
+| nature | 65 | Geography surface; surface top features 65–69 |
+| history | 70 | Addendum §2.1 baseline; explicit anchor for `native_history` sub |
+| local_culture | 70 | Covers music venues + public art + heritage culture (Customize's "Music" / "Roadside" labels both map here) |
+| **architecture** | **90** | **Curator-bumped from §2.2's placeholder 80** — California has ~1,650 NRHP-listed architecture POIs with scores 60–89 (anonymous 19th-century Methodist churches, mid-century office buildings) that the addendum's 80 floor wouldn't reject. The 90 floor pushes the burden of sub-90 architecture surfacing onto `editorial_curated` |
+| art | 75 | Between local_culture (70) and architecture (90) |
+| food_drink | 0 | Floor disabled; surfaces only via iconic_local override per §1.1 / §8 |
+| engineering | 70 | Addendum baseline; bridges/dams/mining subs mirror |
+| viewpoint | 65 | Scenic viewpoints at slightly reduced floor — between nature's 65 and history's 70 |
+| hidden_gems | 70 | COALESCE-default value; row present for explicitness |
+| recreation | 70 | COALESCE-default value; row present for explicitness |
+| volcanic | 60 | geology sub; mirrors parent |
+| hot_springs | 60 | geology sub; mirrors parent |
+| native_history | 70 | history sub; mirrors parent |
+| bridges | 70 | engineering sub; mirrors parent |
+| dams | 70 | engineering sub; mirrors parent |
+| mining | 70 | engineering sub; mirrors parent |
+
+Only `legends` falls through to the COALESCE-70 default. Total: 17 explicit rows + 1 implicit.
+
+**Server-side enforcement** — the §2 floor was previously enforced nowhere in live runtime; only in the offline simulator (`scripts/simulate-trip/`) and curation export (`scripts/curation/export.ts`). G2 (`c5d0a1e`) closed that gap. Both `get_corridor_pois` and `get_nearby_pois` now JOIN `category_significance_floors` and enforce floors via `GREATEST(COALESCE(csf.significance_floor, 70), min_significance)`. The existing `min_significance` RPC param remains; semantic shifts from "the only floor" to "an additional floor on top of the per-category floor."
+
+**Bypass paths** (the OR-chain in the WHERE clause):
+- `editorial_curated = TRUE` — curator-approved POI surfaces regardless of significance_score
+- `iconic_local = TRUE` — strict-iconic-bar POI surfaces regardless of significance_score
+
+The two bypass flags also drive a new `priority_tier text` column in the RPC RETURNS shape (`'curator'` / `'iconic'` / `'standard'`); ORDER BY promotes by tier first, then `significance_score DESC`, then the existing spatial sort.
+
+### 14.3. Curator-override philosophy extended to spatial (C1, commit `d7a78aa`)
+
+The G2 bypass was significance-tier only. C1 extends the same "curator override on user controls" philosophy to the spatial filter:
+
+- `editorial_curated = TRUE` and `iconic_local = TRUE` POIs now bypass the user-set corridor distance (`corridor_width_miles` for route queries, `radius_m` for point queries)
+- **Cap: 25mi visibility horizon** — hardcoded as `25 * 1609.34` m (≈40,233.5 m) inline at both RPC sites
+- Standard tier remains bound by the user-set value
+
+**25mi cap rationale** — curator's heuristic: past ~25mi, atmospheric haze hides most landmarks unless at altitude with clear sightlines. The cap is the curator's visibility horizon, not the user's slider. Tested via Mt Whitney exclusion at 25.02mi (32m past cap) on the LA→Mammoth straight-line route — Whitney would surface on actual US-395 routes through Lone Pine but is correctly excluded on the LA-downtown→Mammoth-centroid synthetic.
+
+**Composition with C2 Reach control** — the Drive page Reach slider (Nearby 5mi / Within sight 10mi / Geographical area 20mi, C2 commit `e7200e8`) operates on the standard tier. Curator/iconic POIs surface independently up to 25mi regardless of Reach setting. The two controls compose orthogonally.
+
+### 14.4. Pace → Detail rename (J1a-followups, commit `f2fbe51`)
+
+§1.2 and §6 of the locked v1.0 design name the user control "Pace" (Full Drive / Light Touch). Per the curator's Expo walk-through after J1a (`54eea84`), the axis was renamed to **"Detail"** in J1a-followups (`f2fbe51`).
+
+- Type alias `Pace` → `Detail` in `src/store/tripStore.ts`
+- Field `pace` → `detail`
+- Setter `setPace` → `setDetail`
+- Zustand persist version bumped 2 → 3 with a migrate() step renaming the persisted key
+- Filters JSON nav-param key renamed from `pace` to `detail`
+- Option identifiers (`full_drive` / `light_touch`) unchanged — only the conceptual axis name changes
+
+Rationale: "Pace" implied speed of audio delivery; the actual axis controls **story length per POI** (full-length vs Light Touch compressed). "Detail" describes the dimension more directly. §1.2 / §6 of the v1.0 design are preserved unchanged as historical record.
+
+### 14.5. Drive page Reach control (C2, commit `e7200e8`)
+
+Replaces the pre-C2 free-slider "Story corridor" control on drive.tsx with a 3-snap-stop control.
+
+| Snap | Mile value | Semantic |
+|---|---:|---|
+| Nearby | 5 | Direct-route landmarks, immediate roadside |
+| Within sight | 10 | Clearly visible peaks, distinct geological features |
+| Geographical area | 20 | Region-defining features, distant ranges |
+
+- Section label: **REACH** (single-word evocative; matches the eyebrow visual pattern of customize.tsx's DETAIL / NARRATIVE FOCUS)
+- **Defaults to Geographical area (max)** — opt-out UX consistency with the queued category-pills-all-lit default
+- Reuses the existing `SegmentedTrio` primitive (no new component)
+- `filters.corridorMi` from customize's nav-params is intentionally ignored; drive starts at max regardless
+
+Composes with C1: a curator POI at 22mi off-route surfaces even at "Nearby" (5mi) — the user's Reach pick affects the standard tier; curator/iconic punch through to 25mi.
+
+### 14.6. Stat strip "PACE" → "STORIES PER" (C0, commit `7549676`)
+
+The TripStat strip column header on customize.tsx was a frequency metric ("1 narration per N minutes") labeled "PACE" — a leftover from before the J1a-followups Pace→Detail rename. After the rename, "PACE" collided with the absent-but-now-renamed Detail axis. C0 renames the column header to **"STORIES PER"** — describes the value directly. Value formatter and underlying computation unchanged.
+
+### 14.7. Sliders removed from Trip Setup (J1a-followups, commit `f2fbe51`)
+
+Three controls removed from customize.tsx per the curator's Expo walk-through:
+
+- Density `SegmentedTrio` (Sparse / Balanced / Dense)
+- Min Relevance `LabeledSlider` (0–100)
+- POI Distance `LabeledSlider` (= Trip Setup corridor; drive-page corridor slider was C2 e7200e8)
+
+CHECK-constrained columns (`trips.density`, `trips.min_relevance`) are hardcoded in saveTrip with inline comments matching the J1a `depth: 'ride_along'` pattern. `trips.poi_distance_m` has no CHECK and was dropped from the payload entirely (DB DEFAULT 500 applies).
+
+**Conceptual replacements:**
+- Density picker → **Block I.3.3 adaptive corridor** (server-side, automatic, context-aware spatial density)
+- Min Relevance → **G2 per-category floors** (server-side, automatic, per-category)
+- POI Distance → **C2 Reach control on drive.tsx** (3 snap stops on the runtime screen, not trip-setup)
+
+Plus the upstream chain: customize still emits density / minRelevance / corridorMi in the filters JSON nav-param with mode-aware defaults for backward-compat with drive.tsx's safe-fallback reads (`?? 'balanced'` / `?? 0` / `?? 1`). The home → customize → drive curation chain stays consistent.
+
+### 14.8. Open Questions status (§12 update)
+
+| # | Original question | Status |
+|---|---|---|
+| 1 | Final narrator names | Still open — internal slugs `narrator_a` / `narrator_b` shipped without display-name resolution |
+| 2 | Watersheds (HUC8) in v1 vs v2 | Resolved — deferred to v2 |
+| 3 | Per-category significance floor values | **Resolved** — see §14.2 above for the G2 curator-tuned final seed |
+| 4 | Resonance score weights | Still open — gated on Cultural Fabric skip data |
+| 5 | Local Color airtime ratios | Still open — gated on user feedback |
+| 6 | Tell Me More pre-gen | Still open — gated on Phase K skip/tell-me-more event wiring |
+
+### 14.9. Companion docs
+
+For sequencing across all pending work, see `roadstory-unified-roadmap.md` — specifically the Phase Status block + Post-catalog-v1 commit stack table at the top of §4.
+
+For implementation details + drift log, see `CLAUDE.md` — has running per-commit paragraphs in the migration log.
+
+---
+
+**End of addendum.** Hand to build chat for incremental implementation per §11 (status table in §14.1).

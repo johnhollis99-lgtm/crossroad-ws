@@ -291,7 +291,7 @@ There are five separate open-question lists across the docs. Some overlap. Conso
 
 ## 4. The Unified Execution Roadmap
 
-### Phase status (2026-05-19, catalog v1 closed)
+### Phase status (2026-05-20, post-C1 sync)
 
 Quick scan of where each phase actually stands. Detail in each phase's section below.
 
@@ -300,13 +300,13 @@ Quick scan of where each phase actually stands. Detail in each phase's section b
 | A — Reconciliation | ✓ DONE | Pre-session doc work landed |
 | B — POI Data Pipeline | ◐ PARTIAL | B1 schema ✓, B2 all 5 importers live ✓, B3 dedup + 5-component significance ✓, B4 GNIS basic ✓. v1.1 backlog: GNIS expansion + Nevada-bleed SPARQL fix |
 | C — Venue Tour | ◐ PARTIAL | V1 ✓ (75 venues seeded, 1,634 children classified). V2 (importer integration) not started — blocker for CA-outside imports |
-| D — Addendum Migrations | ◐ PARTIAL | D1 all 7 migrations ✓. D2 partial (detect_regions, get_nearby_pois confidence filter, depth-alias mapping ✓; narrative_focus/pace param wiring not done). D3 voice_configs done for narrator_b × Family/Local (Sadachbia 1.0); other 6 audience×narrator combos deferred to audience expansion |
+| D — Addendum Migrations | ◐ PARTIAL | D1 all 7 migrations ✓. D2 partial (detect_regions, get_nearby_pois confidence filter, depth-alias mapping ✓; narrative_focus/pace param wiring not done — superseded in practice by G2/C1 server-side enforcement). D3 voice_configs done for narrator_b × Family/Local (Sadachbia 1.0); other 6 audience×narrator combos deferred to J0 audience expansion |
 | E — Regions Import & Generation | ✓ DONE | E1a USGS, E1b EPA, E1d named valleys all live (51 regions). E1c NLD deferred to v2. E1e watersheds (HUC8) deferred to v2. E2 production region narrations: 108 generated (54 regions × narrator_b × Family/Local) |
-| F — Iconic Local Curation | ○ NOT STARTED | Schema in place (`iconic_local`, `iconic_local_reasons`, `signature_hook`); importer not built; 0 POIs flagged |
-| G — Depth Assignment + Significance Tuning | ◐ PARTIAL | G2 done (B1 floors + A1 P31 bonus + editorial-curation slate = 189 POIs `editorial_curated=TRUE`). G1 NOT done — all 21,906 live POIs sit at `intrinsic_depth='standard'`; brief/long heuristic outstanding |
-| H — Narration Engine + Templates | ◐ PARTIAL | narrator_b × Family POI template + region templates live (with full SSML prosody pipeline). Audience × narrator matrix (Kids/Unfiltered/Local × narrator_a/b) not built. Google TTS Chirp 3 HD primary — already settled per CLAUDE.md TTS roadmap |
-| I — Lookahead Worker | ◐ PARTIAL | I.1 + I.2 MVP ✓ — pure-function ranking pipeline + CLI simulator at `scripts/simulate-trip/` implementing addendum §10 (eligibility, effective_score, density gap, region rate-limit) and §10.3 (cluster suppression). First simulation timeline at `docs/simulations/2026-05-19-la-mammoth.md` (commit `ab33921`). I.3 NOT done — no WebSocket emission, no mobile UI integration, no real GPS, no Pace=Light Touch, no Iconic Local Override (Phase F dep) |
-| J — UI Refits | ◐ PARTIAL | Pine redesign landed lots (home, customize, drive, components, motion infra). Trip-setup narrator/focus/pace pickers per addendum NOT done. Driving page Skip + Tell Me More + narrator chip NOT done. Settings additions NOT done |
+| F — Iconic Local Curation | ○ NOT STARTED | Schema in place (`iconic_local`, `iconic_local_reasons`, `signature_hook`); importer not built; 0 POIs flagged. Spatial + significance bypass paths (C1, G2) already wired server-side — just waiting on the data |
+| G — Depth Assignment + Significance Tuning | ✓ DONE | G1 ✓ — `assign-intrinsic-depth.ts` heuristic ran 2026-05-19 against all 21,935 active POIs (final: brief 5,057 / standard 16,612 / long 266). G2 ✓ — per-category floors seeded with curator-tuned values (commit `c5d0a1e`, migration `20260519000003`); RPCs JOIN floors via `GREATEST(COALESCE(csf.significance_floor, 70), min_significance)`; `editorial_curated`/`iconic_local` bypass the floor; `priority_tier` column added (migration `20260519000004`). The 70-floor (addendum §2.1) is now enforced server-side in `get_corridor_pois` + `get_nearby_pois` — previously only in the offline simulator + curation export |
+| H — Narration Engine + Templates | ◐ PARTIAL | narrator_b × Family POI template + region templates live (with full SSML prosody pipeline). Audience × narrator matrix (Kids/Unfiltered/Local × narrator_a/b) not built — gated on J0 voice expansion |
+| I — Lookahead Worker | ◐ PARTIAL | I.1 + I.2 MVP ✓ — pure-function ranking pipeline + CLI simulator at `scripts/simulate-trip/` implementing addendum §10 (eligibility, effective_score, density gap, region rate-limit) and §10.3 (cluster suppression). First simulation timeline at `docs/simulations/2026-05-19-la-mammoth.md` (commit `ab33921`). I.2.5 ✓ — closest_approach trigger mode + `off_route_landmark_hint` column (2026-05-19, working tree). I.3 not started — no WebSocket emission, no mobile UI integration, no real GPS, no Pace=Light Touch, no Iconic Local Override. **New blocks queued**: I.3.3 adaptive corridor (replaces removed user-facing Density), I.3.4 destination-vs-passthrough surfacing |
+| J — UI Refits | ◐ PARTIAL | **Landed** (post-catalog-v1): Pine redesign foundation (home, customize, drive, components, motion infra). J1a Trip Setup refit removed depth picker + added Detail/Narrative Focus OptionCards (`54eea84`). J1a-followups removed Density/Min Relevance/POI Distance sliders + renamed Pace→Detail (`f2fbe51`). C0 stat strip header PACE→STORIES PER (`7549676`). C2 Drive Reach control replaced free-slider corridor with 3 snap stops (`e7200e8`). G2 + C1 server-side enforcement (`c5d0a1e`, `d7a78aa`). **Queued**: J0 second narrator voice expansion (audition Chirp 3 HD voices for Narrator B × 4 audiences); J1b 2-card narrator picker (gated on J0); J3 Driving page Skip + Tell Me More + narrator chip; J4 Settings screen (new build); category pills opt-out default; map fixes batch (Home clustering, Home zoom-in POI reveal, customize route preview POI dots); Home page direct-route investigation; mid-trip mode switch (Drive ↔ Walk); start/destination input methods (drop pin / GPS / address / landmark) |
 | K — Feedback Loop & Reports | ○ NOT STARTED | `narration_plays` schema in place; event wiring + cron reports not built |
 | L — Venue Tour V3 | ○ NOT STARTED | Awaits Phase H expansion (audience × narrator matrix) and venue-tour narration templates |
 | M — UI Handoff Phase 3 Remainder | ◐ PARTIAL | Pine landed most of Phase 3 surface work. Trip Summary screen + Group features (Prompts 14 + 16) not done |
@@ -314,6 +314,19 @@ Quick scan of where each phase actually stands. Detail in each phase's section b
 | v1.5 Backlog | — | Conversational Query Mode (decision doc landed); other deferred items |
 
 **Catalog v1 status** — closed 2026-05-19. 295 v1 narrations live (108 regions + 187 POIs). $15.64 lifetime spend per `llm_calls` audit. See [docs/decisions/2026-05-15-top-tier-poi-first-run.md](decisions/2026-05-15-top-tier-poi-first-run.md) §Catalog v1 closed for full close-out detail.
+
+**Post-catalog-v1 commit stack** (2026-05-19 → 2026-05-20):
+
+| SHA | Description |
+|---|---|
+| `54eea84` | J1a — Trip Setup refit (Pace + Narrative Focus + depth removal) |
+| `f2fbe51` | J1a-followups — rename Pace→Detail + remove obsolete filters |
+| `c5d0a1e` | G2 — per-category significance floors wired into live runtime |
+| `7549676` | C0 — stat strip header: PACE → STORIES PER |
+| `d7a78aa` | C1 — RPC corridor extension for curator/iconic POIs (25mi cap) |
+| `e7200e8` | C2 — Drive page Detail slider redesign (Reach: Nearby / Within sight / Geographical area) |
+
+The C-series identifiers (C0/C1/C2) are informal session-arc names — not roadmap phases (the "C" letter is taken by Venue Tour). Reference by SHA when sequencing matters.
 
 
 
@@ -463,47 +476,109 @@ This is **Prompt 06-revised** territory. The narration worker existed before but
 6. Switch from ElevenLabs to Google TTS Chirp 3 HD as primary provider (per SKILL.md current spec)
 7. Verify the unique constraint `(poi_id, narrator_slug, depth, mode)` still works with new depth values
 
-### Phase I — Lookahead Worker (3–5 days)
+### Phase I — Lookahead Worker
 
 The brains of runtime POI selection. Per addendum §10.
 
-**Block I1 — Implementation**
-1. Implement the multi-step ranking pipeline (regions, narrator weights, iconic override, pace rules, resonance, gap rules)
-2. Wire `narrative_focus` and `pace` and `narrator_slug` parameters through
-3. Pre-fetch logic for next 3–5 queued items based on full key including pace
+**Block I.1 — Pure-function ranking pipeline** ✓ DONE (commit `ab33921`, 2026-05-19)
+- Implemented at `scripts/simulate-trip/lookahead.ts`
+- effective_score = `(sig + boost) × narrator_weight[category]`
+- Cluster suppression (driving mode, N≥3 same-category within 5 corridor-mi) per §10.3
+- Density gap (drop sig<75 within 60s of last narration end)
+- Region rate-limit (1 per 20 min)
+- Editorial-gate IS the gate — runtime lookahead does NOT re-apply `category_significance_floors` (the floor was the algorithm-surface filter at curation export.ts SELECT time; once curator marks a POI `editorial_curated = TRUE`, the floor is done)
 
-**Block I2 — Region transition detection**
-4. WS server maintains `current_regions` list in trip state
-5. On each `update_location` event, call `detect_regions_at_location` and diff
-6. Queue region narration on new entry, respecting rate limits
+**Block I.2 — CLI simulator** ✓ DONE (same commit)
+- Pure-function ranking driving a typed `TimelineEvent[]` emitter
+- Markdown timeline render via `scripts/simulate-trip/render.ts`
+- First LA→Mammoth simulation: `docs/simulations/2026-05-19-la-mammoth.md`
 
-### Phase J — UI Refits (1 week, parallelizable internally)
+**Block I.2.5 — closest_approach trigger mode** ✓ DONE (2026-05-19, working-tree pending commit)
+- `pois.trigger_mode` column + `pois.off_route_landmark_hint` text (migration `20260519000001`)
+- Per-mile corridor profiles (route-specific defaults + per-segment overrides; 30mi cap for closest_approach trigger mode)
+- Lookahead `passesPerMileFilter` + closest_approach density-gap bypass
+- ORIENTATION CUE injection in narrator_b_family POI prompt template
+- Spot-check pipeline (Vasquez/Owens Lake/Cerro Gordo, $0.10 spend) confirmed end-to-end
 
-Phase 3 of the UI handoff. The screens exist; they get refit.
+**Block I.3 — Runtime production wiring** (NOT STARTED)
+1. WebSocket emission of `narration_queued` events from the lookahead pipeline
+2. Mobile UI integration (drive.tsx queue + Skip + Tell Me More + narrator chip)
+3. Real GPS / `update_location` event handling
+4. Region transition detection — WS server maintains `current_regions` list in trip state; on each location update, call `detect_regions_at_location` and diff; queue region narration on new entry, respecting rate limits (mostly designed in §10; needs wiring)
+5. Pace=Light Touch path (currently rejected by CLI simulator with `--pace=light-touch deferred` message)
+6. Iconic Local Override path (gated on Phase F data availability)
 
-**Block J1 — Trip Setup screen refit**
-1. Add narrator picker (2 cards) inline OR via a sub-screen — recommend inline if screen real estate permits, otherwise sub-screen at `/trip/preferences`
-2. Add narrative focus picker (3 cards: The Land Speaks / + Local Color / Custom)
-3. Add pace picker (2 cards: Full Drive / Light Touch)
-4. Remove the depth picker from user-facing flow (depth is now intrinsic)
+**Block I.3.3 — Adaptive corridor** (QUEUED, spatial sibling to §10's temporal density rules)
 
-**Block J2 — Narrator Picker screen refit (Prompt 10-revised)**
-5. If keeping the standalone screen at `/trip/narrators.tsx`: refit from 4 cards to 2 cards
-6. Update narrator sample audio files (2 new MP3s)
-7. Remove the Junior Ranger / Truck Driver conditional logic
-8. Add the mid-trip swap mechanism: narrator chip on `/trip/driving.tsx` top-right, opens the picker as a bottom sheet
+Spatial sibling to the existing temporal density rules in addendum §10. Replaces the user-facing Density picker (removed in J1a-followups `f2fbe51`) with automatic context-aware computation.
 
-**Block J3 → Driving page additions**
-9. Add Skip button to active narration card
-10. Add Tell Me More pill after Brief/Standard narrations end (6-second visibility)
-11. Add narrator chip in header (entry point for mid-trip swap)
-12. Wire socket events: `skip_narration`, `tell_me_more`, `change_narrator`
+- Corridor width becomes a function of position along the route, not a static user setting
+- Rural / sparse stretches: corridor expands toward the user's "Reach" slider value (C2: Nearby 5mi / Within sight 10mi / Geographical area 20mi)
+- Dense urban stretches: corridor contracts toward the route centerline
+- Likely implementation: lookahead worker computes moving-window POI density along route, derives effective corridor width per segment
+- Composes with C1's curator/iconic 25mi bypass — adaptive width affects the standard tier only; curator/iconic POIs still surface up to 25mi regardless
 
-**Block J4 — Settings additions**
-13. Add Narrator default (mirrors trip-setup control)
-14. Add Narrative Focus default (mirrors trip-setup control)
-15. Add Pace default (mirrors trip-setup control)
-16. Add "Learn from my taps" toggle (default off; opt-in per addendum §9.4)
+**Block I.3.4 — Destination-vs-passthrough POI surfacing** (QUEUED)
+
+Intent-aware surfacing that distinguishes "you're going TO this city" from "you're passing THROUGH this city."
+
+- POI surfacing rules differ based on whether the user's destination IS the dense urban area vs whether the route just transits it
+- Destination = the city: surface urban attractions (theme parks, modern landmarks, named hotels, named restaurants)
+- Passing through the city: suppress those (user can't see from freeway and won't stop)
+- Density-aware rate limiting even at "destination" mode (don't fire 20 narrations crossing downtown)
+- Lookahead has `trips.destination` + route geometry + user position; can compute "approaching destination zone" vs "transiting"
+- Composes with I.3.3 adaptive corridor (corridor stays narrow in transit-through dense areas; widens at destination)
+
+### Phase J — UI Refits (in progress)
+
+Phase 3 of the UI handoff. The screens exist; they get refit. Largest active phase post-catalog-v1.
+
+**Block J1a — Trip Setup refit (Detail + Narrative Focus + depth removal)** ✓ DONE (`54eea84`, `f2fbe51`)
+- Removed the user-facing depth picker (Glance / Ride Along / Deep Dive). Depth is now intrinsic per addendum §4 — hardcoded `depth: 'ride_along'` in saveTrip until the trips.depth CHECK column is dropped (see CLAUDE.md J1a-deferred backlog).
+- Added Narrative Focus picker (2 OptionCards: The Land Speaks / + Local Color) — see addendum §1.2. The "Custom" power-user variant deferred; "Customize categories →" link scrolls to the chip rail.
+- Added Detail picker (2 OptionCards: Full Drive / Light Touch). Originally landed as "Pace" in J1a (matching addendum §6 naming); renamed to "Detail" in J1a-followups per curator's Expo walk-through ("Pace" implied speed of delivery; the actual axis controls story length per POI).
+- Removed Density `SegmentedTrio`, Min Relevance `LabeledSlider`, POI Distance `LabeledSlider`. Density hardcoded to 'balanced' / minRelevance hardcoded to 0 in saveTrip (both have CHECK constraints; J1a-followups-deferred queues column drops). poi_distance_m dropped from payload entirely; DB DEFAULT 500 applies.
+- Density picker is conceptually replaced by Block I.3.3 adaptive corridor (server-side, automatic).
+
+**Block J0 — Second narrator voice expansion** (QUEUED, blocker for J1b + Phase H expansion)
+- Audition Chirp 3 HD voices for Narrator B × 4 audiences (or Narrator A × {kids, unfiltered} depending on the collapse pivot)
+- Insert remaining `voice_configs` rows (current state: 4 active rows post-H1.5.1 narrator collapse — Sadachbia/family, Sulafat/kids, Iapetus/local, Schedar/unfiltered; expansion would add 4 more rows so both narrator slugs cover all 4 audiences)
+- ~2 hours of curator audition time per voice picks doc
+
+**Block J1b — Narrator Picker refit** (QUEUED, gated on J0)
+- Replace the legacy 4-narrator preset grid in customize with a 2-card picker (Narrator A reverent / Narrator B conversational; display names TBD)
+- Update narrator sample audio files
+- Add the mid-trip narrator swap mechanism: narrator chip in drive.tsx header, opens picker as bottom sheet
+
+**Block J3 — Driving page additions** (QUEUED, gated on Phase I.3 socket wiring)
+- Add Skip button to active narration card
+- Add Tell Me More pill after Brief/Standard narrations end (6-second visibility)
+- Add narrator chip in header (entry point for mid-trip swap from J1b)
+- Wire socket events: `skip_narration`, `tell_me_more`, `change_narrator`
+
+**Block J4 — Settings screen** (QUEUED, NEW BUILD not refit)
+- Settings screen does not exist yet; build from scratch
+- Default narrator (mirrors J1b trip-setup control)
+- Default narrative focus (mirrors J1a trip-setup control)
+- Default detail (mirrors J1a trip-setup control)
+- "Learn from my taps" toggle (default off; opt-in per addendum §9.4)
+
+**Server-side curator-override series** ✓ DONE (post-catalog-v1)
+- G2 (`c5d0a1e`) — per-category significance floors wired into `get_corridor_pois` + `get_nearby_pois`; editorial_curated + iconic_local bypass the floor; priority_tier column added; ORDER BY promotes curator → iconic → standard
+- C1 (`d7a78aa`) — spatial equivalent: editorial_curated + iconic_local bypass the user-set corridor distance up to a 25mi visibility horizon. Standard tier remains bound by the user-set value.
+
+**Customize / Drive screen refinements** ✓ DONE (post-catalog-v1)
+- C0 (`7549676`) — stat strip header rename PACE → STORIES PER (disambiguate from the Detail user-control axis post-J1a-followups; "STORIES PER" describes the frequency-metric value directly)
+- C2 (`e7200e8`) — Drive page Reach control (3 snap stops Nearby 5mi / Within sight 10mi / Geographical area 20mi; defaults to max; replaces pre-C2 free-slider corridor; reuses existing `SegmentedTrio` primitive)
+
+**Block J-other (queued backlog)** — small refits + investigations not yet scheduled
+- Category pills default to all-lit on Trip Setup (opt-out UX consistency with C2's default-to-max; user removes what they don't want)
+- Map fixes batch: customize-page route preview POI dots (visual feedback for category-trimming decisions); Home page multiple large clusters at max zoom-out instead of current single ~500-cluster collapse; Home page individual POI reveal when zoomed into a cluster
+- Home page direct-route-to-Mammoth-Lakes missing — investigation pending
+- Drive page (drive.tsx) significant UI remodel pending — curator hasn't done a refit pass here yet
+- Trip context awareness (destination vs passthrough) UI affordances — see Block I.3.4
+- Start/Destination input methods — drop pin, GPS, address, landmark for both Drive and Walk modes
+- Mid-trip mode switch (Drive ↔ Walk) with on-the-fly POI regeneration
 
 ### Phase K — Feedback Loop & Reports (3–5 days)
 
@@ -574,6 +649,8 @@ Parallel **pull** interaction paradigm to v1's **push** narration. STT-activated
 ---
 
 ## 5. Critical Path & Parallel Tracks
+
+> **Note (2026-05-20):** The ASCII diagram below depicts the original pre-catalog-v1 dependency shape and is preserved as-is — diagrams rot quickly relative to the Phase Status block above. For current state of any individual phase, defer to the **Phase Status table** + the **Post-catalog-v1 commit stack** at the top of §4. Phases B/C/D/E/G/I.1/I.2/I.2.5 + Trip Setup landed since this diagram was drawn; the active critical path now runs through Phase J (UI refits) and I.3 (lookahead runtime wiring).
 
 Visualizing what blocks what:
 

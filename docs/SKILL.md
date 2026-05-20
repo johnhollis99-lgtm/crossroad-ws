@@ -87,13 +87,15 @@ This is pre-existing design intent (addendum §0) made explicit and actionable. 
 | Mobile frontend | **React Native / Expo** (TypeScript) — all UI hand-coded. EAS Build for iOS/Android binaries, EAS Update for OTA. One codebase compiles to both platforms. |
 | Database | **Supabase + PostGIS** (spatial queries, auth, storage) |
 | Real-time server | **Node.js + Socket.io** (GPS broadcast, narration triggers, WebRTC signaling) |
-| AI narration text | **Anthropic Claude API** (prompt templates: 4 audience modes × 3 depths = 12 templates) |
+| AI narration text | **Anthropic Claude API** (prompt template count: 4 audience × 2 narrator = **8 voice configs** at full matrix; current shipped state is 4 active configs post-H1.5.1 narrator collapse — see footnote¹) |
 | AI voice (TTS) | **Provider-abstracted** via `scripts/lib/tts/`. Primary provider: **Google Cloud TTS** (Chirp 3 HD voices). ElevenLabs, OpenAI TTS, Amazon Polly, and self-hosted models are pluggable but inactive. |
-| Voice configuration | **`voice_configs` table** maps each audience mode to a provider + voice_id + voice_settings. Only one active voice per mode at a time. |
-| Audio storage | **Supabase Storage / CDN** (Opus files, keyed by `{poi_id}-{trip_mode}-{depth}-{narrator_slug}.opus`) |
+| Voice configuration | **`voice_configs` table** maps each (audience_mode, narrator_slug) pair to a provider + voice_id + voice_settings. Partial unique index `(mode, narrator_slug) WHERE is_active = true` enforces one active voice per pair. |
+| Audio storage | **Supabase Storage / CDN** (Opus files; current path shape `pois/{poi_id}/{narrator_slug}_{audience_mode}_{depth}.opus`; pre-H1.6.1 rows used `{poi_id}-{trip_mode}-{depth}-{narrator_slug}.opus` and remain playable — see footnote¹) |
 | Offline | **Local SQLite + Opus audio cache** (spatial index on device) |
 | Hosting | **Render or Fly.io** (WebSocket server) |
 | Cost tracking | **`llm_calls` table** logs every Claude and TTS call (provider, voice/model, character/token counts, cost_usd) |
+
+> ¹ **Cache-key axis complexity** — the load-bearing number for active J0/J1b planning is **4 audience × 2 narrator = 8 voice configs** (the matrix capacity once Phase J0 voice expansion lands). Current shipped state is 4 active rows after the H1.5.1 narrator collapse (Sadachbia/family, Sulafat/kids, Iapetus/local, Schedar/unfiltered — see CLAUDE.md voice_configs section). The actual cache-key axis diverges from the voice-config axis post-Move 3b.2 (mobile lookup dropped `narrator_slug` from its filter since the post-collapse 1:1 with audience_mode makes it redundant) — `narration_audio.audience_mode` was added in migration `20260519000002` to disambiguate rows when two audiences share a `narrator_slug`. Storage path shape changed from voice-id-keyed (`{voice_id}.opus`) to logical-slug-keyed (`{narrator_slug}_{audience_mode}_{depth}.opus`) in Move 3b.2. Legacy voice-id rows remain playable; new generations use the logical path.
 
 ### Key Technical Constraints
 - Frontend is **React Native / Expo** (TypeScript) — all UI hand-coded as standard RN. EAS Build for iOS/Android binaries, EAS Update for OTA. One codebase compiles to both platforms.
@@ -153,10 +155,10 @@ Each audience mode maps to one active row in `voice_configs` (`mode` column = au
 | `trips` | no mode column today | depth + category_filter only |
 
 Operational notes:
-- `voice_configs.mode` enforces "one active row per audience mode" via the partial unique index `(mode) WHERE is_active = true`.
+- `voice_configs.mode` enforces "one active row per (audience_mode, narrator_slug) pair" via the partial unique index `(mode, narrator_slug) WHERE is_active = true` (widened from `(mode)` in migration `20260514000012`).
 - `narration_audio.mode` is enforced by CHECK on `('driving','hiking','city')`. A 4th value `venue_tour` is planned (see venue-tour spec) and requires a CHECK extension.
 - `user_preferences.default_audience_mode` shares the audience-mode value space and CHECK constraint.
-- **Cache key shape:** `{poi_id}-{trip_mode}-{depth}-{narrator_slug}.opus`. Audience mode is collapsed into `narrator_slug` via the `voice_configs` lookup — there is exactly one active voice per audience mode, so the voice identifies the audience implicitly.
+- **Cache key shape (current, post-H1.6.1):** Storage path `pois/{poi_id}/{narrator_slug}_{audience_mode}_{depth}.opus`. `narration_audio.audience_mode` column added in migration `20260519000002` so two audiences sharing a narrator_slug (post-collapse: kids+local both at narrator_a; family+unfiltered both at narrator_b) don't collide. Pre-H1.6.1 voice-id-keyed paths (`{poi_id}/{trip_mode}/{depth}/{voice_id}.opus`) remain playable; new generations use the logical-slug path. See footnote¹ on Tech Stack above for the broader cache-key axis discussion.
 - `narration_audio.narrator_slug` is the voice-id column. A rename to `voice_id` is **intentionally deferred** → every reader/writer uses `narrator_slug` until the rename ships. Trigger condition for the rename: bundle it with a major schema overhaul that's already touching the narration generation surface (RPCs + app code + scripts). The venue_tour CHECK extension by itself is NOT a sufficient trigger → that migration is small enough that mixing in a rename would balloon its blast radius. Wait for a bigger reason.
 
 ### Dynamic Trigger Radius
@@ -203,17 +205,23 @@ Only trigger for POIs **ahead** on the route, never behind or perpendicular.
 - **`trips`** → `id` uuid PK, `user_id` uuid FK—`auth.users` ON DELETE SET NULL, `route_name`, `origin`, `destination`, `distance_mi` double, `duration_min` int, `narrator_id` uuid FK—`narrators` ON DELETE SET NULL, `user_narrator_id` uuid FK—`user_narrators` ON DELETE SET NULL, `narrator_name`, `depth` text NOT NULL DEFAULT `'ride_along'` CHECK (`'glance'|'ride_along'|'deep_dive'`), `category_filter` text[] NOT NULL DEFAULT `'{}'`, `poi_distance_m` int NOT NULL DEFAULT 500, `status` text NOT NULL DEFAULT `'pending'` CHECK (`'pending'|'active'|'completed'|'abandoned'`), `started_at`, `completed_at`, `created_at`. Indexes: `trips_user_id_idx`, `trips_status_idx`. **No `mode` column** → audience/trip-mode separation lives in code request params per the Mode column semantics section above.
 - **`feedback`** — `id`, `poi_id`, `user_id`, `rating` (up/down), `correction_text`, `created_at`
 - **`narration_audio`** — `id`, `poi_id`, `narrator_slug` (= voice_id), `depth`, `mode` (trip_mode, CHECK on `'driving','hiking','city'`), `audio_url` (nullable while pending), `status` CHECK (`'pending','ready','failed'`) DEFAULT `'ready'`, `provider`, `character_count`, `duration_ms`, `cost_usd`, `prompt_version`, `generated_at`. **UNIQUE constraint:** `(poi_id, narrator_slug, depth, mode)` → added 2026-05-11 via migration `20260510000005_na_unique_add_mode`. 30-day TTL.
-- **`voice_configs`** — `id`, `mode` (audience mode), `provider`, `voice_id`, `voice_settings` (jsonb), `display_name`, `description`, `is_active`, `version`, `created_at`. Partial unique index `(mode) WHERE is_active = true` enforces one active row per audience mode.
+- **`voice_configs`** — `id`, `mode` (audience mode), `narrator_slug`, `provider`, `voice_id`, `voice_settings` (jsonb), `display_name`, `description`, `is_active`, `version`, `created_at`. Partial unique index `(mode, narrator_slug) WHERE is_active = true` (widened from `(mode)` in migration `20260514000012`).
 - **`llm_calls`** — `id`, `call_type` ('claude' | 'tts'), `provider`, `model_or_voice`, `input_chars`, `input_tokens`, `output_tokens`, `cost_usd`, `related_id`, `created_at`. Logs every billable call for audit.
+- **`category_significance_floors`** — `category` (text PK; free-text join to `poi_categories.slug`), `significance_floor` (smallint, CHECK 0–100), `notes`, `updated_at`. 17-row curator-tuned seed live as of 2026-05-20 (G2). The 70-floor (addendum §2.1) is enforced server-side in `get_corridor_pois` + `get_nearby_pois` via `GREATEST(COALESCE(csf.significance_floor, 70), min_significance)`. `editorial_curated = TRUE` and `iconic_local = TRUE` bypass the floor.
 
 ### Key RPCs
 ```sql
-get_nearby_pois(lat, long, radius_meters, category_filter)
-get_route_pois(route_geometry, corridor_width_meters)
+get_nearby_pois(user_lat, user_lng, radius_m, categories, mode_filter,
+                p_include_children, min_significance, sort_mode, result_limit)
+get_corridor_pois(route_geom, corridor_width_miles, category_filter,
+                  mode_filter, min_significance, sort_mode, result_limit)
+detect_regions_at_location(p_lat, p_lon)
 submit_feedback(poi_id, rating, correction_text)
 cache_narration(poi_id, trip_mode, depth, narrator_slug, audio_url, ...)
 get_cached_narration(poi_id, trip_mode, depth, narrator_slug)
 ```
+
+**Both `get_nearby_pois` and `get_corridor_pois`** now JOIN `category_significance_floors`, enforce per-category floors, support `editorial_curated`/`iconic_local` bypass on both significance (G2 `c5d0a1e`) AND spatial filters up to a 25mi visibility horizon (C1 `d7a78aa`), and return a `priority_tier text` column (`'curator'` / `'iconic'` / `'standard'`) with ORDER BY promotion. Note: the spec function name `get_route_pois` has never existed in this repo (see drift catalog 5.35); the actual function is `get_corridor_pois`.
 
 Spatial index on `pois.location` is critical for performance. Always filter `WHERE merged_into IS NULL` in runtime queries.
 
