@@ -36,7 +36,7 @@ import {
   getPOIsAlongRoute,
   saveTrip,
 } from '../lib/supabase';
-import type { NarratorRecord } from '../lib/supabase';
+import type { NarratorRecord, POI } from '../lib/supabase';
 import { MapStyleId, MAP_STYLES, loadMapStyle, saveMapStyle } from '../lib/mapStyle';
 import { MapStylePicker } from '../components/MapStylePicker';
 import { useTheme } from '../src/design/theme';
@@ -57,8 +57,10 @@ import {
   IconWeird,
   NarratorCard,
   OptionCard,
+  PoiMarkerX,
   TripStat,
   Wordmark,
+  usePoiMarkerTracking,
 } from '../src/components';
 import type { IconProps } from '../src/components';
 import { useTripStore, ALL_CATEGORY_LABELS } from '../src/store/tripStore';
@@ -242,6 +244,26 @@ function avatarColorFor(narrator: NarratorRecord): string {
   return NARRATOR_AVATAR_PALETTE[slug] ?? narrator.avatar_color_bg ?? '#10B981';
 }
 
+// Per-marker wrapper mirroring drive's DrivePoiMarker pattern (app/drive.tsx).
+// Each instance owns its own usePoiMarkerTracking window (start true, flip
+// false at 1s), so newly-mounted markers from previewPOIs replacement (pill
+// toggles) get a fresh snapshot window even though MapScreen mounted earlier.
+// Customize uses plain MapView (no clusterer) — drift 5.94's
+// clusterer-traversal rule does not apply, so the wrapper-component
+// pattern is safe.
+function CustomizePreviewMarker({ poi }: { poi: POI }) {
+  const tracking = usePoiMarkerTracking();
+  return (
+    <Marker
+      coordinate={{ latitude: poi.lat, longitude: poi.lng }}
+      anchor={{ x: 0.5, y: 0.5 }}
+      tracksViewChanges={tracking}
+    >
+      <PoiMarkerX size="preview" tier={poi.priority_tier ?? 'standard'} />
+    </Marker>
+  );
+}
+
 // ── Main screen ───────────────────────────────────────────────────────────────
 
 export default function CustomizeScreen() {
@@ -305,6 +327,7 @@ export default function CustomizeScreen() {
   const [liveStoryCount,   setLiveStoryCount]   = useState<number | null>(routeInfo.story_count);
   const [curatedCount,     setCuratedCount]     = useState<number | null>(null);
   const [avgPaceMin,       setAvgPaceMin]       = useState<number | null>(null);
+  const [previewPOIs,      setPreviewPOIs]      = useState<POI[]>([]);
 
   // J1a: scroll ref + Categories anchor so the "Customize categories →"
   // link under Narrative Focus scrolls the user to the chip rail.
@@ -428,6 +451,7 @@ export default function CustomizeScreen() {
         });
         setCuratedCount(r.count);
         setAvgPaceMin(r.avgPaceMinutes);
+        setPreviewPOIs(r.curatedPOIs);
       }).catch(err => {
         if (__DEV__) console.warn('[customize] filter:rpc-error', { fn: 'getPOIsAlongRoute', err: String(err) });
       });
@@ -665,6 +689,18 @@ export default function CustomizeScreen() {
               strokeWidth={3}
             />
           )}
+          {/* POI preview markers — reuses the proven drive-page PoiMarkerX
+              render path at preview scale (size="preview", ~18px ring).
+              Tier coloring lives inside PoiMarkerX: gold for curator/iconic
+              (server-side bypass POIs via G2 + C1), emerald for standard
+              tier; cream halo via paintOrder gives the X a high-contrast
+              edge against the emerald route polyline. Capped at 50
+              defensively — curateRoutePOIs already caps by trip duration +
+              density. Per-marker usePoiMarkerTracking in
+              CustomizePreviewMarker handles the snapshot window. */}
+          {previewPOIs.slice(0, 50).map(poi => (
+            <CustomizePreviewMarker key={poi.id} poi={poi} />
+          ))}
           {routePreview.destLat != null && (
             <Marker
               coordinate={{ latitude: routePreview.destLat, longitude: routePreview.destLng }}

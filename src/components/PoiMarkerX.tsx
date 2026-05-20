@@ -8,12 +8,15 @@
  *      punch) and a cream halo from the paintOrder="stroke" trick (legible
  *      on every map style — dark, satellite, streets, terrain).
  *
- * Two size variants:
+ * Three size variants:
  *   curated — high-relevance corridor / route-curated POIs (larger)
  *   reveal  — viewport-reveal low-relevance POIs (smaller)
+ *   preview — customize-page route preview map dots (smallest;
+ *             ~18px ring diameter, readable at small map scale
+ *             without crowding the route polyline)
  *
  * Always rendered inside a 40×40 wrapper so the hitbox stays comfortable
- * even on the smaller reveal size.
+ * even on the smaller reveal / preview sizes.
  *
  * Clusterer rule (drift 5.94): react-native-map-clustering's `isMarker`
  * helper reads `child.props.coordinate` directly on JSX children passed
@@ -28,7 +31,7 @@ import Svg, { Circle, Text as SvgText } from 'react-native-svg';
 
 import { useTheme } from '../design/theme';
 
-export type PoiMarkerXSize = 'curated' | 'reveal';
+export type PoiMarkerXSize = 'curated' | 'reveal' | 'preview';
 export type PoiMarkerXTier = 'curator' | 'iconic' | 'standard';
 
 export interface PoiMarkerXProps {
@@ -57,8 +60,9 @@ interface GlyphCfg {
 }
 
 const GLYPH: Record<PoiMarkerXSize, GlyphCfg> = {
-  curated: { fontSize: 20, haloWidth: 3.0, ringRadius: 15, ringStroke: 1.3, outlineWidth: 0.5 },
-  reveal:  { fontSize: 14, haloWidth: 2.2, ringRadius: 11, ringStroke: 1.0, outlineWidth: 0.4 },
+  curated: { fontSize: 20, haloWidth: 3.0, ringRadius: 15, ringStroke: 1.3, outlineWidth: 0.5  },
+  reveal:  { fontSize: 14, haloWidth: 2.2, ringRadius: 11, ringStroke: 1.0, outlineWidth: 0.4  },
+  preview: { fontSize: 12, haloWidth: 1.8, ringRadius:  9, ringStroke: 0.9, outlineWidth: 0.35 },
 };
 
 export function PoiMarkerX({ size = 'curated', tier = 'standard' }: PoiMarkerXProps) {
