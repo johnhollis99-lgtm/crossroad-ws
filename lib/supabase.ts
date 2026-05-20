@@ -40,6 +40,14 @@ export interface POI {
   /** Narration cache: "{mode}-{depth}-{voice_id}" → audio_url. Populated by server after generation. */
   narration_cache?: Record<string, string>;
   source_type?: string;
+  /**
+   * G2-floors (2026-05-19): surfacing-tier from get_corridor_pois /
+   * get_nearby_pois. 'curator' = editorial_curated bypass; 'iconic' =
+   * iconic_local bypass; 'standard' = cleared the per-category floor.
+   * ORDER BY at the RPC promotes curator → iconic → standard, then
+   * significance_score DESC, then existing spatial sort.
+   */
+  priority_tier?: 'curator' | 'iconic' | 'standard';
 }
 
 /** Curation-tunable RPC params (added 20260512000002 / 20260512000003). */
