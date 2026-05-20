@@ -91,8 +91,14 @@ export async function countPOIsAlongRoute(
 ): Promise<number | null> {
   if (polylinePoints.length < 2) return null;
 
-  // Downsample to ≤150 points to keep the WKT payload small while preserving shape
-  const pts = downsamplePolyline(polylinePoints, 150);
+  // Downsample to ≤50 points. ST_DWithin against a LINESTRING scales with
+  // segment count; 150 points × 22k POIs catalog × concurrent filter-toggle
+  // calls crossed the Supabase anon 8s statement_timeout regularly (57014
+  // cancellations observed in pg logs 2026-05-20). Corridor is buffered in
+  // MILES (5-20mi per REACH), so 50-point precision on a 430mi route is
+  // ~8.6mi per segment — comfortably under the corridor radius. No
+  // meaningful accuracy loss for "is this POI inside the corridor."
+  const pts = downsamplePolyline(polylinePoints, 50);
 
   const wkt = `SRID=4326;LINESTRING(${
     pts.map(p => `${p.longitude} ${p.latitude}`).join(',')
@@ -144,9 +150,11 @@ export async function getPOIsAlongRoute(
   // Match countPOIsAlongRoute's downsampling. A Google-decoded long-haul
   // polyline (e.g. LA→Cambria) is 1000–2000 points; sending the full WKT
   // makes ST_DWithin/ST_LineLocatePoint slow enough to time out
-  // server-side. 150 points preserves shape and matches the count call's
-  // shape so badge counts and rendered markers stay consistent.
-  const pts = downsamplePolyline(polylinePoints, 150);
+  // server-side. 50 points preserves shape (corridor is mile-buffered;
+  // 50-segment precision easily fits inside corridor radii) and matches
+  // the count call's shape so badge counts and rendered markers stay
+  // consistent. Reduced from 150 after 2026-05-20 timeout regression.
+  const pts = downsamplePolyline(polylinePoints, 50);
 
   const wkt = `SRID=4326;LINESTRING(${
     pts.map(p => `${p.longitude} ${p.latitude}`).join(',')
