@@ -57,6 +57,7 @@ import {
   IconWeird,
   LabeledSlider,
   NarratorCard,
+  OptionCard,
   SegmentedTrio,
   TripStat,
   Wordmark,
@@ -74,13 +75,10 @@ const STATUS_TOP   = Platform.OS === 'ios' ? 50 : ((StatusBar.currentHeight ?? 2
 const MAPBOX_TOKEN = process.env.EXPO_PUBLIC_MAPBOX_TOKEN!;
 const PEEK_SPRING  = { useNativeDriver: false as const, friction: 9, tension: 80 };
 
-type Depth = 'glance' | 'ride_along' | 'deep_dive';
-
-const DEPTH_OPTIONS = [
-  { value: 'glance'     as const, label: 'Glance',     sub: '1–2 lines'       },
-  { value: 'ride_along' as const, label: 'Ride along', sub: 'Short paragraph' },
-  { value: 'deep_dive'  as const, label: 'Deep dive',  sub: 'Full story'      },
-];
+// J1a (2026-05-19): user-facing depth picker removed. Depth is now intrinsic
+// per POI (addendum §4) and the runtime narration route accepts only
+// 'standard' anyway. The saveTrip payload still writes 'ride_along' until
+// the trips.depth column is dropped — see CLAUDE.md J1a-deferred note.
 
 const DENSITY_OPTIONS = [
   { value: 'sparse'   as const, label: 'Sparse'   },
@@ -295,11 +293,17 @@ export default function CustomizeScreen() {
     toggleCategoryStore(cat);
   }, [selectedCats, toggleCategoryStore]);
 
+  // ── Trip prefs (J1a — Pace + Narrative Focus from Zustand) ────────────────
+  const pace             = useTripStore(s => s.pace);
+  const setPace          = useTripStore(s => s.setPace);
+  const narrativeFocus   = useTripStore(s => s.narrativeFocus);
+  const setNarrativeFocus = useTripStore(s => s.setNarrativeFocus);
+  const narratorSlug     = useTripStore(s => s.narratorSlug);
+
   // ── State ────────────────────────────────────────────────────────────────
   const [narrators,        setNarrators]        = useState<NarratorRecord[]>([]);
   const [loadingNarrators, setLoadingNarrators] = useState(true);
   const [selectedNarrator, setSelectedNarrator] = useState<NarratorRecord | null>(null);
-  const [selectedDepth,    setSelectedDepth]    = useState<Depth>('ride_along');
   const [catsScrolled,     setCatsScrolled]     = useState(false);
   const [poiDist,          setPoiDistRaw]       = useState(poiDefault);
   const setPoiDist = useCallback((next: number) => {
@@ -321,6 +325,14 @@ export default function CustomizeScreen() {
   }, []);
   const [curatedCount,     setCuratedCount]     = useState<number | null>(null);
   const [avgPaceMin,       setAvgPaceMin]       = useState<number | null>(null);
+
+  // J1a: scroll ref + Categories anchor so the "Customize categories →"
+  // link under Narrative Focus scrolls the user to the chip rail.
+  const scrollViewRef = useRef<ScrollView | null>(null);
+  const [categoriesY, setCategoriesY] = useState(0);
+  const scrollToCategories = useCallback(() => {
+    scrollViewRef.current?.scrollTo({ y: Math.max(0, categoriesY - 12), animated: true });
+  }, [categoriesY]);
 
   // Clamp current poiDist if the mode-driven max shrinks beneath it
   useEffect(() => {
@@ -497,7 +509,10 @@ export default function CustomizeScreen() {
       narratorId:      selectedNarrator.is_preset ? selectedNarrator.id : undefined,
       userNarratorId:  !selectedNarrator.is_preset ? selectedNarrator.id : undefined,
       narratorName:    selectedNarrator.name,
-      depth:           selectedDepth,
+      // J1a: depth UI removed; hardcoded until trips.depth column
+      // is dropped in a follow-up migration. See CLAUDE.md
+      // deferred-migration backlog.
+      depth:           'ride_along',
       categoryFilter:  selectedCats,
       poiDistanceM:    Math.round(poiDist * 1609.34),
       density,
@@ -528,7 +543,9 @@ export default function CustomizeScreen() {
       tripId,
       narrator:       JSON.stringify(selectedNarrator),
       filters: JSON.stringify({
-        depth:          selectedDepth,
+        // J1a: legacy `depth` removed from filters payload. drive.tsx
+        // never reads it; legacy driving.tsx / trail.tsx fall through
+        // their `?? 'ride_along'` defaults inside useTTS.
         categoryFilter: selectedCats.map(c => CAT_SLUG[c] ?? c.toLowerCase()),
         corridorMi:     Math.max(0.1, poiDist),
         tone:           'warm',
@@ -536,9 +553,13 @@ export default function CustomizeScreen() {
         density,
         minRelevance,
         tripMode:       isHiking ? 'hiking' : 'driving',
+        // J1a additions — pace + focus + reserved narrator slug.
+        pace,
+        narrativeFocus,
+        narratorSlug,
       }),
     });
-  }, [selectedNarrator, saving, selectedDepth, selectedCats, poiDist, routeInfo, params, navigation, density, minRelevance, isHiking, poiMax]);
+  }, [selectedNarrator, saving, selectedCats, poiDist, routeInfo, params, navigation, density, minRelevance, isHiking, poiMax, pace, narrativeFocus, narratorSlug]);
 
   // ── Narrator grid: chunk into rows of 2 ──────────────────────────────────
   const narratorRows: NarratorRecord[][] = [];
@@ -707,23 +728,16 @@ export default function CustomizeScreen() {
 
       {/* ── BOTTOM SHEET — scrollable curation controls only ─────────────── */}
       <ScrollView
+        ref={scrollViewRef}
         style={[styles.sheet, { backgroundColor: theme.colors.paper }]}
         contentContainerStyle={[styles.sheetContent, { paddingBottom: insets.bottom + 110 }]}
         showsVerticalScrollIndicator={false}
         keyboardShouldPersistTaps="handled"
       >
-        {/* ── Narration depth ────────────────────────────────────────────── */}
-        <Text style={[theme.textVariants.eyebrow, styles.sectionLabel, { color: theme.colors.inkSoft }]}>
-          Narration depth
-        </Text>
-        <SegmentedTrio
-          options={DEPTH_OPTIONS}
-          value={selectedDepth}
-          onChange={setSelectedDepth}
-          testID="depth-segments"
-        />
-
         {/* ── Narrator grid ──────────────────────────────────────────────── */}
+        {/* J1a: legacy 4-narrator preset grid. Replaced in J1b with the
+            2-card narrator picker (Window Seat / Shotgun) once the second
+            narrator's voice_configs rows are seeded (Phase J0). */}
         <Text style={[theme.textVariants.eyebrow, styles.sectionLabel, { color: theme.colors.inkSoft }]}>
           Your narrator
         </Text>
@@ -758,8 +772,64 @@ export default function CustomizeScreen() {
           </View>
         )}
 
-        {/* ── Categories ───────────────────────────────────────────────────── */}
+        {/* ── Narrative Focus (J1a — addendum §1.2) ───────────────────────── */}
         <Text style={[theme.textVariants.eyebrow, styles.sectionLabel, { color: theme.colors.inkSoft }]}>
+          Narrative focus
+        </Text>
+        <View style={styles.optionRow}>
+          <OptionCard
+            title="The Land Speaks"
+            sub="Hear the geology, history, and indigenous stories that shape this landscape."
+            selected={narrativeFocus === 'the_land_speaks'}
+            onSelect={() => setNarrativeFocus('the_land_speaks')}
+            testID="focus-the-land-speaks"
+          />
+          <OptionCard
+            title="+ Local Color"
+            sub="Adds restaurants, theme parks, and modern attractions to the surface set."
+            selected={narrativeFocus === 'local_color'}
+            onSelect={() => setNarrativeFocus('local_color')}
+            testID="focus-local-color"
+          />
+        </View>
+        <Pressable
+          onPress={scrollToCategories}
+          accessibilityRole="link"
+          accessibilityLabel="Customize categories"
+          style={styles.customizeLinkRow}
+          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+        >
+          <Text style={[theme.textVariants.label, { color: theme.colors.primary, fontSize: 13 }]}>
+            Customize categories →
+          </Text>
+        </Pressable>
+
+        {/* ── Pace (J1a — addendum §6) ────────────────────────────────────── */}
+        <Text style={[theme.textVariants.eyebrow, styles.sectionLabel, { color: theme.colors.inkSoft }]}>
+          Pace
+        </Text>
+        <View style={styles.optionRow}>
+          <OptionCard
+            title="Full Drive"
+            sub="Hear every story at its full length. Best when the journey is the destination."
+            selected={pace === 'full_drive'}
+            onSelect={() => setPace('full_drive')}
+            testID="pace-full-drive"
+          />
+          <OptionCard
+            title="Light Touch"
+            sub="Hear only the standout moments, compressed. Best for everyday drives and family trips."
+            selected={pace === 'light_touch'}
+            onSelect={() => setPace('light_touch')}
+            testID="pace-light-touch"
+          />
+        </View>
+
+        {/* ── Categories ───────────────────────────────────────────────────── */}
+        <Text
+          onLayout={e => setCategoriesY(e.nativeEvent.layout.y)}
+          style={[theme.textVariants.eyebrow, styles.sectionLabel, { color: theme.colors.inkSoft }]}
+        >
           Categories
         </Text>
         <View style={styles.pillRowWrap}>
@@ -1007,6 +1077,10 @@ const styles = StyleSheet.create({
   narratorGrid: { gap: 10 },
   narratorRow:  { flexDirection: 'row', gap: 10 },
   skel:         { flex: 1, height: 96, borderRadius: 16, opacity: 0.3 },
+
+  // Option-card pair row (J1a — used by Narrative Focus + Pace)
+  optionRow:         { flexDirection: 'row', gap: 10 },
+  customizeLinkRow:  { marginTop: 8, paddingVertical: 4 },
 
   // Categories scroll fades
   pillRowWrap:   { position: 'relative' },

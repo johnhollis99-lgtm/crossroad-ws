@@ -1225,6 +1225,8 @@ Verification scripts: `scripts/verify-migrations.mjs` (66/66 checks passed on 00
 - `trips.depth` CHECK (currently 3-value `glance/ride_along/deep_dive`) — vestigial once Pace replaces user-facing depth.
 - `user_preferences.default_depth` CHECK + column — same.
 
+**J1a-deferred (2026-05-19):** Phase J1a removed the user-facing depth picker from `app/customize.tsx` and routes pace + narrative focus + a reserved narrator slug through `src/store/tripStore.ts` (v2 persist schema). The `saveTrip()` payload hardcodes `depth: 'ride_along'` with an inline comment because `trips.depth` still carries the 3-value CHECK; the runtime narration route already locks to `'standard'` (Move 3b.2) and `app/drive.tsx` doesn't consume `filters.depth` at all, so the hardcoded value is inert beyond satisfying the column constraint. Follow-up migration to land after the next narration arc: drop `trips.depth` + drop `user_preferences.default_depth` + remove `depth` from `SaveTripParams` in `lib/supabase.ts` + remove the hardcoded literal from `app/customize.tsx`. Bundle with the `trips.route_id` drop (drift 5.27 Path 3) if both land in the same window — both are `_drop.sql` shaped per the migration conventions.
+
 **Out-of-band live patches (no migration file — applied directly via pg):**
 - `get_corridor_pois` + `get_nearby_pois` RPCs patched (2026-05-06): live DB had diverged to reference a nonexistent `categories` table instead of `poi_categories`. Re-applied both `CREATE OR REPLACE FUNCTION` bodies from `20250503000001_trip_mode.sql` directly. Root cause unknown (likely a hand-edit in the Supabase SQL editor at some point). If you ever reset or re-apply migrations from scratch, these functions will be correct — the migration files were already right.
 

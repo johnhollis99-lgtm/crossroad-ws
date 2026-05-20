@@ -98,6 +98,9 @@ export type { SegmentedTrioProps, SegmentedTrioOption } from './SegmentedTrio';
 export { NarratorCard } from './NarratorCard';
 export type { NarratorCardProps } from './NarratorCard';
 
+export { OptionCard } from './OptionCard';
+export type { OptionCardProps } from './OptionCard';
+
 export { LabeledSlider } from './LabeledSlider';
 export type { LabeledSliderProps } from './LabeledSlider';
 
