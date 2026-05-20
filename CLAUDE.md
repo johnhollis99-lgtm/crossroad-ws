@@ -1512,6 +1512,41 @@ The curator-gated editorial set provides per-POI quality filtering but does not 
 
 **Implementation status (2026-05-19):** the rule is **live in the Phase I.1 MVP simulator** at [scripts/simulate-trip/lookahead.ts](scripts/simulate-trip/lookahead.ts) (`clusterByCategory()` + the `POI_SUPPRESSED_CLUSTER` event type). Defaults: `cluster_min_count=3`, `cluster_radius_corridor_mi=5`, `cluster_top_n_kept=1`. The LA-Mammoth simulation confirmed 4 cluster-suppression firings in LA (history cluster downtown, nature cluster Hollywood hills) — pattern works as designed. **Still not in the server-side runtime worker** — the simulator is offline-only; the server-side path (WebSocket-emitting lookahead) is Phase I.3 work.
 
+### Long-distance route alternatives limitation (legacy Directions API) (raised 2026-05-20)
+
+The home page's route fetch ([app/index.tsx](app/index.tsx) `fetchRoute`) uses Google's legacy Directions API (`maps.googleapis.com/maps/api/directions/json`) with `alternatives=true`. The API returns only 1 route for some long-distance trips because Google penalizes alternatives by absolute time-cost overhead — a +1h alternative on a 7h trip looks "much worse" by absolute time than the same +1h on a 4h trip, and gets suppressed.
+
+**Empirical pattern (2026-05-20 test from Sherman Oaks origin `34.1664, -118.4361`):**
+
+| Destination | Distance class | Routes returned |
+|---|---|---:|
+| Santa Barbara (~80mi) | short | 1 (US-101 only) |
+| San Diego (~140mi) | short | 3 (I-405/I-5, I-5, I-15) |
+| Las Vegas (~280mi) | mid | 2 (I-15 + CA-14/I-15 variant) |
+| Mammoth Lakes (~300mi) | mid | **3** (US-395 + scenic byway + I-15/US-395) |
+| San Francisco (~370mi) | long | **1** (I-5 N only) |
+| South Lake Tahoe (~430mi) | long | **1** (US-395 N only) |
+
+Short trips: typically 1-3 routes. Mid trips: consistently 2-3. **Long trips (>5h): typically 1 route.** The v1 launch demo corridor (LA→Mammoth) is mid-trip and works correctly on legacy.
+
+**Why this lives here, not as a v1-bug:** the limitation is a Google API behavior, not a code defect. Code-side recon (2026-05-20 routing-recon arc) confirmed no client-side route drop — temp `[TEMP routing-recon]` logs in `fetchRoute` showed `wps-with-coords=0` and `data.routes.length=1` from the device, matching out-of-band curl tests. Fix requires switching APIs, not patching client code.
+
+**Fix path (Path A) — Routes API v2 + `routingPreference: "TRAFFIC_AWARE_OPTIMAL"`.** Empirical test from the same origin: v2 with this preference returned **3 distinct routes** for LA→S Tahoe, including a genuinely different US-50 corridor via I-5/Sacramento (route 2: 474mi via I-5 → US-50). v2 with `TRAFFIC_AWARE` or `TRAFFIC_UNAWARE`: 1 route, same as legacy. Scope: ~30-40 LOC endpoint swap (POST body + field mask + response field translation). Cost: pricing tier bumps $5→$15 per 1k requests (legacy Basic → v2 Preferred).
+
+**v1 status — not blocking.** Mid-trip cases (the v1 demo class) all work on legacy. Long-distance degradation (LA→SF, LA→S Tahoe) is a known limitation; users on those routes see 1 route option instead of 2-3. Bundles with whatever real-time routing-quality work earns its keep at scale post-launch, when `TRAFFIC_AWARE_OPTIMAL` also pays for itself on rush-hour and incident-aware routing.
+
+## Post-launch feature backlog
+
+Items deliberately deferred past v1 launch. Captured here so the rationale and scope survive across sessions.
+
+### Manual origin + destination text-input fields on home page (raised 2026-05-20)
+
+Today the home page sets origin from device GPS only — there's no UI for the user to type or pick an arbitrary start point. This blocks "plan a trip from somewhere I'm not currently at" use cases (planning tomorrow's drive from home, planning a trip starting at a city the user is flying into, etc.).
+
+Scope: text input field for origin parallel to the existing destination field, Google Places autocomplete on it, coords resolution + validation, save-to-recent integration so manually-entered origins persist alongside GPS-derived ones. UI work in `app/index.tsx` (search overlay path), plus `lib/supabase.ts` `user_recent_locations` writes (currently destination-only, would extend to `type='origin'`).
+
+Not v1-blocking. Quality-of-life feature for power users planning ahead.
+
 ## Completed v1 work (catalog v1 closed 2026-05-19)
 
 Snapshot of what's landed in main as of catalog-v1-close. Curator-approved verification samplers cleared the final cycle; no further policy changes or generation cycles in flight. See [docs/decisions/2026-05-15-top-tier-poi-first-run.md](docs/decisions/2026-05-15-top-tier-poi-first-run.md) §Catalog v1 closed for the full close-out detail.
