@@ -273,7 +273,12 @@ User mental model / naming convention used in conversation:
 
 ## drive.tsx UI details
 
-> **Mostly SUPERSEDED by the Pine rebuild (commit `880b807` + subsequent polish).** Drive is now: emerald polyline, cobalt user-location dot with `useUserHalo` pulse, PersonaPill + StoriesBadge top chrome, 3-column TripStat card, retracted/deployed sheet states with breathing watermark X, media controls, Up next, LabeledSlider corridor, ModePillRow, Quiet pill + danger End trip. The legacy details below (sheet snap points, slider styling, "🚗 Driving" emoji segment, etc.) describe the pre-Pine state and should be ignored for current work.
+> **Mostly SUPERSEDED by the Pine rebuild (commit `880b807` + subsequent polish).** Drive is now: emerald polyline, cobalt user-location dot with `useUserHalo` pulse, PersonaPill + StoriesBadge top chrome, 3-column TripStat card (header reads STORIES PER per `7549676`), retracted/deployed sheet states with breathing watermark X, media controls, Up next, REACH SegmentedTrio corridor picker (Nearby / Within sight / Geographical area; defaults to max per `e7200e8`), ModePillRow, Quiet pill + danger End trip. Tier-styled POI markers per `46e3e20`. The legacy details below (sheet snap points, slider styling, "🚗 Driving" emoji segment, etc.) describe the pre-Pine state and should be ignored for current work.
+
+**Current details (2026-05-20):**
+
+- **REACH control** is a `SegmentedTrio` of three cards (Nearby / Within sight / Geographical area), defaults to max position. NOT a slider in implementation — segmented buttons. Per `e7200e8`.
+- **POI markers — tier-styled.** Gold (`#D4A017`, `gold` design token) for `editorial_curated = true` or `iconic_local = true` rows; red X unchanged for standard tier. Promotes curator via color rather than size/opacity so standard-tier visibility holds on dark + satellite map styles. Per `46e3e20`.
 
 - **Back button** — top-left map overlay, inside `overlayTL` row before the narrator avatar chip. Circular dark button `←`. Shows confirmation alert before navigating back to customize.
 - **Sheet snap points** — two states only: `peek` (96px) and `expanded` (82% screen height). `default === expanded` so the hook naturally collapses to two snaps. Sheet starts expanded.
@@ -1260,7 +1265,14 @@ Verification scripts: `scripts/verify-migrations.mjs` (66/66 checks passed on 00
 - **Repo:** `https://github.com/johnhollis99-lgtm/crossroad-ws.git` — main branch on origin/main.
 - Git binary (not on PATH): `C:\Users\johnh\AppData\Local\GitHubDesktop\app-3.5.8\resources\app\git\cmd\git.exe`
 - **`.gitignore`** — covers: `node_modules/` (all sub-packages), `.env` + `server/.env` (secrets), `.expo/`, `dist/`, `admin/.next/`, `scripts/*/cache/`, `scripts/audition-output/`, `*.opus`, `*.tsbuildinfo`, OS files, `.claude/scheduled_tasks.lock`, `.claude/settings.local.json`, `supabase/.temp/`, plus session-scoped pre-handoff working notes (`docs/alignment-plan.md`, `docs/codebase-audit.md` — added 2026-05-11 per chore(gitignore) commit, files retained locally for historical context).
-- **Recent commit history (top of `main`, 2026-05-15):**
+- **Recent commit history (top of `main`, 2026-05-20):**
+  - `46e3e20` feat(drive): tier-styled POI markers — gold (`#D4A017`) for `editorial_curated` and `iconic_local` POIs; red X unchanged for standard tier (promotes curator via color rather than size/opacity to preserve standard-tier visibility on dark + satellite map styles)
+  - `d7a78aa` C1 — RPC corridor extension for curator/iconic POIs (25mi visibility-horizon bypass cap; both `get_corridor_pois` + `get_nearby_pois`)
+  - `e7200e8` C2 — Drive page Detail picker redesign (SegmentedTrio: Nearby / Within sight / Geographical area; defaults to max)
+  - `7549676` C0 — stat strip header: PACE → STORIES PER
+  - `f2fbe51` J1a-followups — rename Pace→Detail + remove obsolete filters (Density, Min Relevance, POI Distance sliders)
+  - `c5d0a1e` G2 — per-category significance floors wired into live runtime
+  - `54eea84` J1a — Trip Setup refit (Pace + Narrative Focus + depth removal)
   - `9ced1c7` feat(regions): E1d Tier C polygon derivation script + v1.1 doc update (LTBMU/Hetch-Hetchy-reservoir-buffer/Sierra-Valley-centroid-bbox drafts to `data/editorial-named-valleys.geojson`; Class B osm_linear_to_bbox section in v1.1 doc)
   - `9418afd` feat(regions): E1d Phase 4 — live import 27 named valleys (51 regions total) (25 Haiku calls × $0.0577; osmtogeojson + geodesic-circle Wikidata buffers; ST_MakeValid on Anza-Borrego ring self-intersection; Salinas Valley editorial parent override to Coast Ranges)
   - `8682694` docs(regions): E1d v1.1 polygon-followups — SJV + LA Basin inadequacy
