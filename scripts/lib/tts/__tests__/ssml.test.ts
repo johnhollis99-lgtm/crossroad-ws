@@ -8,7 +8,7 @@
  * stripped the decimal point before the wrap took effect).
  */
 
-import { ssmlize } from '../ssml';
+import { ssmlize } from '../../../../server/lib/ssml';
 
 describe('ssmlize — number handling', () => {
   // ── Decimal skip (new, 2026-05-18) ────────────────────────────────

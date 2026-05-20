@@ -41,7 +41,7 @@ import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
 import { registerProvider, generateNarration } from './lib/tts/index.js';
 import { GoogleTTSProvider } from './lib/tts/providers/google.js';
-import { ssmlize, stripMarkersAndTags, tallyMarkers, type SkipReport } from './lib/tts/ssml.js';
+import { ssmlize, stripMarkersAndTags, tallyMarkers, type SkipReport } from '../server/lib/ssml.js';
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));

@@ -31,7 +31,7 @@ import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { registerProvider, generateNarration } from './lib/tts/index.js';
 import { GoogleTTSProvider } from './lib/tts/providers/google.js';
-import { ssmlize } from './lib/tts/ssml.js';
+import { ssmlize } from '../server/lib/ssml.js';
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 const ENV_PATH = resolve(SCRIPT_DIR, '..', '.env');
