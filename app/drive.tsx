@@ -85,9 +85,9 @@ const STATUS_BAR_PAD = Platform.OS === 'ios' ? 52 : ((StatusBar.currentHeight ??
 // Curator/iconic POIs bypass this value server-side via C1 up to a
 // 25mi cap, so a curator POI at 22mi surfaces even at 'geographical'.
 const REACH_OPTIONS = [
-  { value: 'nearby',       label: 'Nearby' },
-  { value: 'within_sight', label: 'Within sight' },
-  { value: 'geographical', label: 'Geographical area' },
+  { value: 'nearby',       label: 'Nearby',            sub: '5mi'  },
+  { value: 'within_sight', label: 'Within sight',      sub: '10mi' },
+  { value: 'geographical', label: 'Geographical area', sub: '20mi' },
 ] as const;
 
 type ReachKey = typeof REACH_OPTIONS[number]['value'];
