@@ -216,6 +216,7 @@ themselves don't need renaming.
 | `voice_configs.mode` | audience mode | family / kids / unfiltered / local |
 | `narration_audio.mode` | trip mode | driving / hiking / city |
 | `narration_audio.narrator_slug` | voice id | per-voice slug |
+| `narration_audio.audience_mode` | audience mode | family / kids / unfiltered / local (added 20260519000002 — disambiguates rows when two audiences share a narrator_slug after the H1.5.1 collapse) |
 | `narration_audio.depth` | depth | glance / ride_along / deep_dive |
 | `trips` | no mode column today | depth + category_filter only |
 
@@ -584,7 +585,7 @@ Existing `curation:top10` / `bottom5` / `stats` logs preserved alongside.
 - `narrators` — preset narrator rows; 4 seeded with fixed UUIDs `00000000-0000-0000-0000-00000000000{1-4}`
 - `user_narrators` — user-created narrators; slug GENERATED as `'user-' || id`
 - `trips` — `id` uuid PK, `user_id` uuid FK→`auth.users` ON DELETE SET NULL, `route_name` text, `origin` text, `destination` text, `distance_mi` double, `duration_min` int, `narrator_id` uuid FK→`narrators` ON DELETE SET NULL, `user_narrator_id` uuid FK→`user_narrators` ON DELETE SET NULL, `narrator_name` text, `depth` text NOT NULL DEFAULT `'ride_along'` CHECK (`'glance'|'ride_along'|'deep_dive'`), `category_filter` text[] NOT NULL DEFAULT `'{}'`, `poi_distance_m` int NOT NULL DEFAULT 500, `status` text NOT NULL DEFAULT `'pending'` CHECK (`'pending'|'active'|'completed'|'abandoned'`), `started_at` timestamptz, `completed_at` timestamptz, `created_at` timestamptz NOT NULL DEFAULT `now()`. Indexes: `trips_user_id_idx`, `trips_status_idx`. No `mode` column (audience/trip-mode separation lives in code request params per the Dimensional model). Reconciled with live DB 2026-05-11.
-- `narration_audio` — poi_id, narrator_slug (= voice_id), depth, audio_url (nullable — NULL while pending), mode, status CHECK('pending','ready','failed') DEFAULT 'ready'. UNIQUE(poi_id, narrator_slug, depth, mode) — widened from the original 3-column shape by migration 20260510000005 (Prompt 07). 30-day TTL. Added columns (migration 20260504000011): provider, character_count, duration_ms, cost_usd, prompt_version. Added (migration 20260504000013): status, mode, audio_url made nullable.
+- `narration_audio` — poi_id, narrator_slug (= voice_id), depth, audio_url (nullable — NULL while pending), mode, audience_mode CHECK('family','kids','unfiltered','local') DEFAULT 'family' (added 20260519000002), status CHECK('pending','ready','failed') DEFAULT 'ready'. Unified-shape unique constraint: `na_unique UNIQUE NULLS NOT DISTINCT (poi_id, region_id, narrator_slug, audience_mode, depth, mode)` — table serves POI rows (region_id=NULL) and region rows (poi_id=NULL) under one constraint; NULLS NOT DISTINCT makes NULL count as a value. Supabase JS `onConflict` must list all 6 columns: `'poi_id,region_id,narrator_slug,audience_mode,depth,mode'`. Earlier 5-column form (without audience_mode) silently overwrites rows across audiences sharing a narrator_slug after the H1.5.1 narrator-collapse (kids+local both narrator_a; family+unfiltered both narrator_b) — caused the v1 Vasquez Rocks Family row corruption discovered in H1.6.3. Original constraint widened from 3-column shape by 20260510000005 (added mode), then to 6-column by 20260519000002 (added audience_mode). region_id was added when the table was extended to also store region narrations. 30-day TTL. Added columns (migration 20260504000011): provider, character_count, duration_ms, cost_usd, prompt_version. Added (20260504000013): status, mode, audio_url made nullable. Added (20260504000020): narration_text. Added (20260519000002): audience_mode.
 - `user_contributions`, `user_badges`, `contribution_rewards` — contribution/points system
 - `user_recent_locations` — **PENDING MIGRATION** (SQL is in lib/supabase.ts as a comment)
 - `venue_classification_review` (added 20260504000016) — admin queue for venue candidates without polygons
@@ -984,7 +985,10 @@ scripts/lib/tts/
     self-hosted.ts      — stub
   __tests__/
     integration.test.ts — real Google TTS call; skips if GOOGLE_APPLICATION_CREDENTIALS unset
+    ssml.test.ts        — number-handling unit tests (imports from server/lib/ssml post-Move 3b.1)
 ```
+
+**Post-Move 3b.1, `ssmlize` lives at `server/lib/ssml.ts` — single canonical location; the `scripts/lib/tts/` path is retired.** The TTS abstraction (registry + `generateNarration` + `cost-tracker` + providers) stays in `scripts/lib/tts/`; only the SSML post-processor moved to the server tree so both the precache scripts and `server/routes/narration.ts` can import from one place.
 
 ### Key types (`types.ts`)
 - `ProviderName = 'google' | 'elevenlabs' | 'openai' | 'self-hosted'` — defined once, used on both `TTSProvider.name` and `TTSOutput.provider`
@@ -1024,7 +1028,7 @@ ANTHROPIC_API_KEY=<key>                                  # used by precache scri
 DATABASE_URL=postgresql://postgres:<password>@db.<project-ref>.supabase.co:5432/postgres  # direct connection — NOT the pooler. URL-encode special chars in password (?→%3F)
 ```
 
-**Root `.env` is the single source of truth — do NOT create `server/.env`.** `server/index.js` calls `require('dotenv').config()` which resolves from `process.cwd()`, so the server must be launched from the project root: `node server/index.js` (NOT `cd server && npm start`). `cd server && npm install` is still fine — only the runtime invocation cares about cwd. `server/.env.example` is kept as a documentation artifact for the keys the server reads; `server/.env` itself remains in `.gitignore` defensively in case anyone ever creates one.
+**Root `.env` is the single source of truth — do NOT create `server/.env`.** `server/index.js` calls `require('dotenv').config()` which resolves from `process.cwd()`, so the server must be launched from the project root: `npx tsx server/index.js` (NOT `cd server && npm start`). `cd server && npm install` is still fine — only the runtime invocation cares about cwd. `server/.env.example` is kept as a documentation artifact for the keys the server reads; `server/.env` itself remains in `.gitignore` defensively in case anyone ever creates one.
 
 ### Running the integration test
 ```
@@ -1156,7 +1160,7 @@ pnpm html            # rebuild index.html only
 
 ### Migration backlog status (updated 2026-05-14)
 
-**DB watermark: `20260514000007`** — all migrations through 20260514000007 applied. No migration files currently staged-but-not-applied.
+**DB watermark: `20260519000002`** — all migrations through 20260519000002 applied. No migration files currently staged-but-not-applied.
 Verification scripts: `scripts/verify-migrations.mjs` (66/66 checks passed on 000014; listed in `.gitignore`). Post-0016 schema verification lives in `scripts/admin/verify-venue-schema.ts`. Phase 2 migrations were applied chunked (pre-snapshot → body → post-snapshot+diff in a `_verify` schema, then `DROP SCHEMA _verify CASCADE`); this catches accidental drift and is the recommended pattern for live-DB migrations going forward. Live schema can be dumped on demand via `node scripts/admin/dump-schema-snapshot.mjs > docs/db-snapshot-YYYY-MM-DD.md`.
 
 **Applied (confirmed live):**
@@ -1208,6 +1212,12 @@ Verification scripts: `scripts/verify-migrations.mjs` (66/66 checks passed on 00
 - 20260514000006 `narration_plays` — new table per addendum §9.2 with FK to regions/pois/trips/auth.users/narration_audio (all `ON DELETE SET NULL`). Two CHECKs: `poi_or_region_present` (one of poi_id/region_id must be set) and `durations_nonneg` (defensive — not in addendum, locks duration arithmetic sanity). Partial indexes on `poi_id` / `user_id` (`WHERE col IS NOT NULL`). RLS policy `narration_plays_own_rows` (SELECT, authenticated, `user_id = auth.uid()`); writes via service role.
 - 20260514000007 `narration_audio_depth_check` — extends `na_depth_check` from 3-value to 7-value union `{glance, ride_along, deep_dive, brief, standard, long, long_compressed}` per addendum §4.4. No data migration — existing 37 narration_audio rows stay on legacy `deep_dive`; app reads with alias mapping (glance↔brief, ride_along↔standard, deep_dive↔long). Applier: `.tmp-apply-migrations.py` (ad-hoc; deleted post-apply). DROP IF EXISTS + bare ADD pattern, BEGIN/COMMIT-wrapped.
 
+**Applied 2026-05-19 (Phase I.2.5 — closest_approach trigger + LA→Mammoth editorial activation):**
+- 20260519000001 `pois_off_route_landmark_hint` — adds two columns to `pois`: `off_route_landmark_hint text` (curator-authored descriptive sentence orienting the listener visually) and `trigger_mode text NOT NULL DEFAULT 'proximity' CHECK IN ('proximity', 'closest_approach')` (lookahead trigger discipline). Plus partial b-tree index `pois_trigger_mode_closest_approach_idx ON (trigger_mode) WHERE trigger_mode='closest_approach' AND merged_into IS NULL`. Originally drafted with prefix `20260518000001`, renamed to today's local-clock day before staging per convention (the 0518000001 slot was already taken by `voice_configs_d3_lockdown.sql`).
+
+**Applied 2026-05-19 (Phase H1.6.1 — narrator-collapse cache-key fix):**
+- 20260519000002 `narration_audio_audience_mode` — adds `narration_audio.audience_mode text NOT NULL DEFAULT 'family' CHECK IN ('family','kids','unfiltered','local')` and widens the `na_unique` constraint from `(poi_id, region_id, narrator_slug, depth, mode)` to `(poi_id, region_id, narrator_slug, audience_mode, depth, mode) NULLS NOT DISTINCT`. Required because the H1.5.1 narrator-collapse (1 voice per audience) leaves two audiences sharing each narrator_slug (kids+local both at narrator_a; family+unfiltered both at narrator_b); without audience_mode in the unique key, inserts for one audience silently overwrite rows for the other. DEFAULT 'family' backfills all 149 existing rows correctly: catalog v1 is 100% Family per the voice_configs history (the 108 region rows + 37 Iapetus POI rows were generated when their voices were the active Family voice; the 4 valid spot-check rows were already Family). Per drift 5.33 + precedent 20260510000005: `na_unique` is constraint-backed (not bare index), so the migration uses `ALTER TABLE DROP/ADD CONSTRAINT` not `DROP INDEX`. Applied via MCP `apply_migration` (BEGIN/COMMIT-wrapped). Verified rowcount unchanged (149) + index shape post-migration.
+
 **Deferred to Phase D3** (per roadmap §4 — bundled with voice audition):
 - `voice_configs.narrator_slug` column add + partial unique index swap from `(mode) WHERE is_active=true` to `(mode, narrator_slug) WHERE is_active=true` + 8 new voice rows (4 audience × 2 narrator). All one coordinated migration.
 
@@ -1222,7 +1232,7 @@ Verification scripts: `scripts/verify-migrations.mjs` (66/66 checks passed on 00
 - `GOOGLE_APPLICATION_CREDENTIALS` is set and working in root `.env` ✓
 - `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` aliases set in root `.env` ✓
 - Add `ANTHROPIC_API_KEY` to root `.env` (single source of truth — server reads from root .env via dotenv when launched from project root)
-- Run `cd server && npm install` to get `@google-cloud/text-to-speech` — install is cwd-agnostic; runtime is not. Launch the server from project root: `node server/index.js`
+- Run `cd server && npm install` to get `@google-cloud/text-to-speech` — install is cwd-agnostic; runtime is not. Launch the server from project root: `npx tsx server/index.js`
 - Run `pnpm audition --mode=<mode>` for all 4 audience modes → listen to output → run `pnpm audition --commit` for each
 - After 4 commits: voice_configs has one active row per audience mode → Phase 7 (lazy cache population) is unblocked
 - After picks confirmed: wire voice_configs lookup into `generateNarration()` in `scripts/lib/tts/index.ts`
@@ -1525,9 +1535,232 @@ npx tsx index.ts --route la-mammoth --pace full-drive \
 
 WebSocket emission of `narration_queued` events; mobile UI integration; actual audio playback; real GPS / `update_location` event handling; group trip synchronization; `narration_plays` event capture on skip / tell-me-more. Pace=Light Touch (currently rejected by CLI with `--pace=light-touch deferred` message). Iconic Local Override (Phase F not done; no POIs flagged `iconic_local=true`).
 
-### Per-route corridor profile — open question
+### Per-route corridor profile — RESOLVED 2026-05-19
 
-The LA-Mammoth simulation found Mt. Whitney (~13mi off Lone Pine), Bristlecone Pines (~12mi off Bishop), Trona Pinnacles (~25mi off Inyokern) all sit just outside the default 10mi corridor. **Worth considering per-route corridor profiles** — urban segments stay at 10mi to avoid noise, rural Eastern Sierra widens to 15-20mi to catch the soul-doctrine flagships. Currently the CLI accepts a single `--corridor-mi` for the whole route. Future enhancement: per-waypoint corridor override or segment-based profile.
+Resolved in Phase I.2.5 below — `RoutePreset.corridor_profile` carries default + per-segment overrides; lookahead applies via `passesPerMileFilter`. LA-Mammoth gets 25mi rural / 10mi urban (LA basin 0–27, Mammoth town 290–297) + 30mi closest_approach cap for off-route POIs.
+
+## Phase I.2.5 — closest_approach trigger + LA→Mammoth editorial seed (2026-05-19)
+
+Follow-on activation of the Phase I.1+I.2 simulator. Adds an off-route trigger mode, per-mile corridor profiles, 26 editorial POIs along the LA→Mammoth corridor, and prompt-template plumbing for orientation cues. Devils Postpile fires post-bump; all 6 closest_approach POIs surface.
+
+### Schema additions (migration 20260519000001 — see Migration backlog)
+
+`pois.off_route_landmark_hint text` + `pois.trigger_mode text NOT NULL DEFAULT 'proximity' CHECK ∈ ('proximity', 'closest_approach')` + partial index on closest_approach rows.
+
+### LA→Mammoth editorial seed (26 POIs)
+
+[scripts/poi-import/seeds/editorial-la-mammoth-2026-05-18.sql](scripts/poi-import/seeds/editorial-la-mammoth-2026-05-18.sql). Source: [docs/proposals/la-mammoth-editorial-pois-proposal.md](docs/proposals/la-mammoth-editorial-pois-proposal.md) (v2, curator-approved). 26 POIs as `source_type='editorial'`, `editorial_curated=true`, `verified=true`, `confidence_score=1.0`. Source ids follow `editorial:la-mammoth-2026-05-18:NN` (01–26). Categories used (all existing slugs): history (13), geology (7), nature (3), architecture (3).
+
+Six are `trigger_mode='closest_approach'` with descriptive `off_route_landmark_hint` populated: Garlock (ghost town, #11), Randsburg (#12), Kennedy Meadows (#15), Trona Pinnacles (#16), Cerro Gordo (#21), Bristlecone (#26).
+
+Seed pattern: temp staging table → `INSERT INTO pois SELECT ... JOIN poi_categories ON slug`. Idempotent via `ON CONFLICT (source_type, source_id) WHERE merged_into IS NULL DO NOTHING`. The seed's staging table has an `address` field for inline documentation — NOT inserted into pois (no such column).
+
+### Simulator refactor
+
+[scripts/simulate-trip/routes.ts](scripts/simulate-trip/routes.ts) — new `CorridorSegment` + `CorridorProfile` interfaces; `RoutePreset.corridor_profile?: CorridorProfile` populated on LA_MAMMOTH (25mi default, 10mi LA basin 0–27, 10mi Mammoth town 290–297); `CLOSEST_APPROACH_MAX_MI = 30`; helpers `getCorridorMiAt(route, mile)` (per-segment lookup with default fallback) and `getMaxCorridorMi(route)` (= `max(default, urban_segments, CLOSEST_APPROACH_MAX_MI)`; for la-mammoth = 30; this is what the SQL spatial filter passes to `ST_DWithin` when no `--corridor-mi` override).
+
+[scripts/simulate-trip/queries.ts](scripts/simulate-trip/queries.ts) — `CorridorPoi` gains `trigger_mode` + `off_route_landmark_hint`; SELECT extended. **ORDER BY tiebreaker** (load-bearing): `route_position_fraction ASC, p.significance_score DESC, p.id ASC`. Without the tiebreaker, PG's tie-resolution at mile clusters depended on buffer state and changed across DB-state shifts (the Bristlecone dedup exposed this in v2→v3 sim run).
+
+[scripts/simulate-trip/lookahead.ts](scripts/simulate-trip/lookahead.ts):
+
+- `SimulationInput.preset: RoutePreset` added.
+- New `passesPerMileFilter(poi, route, totalMiles)` as a hard pre-step in `runLookahead`. `proximity` POIs must be inside `getCorridorMiAt(route, mile)`. `closest_approach` POIs allowed up to `CLOSEST_APPROACH_MAX_MI`. Drops are silent (no event emitted).
+- **Density-gap bypass for closest_approach**: doctrine — closest_approach POIs anchored to perpendicular visibility, not corridor entry; the user is passing the landmark NOW, so "too close to previous narration" doesn't apply.
+- **Density-gap threshold reads effective_score = raw + boost** (no narrator_weight multiplier — gap-rule decisions invariant under narrator selection). `editorial_score_boost` is now load-bearing for both candidate-set entry AND gap-suppression survival.
+
+[scripts/simulate-trip/index.ts](scripts/simulate-trip/index.ts) — `--corridor-mi` is optional. Absent: `getMaxCorridorMi(preset)` for SQL filter + per-mile profile narrowing in TS. Present: uniform override via synthetic flat-profile preset (`{ default_corridor_mi: override, urban_segments: [] }`) so the per-mile filter honors uniform semantics across all miles. (closest_approach POIs still cap at `CLOSEST_APPROACH_MAX_MI` regardless of override — deliberate asymmetry; closest_approach is a separate doctrinal concept.)
+
+### Prompt template plumbing — ORIENTATION CUE injection
+
+[server/prompts/pois/narrator_b_family.js](server/prompts/pois/narrator_b_family.js)'s `buildUserPrompt` now reads `poi.off_route_landmark_hint`. When present, injects between the description and the "narrate now" line:
+
+```
+ORIENTATION CUE (use this landmark description in the narration so the
+listener can locate the POI visually; do NOT add compass directions or
+body-relative directives like 'look right'): {off_route_landmark_hint}
+```
+
+Existing MOTION & DISTANCE FRAMING ban on listener-imperative language (`Look right`, `Notice the`, `You can feel`) stays — descriptive locative framing ("on the Inyo Mountains," "across the valley from the Sierra") is still allowed.
+
+[scripts/precache-curated-pois.ts](scripts/precache-curated-pois.ts) extended to fetch `off_route_landmark_hint` from `pois` and pass through to `template.buildUserPrompt(...)`.
+
+**Curator convention for hint authoring**: descriptive only, never imperatives. Six LA→Mammoth hints rewritten 2026-05-19 from imperative form ("Look east at the Inyo Mountains...") to descriptive ("On the Inyo Mountains — that dark, rugged range across the valley from the Sierra...").
+
+**Curator stance on compass directions in proximity-POI narrations** (clarified 2026-05-19): "north here" or "off to the north" is fine in proximity narrations — the orientation-cue guardrail only fires when `off_route_landmark_hint` is present. Vasquez Rocks's spot-check narration opens with "Vasquez Rocks sits off to the north here" (no hint, no guardrail) — left as-is per curator.
+
+### Spot-check pipeline — scripts/spot-check-3-pois.ts
+
+[scripts/spot-check-3-pois.ts](scripts/spot-check-3-pois.ts) — one-off pattern for hint/prompt/plumbing validation. Hardcodes 3 POI source_ids, runs narrator_b × Family × standard through Haiku → `ssmlize` → Google TTS → Storage upload → `narration_audio` upsert. $3 cost ceiling guardrail. Single-attempt Haiku (no parse-retry). Writes both Storage object AND `narration_audio` row, unlike `precache-curated-pois.ts` which writes Storage only.
+
+Use this pattern when validating prompt template variants or hint-injection features on a small set before re-running the full curated catalog.
+
+### DB state corrections during this session (data writes, not schema)
+
+- **Bristlecone dedup**: duplicate Ancient Bristlecone Pine Forest row (id `4c9bf56f...`, editorial source_type with self-id source_id, sig=9+boost=20) → `merged_into` pointed at canonical editorial seed #26 (id `2309b2d2...`, sig=88).
+- **Devils Postpile significance bump**: row id `8c70d0c6...` raw `significance_score` raised 8 → 82. Boost stays 20 → effective 102, clears the 75 density-gap override without boost dependency. Curator policy: "curated POIs that are extremely interesting should be scored high enough to clear all thresholds without boost dependency."
+- **6 off_route_landmark_hint rewrites** for LA→Mammoth closest_approach POIs (imperative → descriptive form).
+
+### Spot-check narrations generated (3 fresh files)
+
+3 narrations at narrator_b × Family × standard, both Storage + `narration_audio` rows written:
+
+- Vasquez Rocks (`:01`, 86.4s, no hint)
+- Owens Lake Patsiata (`:20`, 93.5s, no hint)
+- Cerro Gordo Silver Mines (`:21`, 99.1s, **hint injected**)
+
+Cerro Gordo confirms end-to-end ORIENTATION CUE injection: Claude's opening near-verbatim adopted the hint's "Up on the Inyo Mountains — that dark, rugged range across the valley from the Sierra" framing; no compass directions or body-relative directives in any of the three narrations. Total spot-check spend ~$0.10.
+
+### Sim timeline artifacts
+
+Four LA→Mammoth timeline docs at `docs/simulations/`:
+
+| Doc | State of simulator + DB | Result |
+|---|---|---|
+| `2026-05-19-la-mammoth.md` (v1) | pre-refactor, pre-seed | 8.2% airtime, 64-min longest silence (mi 202 → 271) |
+| `2026-05-19-la-mammoth-v2.md` | post-refactor + 26 editorial seed | 21.7% airtime, 5/6 closest_approach firing (Garlock suppressed) |
+| `2026-05-19-la-mammoth-v3.md` | + Bristlecone dedup + closest_approach gap bypass | 22.3%, 6/6 closest_approach |
+| `2026-05-19-la-mammoth-v4.md` | + ORDER BY tiebreaker + effective_score gap rule | 21.2%, 6/6 closest_approach, deterministic ordering |
+
+v4 still shows Devils Postpile as gap-suppressed (the sig bump came after v4 was written). A discarded mid-spot-check run confirmed Devils Postpile fires post-bump, but no v5 doc was written — the spot-check audio generation was the next milestone instead.
+
+### Phase I.3 still open
+
+Unchanged from prior section: WebSocket emission of `narration_queued` events, mobile UI integration, real GPS handling, group-trip sync, Pace=Light Touch (currently rejected by CLI), Iconic Local Override (Phase F unfinished; no POIs flagged `iconic_local=true`).
+
+## Phase G Block G1 — intrinsic_depth assignment (2026-05-19)
+
+Post-catalog-v1, populated `pois.intrinsic_depth` across all 21,935 active POIs via heuristic at [scripts/poi-import/assign-intrinsic-depth.ts](scripts/poi-import/assign-intrinsic-depth.ts) per addendum §4.3 mapped to available signals (no Wikipedia word-count available, so pageview points used as proxy).
+
+**First-match-wins assignment rules:**
+1. `iconic_local = true` → brief (no POIs flagged yet — rule reserved for Phase F)
+2. `source_type = 'narrative_extracted'` → long (0 POIs — Phase B6 not started)
+3. `category = 'geology' AND USGS citation` → long (4 POIs)
+4. `pageview_pts >= 12` → long (179 POIs — proxy for >3000-word Wikipedia article)
+5. `additional_sources length >= 3` → long (25 POIs)
+6. `editorial_curated = true AND significance_score >= 75` → long (58 POIs)
+7. `source_type = 'osm' AND pv = 0 AND extras = 0 AND sig < 25 AND NOT editorial_curated` → brief (5,054 OSM thin rows)
+8. else → standard (16,615 POIs)
+
+**Final distribution:** brief 5,057 / standard 16,612 / long 266 (1.21% long, under the 5% hard cap). Idempotent — re-run produces 0 changes once committed.
+
+**Curator override:** 3 editorial POIs at sig 71–73 (Garlock ghost town, Solar Star Solar Project, Little Lake) were flipped back to brief via per-row UPDATE after the heuristic moved them to standard. Curator's explicit "light material" intent preserved over the heuristic threshold (75) for these 3 specific cases. Logged to `C:\Users\johnh\AppData\Local\Temp\roadstory-intrinsic-depth\intrinsic-depth-curator-overrides-2026-05-19T18-18-26-987Z.log` for audit.
+
+Run script idempotent on re-run; brief assignment is 99.9% OSM-thin (one Community Church of Gonzales NRHP exception caught by extras≥3 rule). The 7 non-trivial editorial brief flips (Garlock/Solar Star/Little Lake + 4 others that stayed long) demonstrate the editorial-curated AND sig>=75 line is the right threshold.
+
+## Phase H1.5 + H1.6 — narrator collapse + audience_mode schema (2026-05-19)
+
+Bundle spans two phase numbers because the work surfaced an architectural gap during the collapse retirement (H1.5.1) that required schema-level repair (H1.6.1–H1.6.3) before the template work could proceed safely. Five gated sub-blocks in order: H1.6.1 (schema widen) → H1.6.2 (readers/writers update) → H1.6.3 (catalog audit + repair) → H1.5.1 (registry retirement + flatten) → H1.5.2 (template rewrites) → H1.5.3 (audio regen).
+
+### voice_configs collapse (MCP, 2026-05-18 → 2026-05-19)
+
+Per addendum §5 two-narrator model, the 8-row matrix (2 narrators × 4 audiences) collapses to 4 (one voice per audience). Final active rows after the MCP-applied deactivations:
+
+| audience | narrator_slug | voice_id | speakingRate |
+|---|---|---|---:|
+| family | narrator_b | en-US-Chirp3-HD-Sadachbia | 1.00 |
+| kids | narrator_a | en-US-Chirp3-HD-Sulafat | 1.05 |
+| local | narrator_a | en-US-Chirp3-HD-Iapetus | 1.00 |
+| unfiltered | narrator_b | en-US-Chirp3-HD-Schedar | 0.95 |
+
+Six pre-collapse voice_configs rows retained as `is_active=false` historical artifacts (Iapetus/family v1, Sadachbia/local v2, Sulafat/family v1 + local v1, Charon/unfiltered v1, Zephyr/kids v2 — see `voice_configs` history).
+
+**Architectural consequence:** kids+local both share narrator_slug='narrator_a' (different voices); family+unfiltered both share narrator_slug='narrator_b'. The pre-existing cache-key shape `{poi_id}-{trip_mode}-{depth}-{narrator_slug}.opus` collides under this collapse — two audiences map to the same key. Discovered during H1 spot-check pre-flight (`scripts/poi-import/_voice_check_h15.mjs`); resolved by H1.6.1.
+
+### H1.6.1 — schema widen
+
+Migration `20260519000002_narration_audio_audience_mode.sql` adds `audience_mode` column + widens `na_unique` constraint. See **Migration backlog status → Applied 2026-05-19 (Phase H1.6.1)** for the full migration detail. Pre-migration rowcount 149 → post-migration 149 (unchanged). All 149 rows backfilled to `audience_mode='family'` per the DEFAULT — accurate for catalog v1 (100% Family).
+
+### H1.6.2 — readers/writers update (6 files)
+
+All `narration_audio` writers/readers now include `audience_mode` in upsert + onConflict (writers) or in the SELECT filter (readers):
+
+- [server/routes/narration.js](server/routes/narration.js) — POST /api/narration/generate accepts `audience_mode` in request body (defaults `'family'` for backward compat). Validates against the enum. Passes through to `insertNarrationAudioPending`. Upsert payload + onConflict widened to 6 columns.
+- [hooks/useTTS.ts](hooks/useTTS.ts) — `TTSOptions` gains optional `audienceMode: AudienceMode` field (defaults `'family'`). `checkNarrationAudioTable` filters by audience_mode; `generateOnServer` sends `audience_mode` to the server. Caller scripts (driving.tsx, trail.tsx, filters.tsx) keep working under the default.
+- [scripts/spot-check-3-pois.ts](scripts/spot-check-3-pois.ts), [scripts/spot-check-audience-expansion.ts](scripts/spot-check-audience-expansion.ts) — upsert payload + onConflict widened.
+- [scripts/precache-region-narrations.ts](scripts/precache-region-narrations.ts) — upsert payload + onConflict + skip-if-ready SELECT all widened. For regions, `audience_mode` is sourced from `voice_configs.mode` (which is the audience-mode column on voice_configs, NOT the trip-mode that lives on narration_audio).
+- [scripts/precache-popular-routes.ts](scripts/precache-popular-routes.ts) — `upsertNarrationAudio` signature gains `audienceMode`; payload + onConflict + skip-if-ready SELECT all updated. Call site passes `audience` from the outer loop.
+
+**Out of scope (flagged, not fixed):**
+- [hooks/useTTS.ts](hooks/useTTS.ts) `lookupVoiceConfig` pre-existing semantic conflation — queries `voice_configs.mode` with the trip-mode value (driving/hiking/city) but voice_configs.mode is the audience-mode value space. Per `docs/audit-mode-terminology.md`. Pre-existing bug, separate task.
+- [lib/supabase.ts](lib/supabase.ts) `getCachedNarration` / `cacheNarration` go through `cache_narration` / `get_cached_narration` RPCs. Zero callers anywhere in the repo (confirmed via `\.rpc\(['"](cache_narration|get_cached_narration)` grep — only the dead wrapper functions reference them). RPCs functionally dead; Phase D2 update can wait.
+
+### H1.6.3 — catalog audit + Vasquez repair
+
+Audit of all 149 rows post-DEFAULT-backfill grouped into three patterns by audio_url filename:
+
+| Pattern | Count | Disposition |
+|---|---:|---|
+| `region` (`regions/{id}/{narrator_slug}.opus`) | 108 | Pre-collapse historical artifact (54 narrator_a + 54 narrator_b, all generated 2026-05-18 when both were active Family voices). audience_mode='family' backfill matches original intent. **No repair.** Post-collapse: narrator_a region rows are functionally orphaned (production Family lookup queries Sadachbia narrator_slug). |
+| `poi_server_voiceid` (`{poi_id}/{trip_mode}/{depth}/{voice_id}.opus`) | 37 | All Iapetus, all generated 2026-05-10 when family/narrator_a/Iapetus was the active config (LA→Cambria smoke batch). audience_mode='family' accurate. **No repair.** Same functional-orphan property post-collapse. |
+| `poi_narrator_audience_depth` (`pois/{poi_id}/{narrator}_{audience}_{depth}.opus`) | 4 | 2 correct (Owens Lake + Cerro Gordo at family). **2 corrupted: Vasquez Rocks ×2 (backfilled family but audio is unfiltered)** — caused by H1 spot-check upserting all audiences under one narrator_slug, last-write-wins under the pre-widening unique constraint. |
+
+**Repair landed:**
+1. 1 UPDATE on `narration_audio`: Vasquez/narrator_b row flipped `family → unfiltered` to match its audio content.
+2. 1 DELETE on `narration_audio`: Vasquez/narrator_a/family row removed (narrator_a is no longer the family voice post-collapse).
+3. 4 Storage object deletes via the Storage API (`supabase.storage.from(bucket).remove(paths)`) — direct `DELETE FROM storage.objects` is blocked by the `storage.protect_delete()` trigger with `42501: Direct deletion from storage tables is not allowed. Use the Storage API instead.` Deleted files: `narrator_a_family_standard.opus`, `narrator_a_unfiltered_standard.opus`, `narrator_b_kids_standard.opus`, `narrator_b_local_standard.opus`.
+4. The original v1 Family Vasquez audio at `pois/{vasquez_id}/narrator_b_family_standard.opus` remained intact through the entire incident — H1.5.3 overwrites it with a fresh canonical generation rather than restoring.
+
+**Net rowcount:** 149 → 148 (one delete; the update doesn't move the count). 4 active Storage files remain for Vasquez Rocks after the cleanup, freeing up keys for the H1.5.3 fresh four.
+
+### H1.5.1 — template registry retirement + flatten
+
+Four retired POI template files deleted from [server/prompts/pois/](server/prompts/pois/):
+- `narrator_a_family.js` — Iapetus is now Local, not Family
+- `narrator_b_kids.js` — Zephyr no longer in voice_configs
+- `narrator_b_local.js` — Sadachbia is Family, not Local
+- `narrator_a_unfiltered.js` — Charon no longer in voice_configs
+
+**Pre-flight grep confirmed zero direct imports** of the 4 retired files outside the index.js registry. Safe to delete.
+
+[server/prompts/pois/index.js](server/prompts/pois/index.js) rewritten with flat audience-keyed registry. **`pickPoiPrompt` signature changed: was `(narratorSlug, audienceMode, depth)`, now `(audienceMode, depth = 'standard')`**. The narrator_slug is exposed as template metadata (`template.narratorSlug`) for downstream consumers writing to `narration_audio.narrator_slug`.
+
+Four consuming scripts updated to the new signature:
+- [scripts/precache-top-tier-pois.ts](scripts/precache-top-tier-pois.ts), [scripts/precache-curated-pois.ts](scripts/precache-curated-pois.ts), [scripts/spot-check-3-pois.ts](scripts/spot-check-3-pois.ts) — drop the first positional arg from `pickPoiPrompt`.
+- [scripts/spot-check-audience-expansion.ts](scripts/spot-check-audience-expansion.ts) — same signature change PLUS COMBOS list collapsed from 7 entries to the 4 active audience combos.
+
+[server/routes/narration.ts](server/routes/narration.ts) now uses `pickPoiPrompt` as of Move 3b.2 (2026-05-20). The Phase 06 wart is gone — file converted from `.js` → `.ts`, audience-keyed registry adoption, Haiku (`claude-haiku-4-5-20251001`) replaces Sonnet, `ssmlize()` post-processing from `server/lib/ssml.ts`, TTS via the `scripts/lib/tts/` provider abstraction (route's direct `@google-cloud/text-to-speech` client dropped from `/generate` — kept only for `/preview`), logical `narrator_slug` written to `narration_audio` instead of voice_id, Storage path now `pois/{poi_id}/{narrator_slug}_{audience_mode}_{depth}.opus` matching the precache convention, drift-5.41 voice-config axis bug fixed inline in both the route and mobile [hooks/useTTS.ts](hooks/useTTS.ts), `PROMPT_VERSION` bumped 1→2 for forensic clarity. Mobile cache lookup shipped atomically: dropped `narrator_slug` filter (post-collapse 1:1 with audience_mode makes it redundant), JSON cache key shape changed to `{mode}-{depth}-{audience_mode}`. Legacy 37 voice-id-keyed Storage rows + stale-shape JSON cache keys deferred to Move 3b.3 cleanup. `/preview` endpoint and the 2-phase pending→ready write pattern preserved verbatim. **Failure-boundary:** pre-condition failures (validation, POI not found, voice config not found) return 5xx without creating a pending row; generation failures (post-pending-insert, e.g. Haiku / TTS / Storage) mark the existing row `status='failed'` for sweeper pickup. The pending insert sits between voice-config lookup and the LLM call so the row's unique-constraint columns (`narrator_slug`, `audience_mode`, `depth`, `mode`) are all known at insert time and pre-condition failures don't leave orphans.
+
+### H1.5.2 — template rewrites with new tonal anchors
+
+Three of the four surviving templates rewritten. `narrator_b_family.js` UNCHANGED (curator confirmed family is the tonal baseline).
+
+| Template | Voice | Posture change |
+|---|---|---|
+| [narrator_a_kids.js](server/prompts/pois/narrator_a_kids.js) | Sulafat | Dropped reverent/museum/Mary-Hunter-Austin register. New: "smart friend explaining cool stuff," casual register with contractions + sentence fragments, NO baby-talk, NO condescension. Stay factually complete — frame the truth age-appropriately. Manzanar example uses "the U.S. government **incarcerated** Japanese American families here" per NPS convention (not "interned" or "forced to live in this camp"). Audience widened from 6-12 to 8-12. |
+| [narrator_a_local.js](server/prompts/pois/narrator_a_local.js) | Iapetus | Dropped reverent/Mary-Hunter-Austin register. New: "smart friend at a bar," casual but knowledgeable, regional terms welcome ("the 395," "Mojave block," "PCT thru-hikers"), tribal-name specificity (Tataviam not generic), knows when to stop explaining and trust the listener. |
+| [narrator_b_unfiltered.js](server/prompts/pois/narrator_b_unfiltered.js) | Schedar | Shifted from "sharp deadpan / smirk-cool" to "chuckle-warm." Humor lands on landforms / history / absurd facts; NEVER on people, cultures, indigenous communities, listener, anyone's grief. **Humor is texture, info is substance — if joke costs fact, cut joke.** Example marker placement rewritten warmer ("the rocks have moonlighted as basically every alien planet in television history..."). |
+
+**Preserved verbatim across all 3 rewrites:** MOTION & DISTANCE FRAMING block, ORIENTATION CUE buildUserPrompt injection, SOUL DOCTRINE, KIDS-AUDIENCE OVERRIDE (load-bearing indigenous-history-required rule), PROSODY DISCIPLINE mechanics for narrator_b (markers + numbers + highway/year phonetic rules), OUTPUT, JSON return shape.
+
+Narrator A POI templates intentionally do NOT carry PROSODY DISCIPLINE (matches the regions narrator_a pattern — SSML pipeline is narrator-B-only per [docs/decisions/2026-05-15-narrator-b-prosody.md](docs/decisions/2026-05-15-narrator-b-prosody.md)).
+
+### H1.5.3 — Vasquez × 4 regen
+
+`scripts/spot-check-audience-expansion.ts` ran cleanly: 4 audiences × Vasquez Rocks, **$0.0960 total** (Claude $0.0177 + TTS $0.0784), all SSML pipeline survived (no plain-text fallbacks), all 4 Storage paths populated, all 4 narration_audio rows clean under the new audience-keyed unique index.
+
+| Audience | Duration | Cost |
+|---|---:|---:|
+| family (Sadachbia 1.0×) | 100.8s | $0.0276 |
+| kids (Sulafat 1.05×) | 80.6s | $0.0229 |
+| local (Iapetus 1.0×) | 71.4s | $0.0195 |
+| unfiltered (Schedar 0.95×) | 97.8s | $0.0261 |
+
+**Tonal differentiation confirmed in print across the 4 openers** (Family polished documentary, Kids "But here's the thing..." hook + casual verbs, Local "He wasn't some romantic outlaw" skip-the-obvious, Unfiltered "the fault decided that sandstone slabs should stand nearly vertical" chuckle-warm humor on landform). Full text saved in narration_audio.narration_text + audio in 4 .opus files.
+
+**One observation for follow-up (not blocking):** Tataviam reference dropped out of all 4 Vasquez generations this run despite the indigenous-history-required rule. Model correctly applying "source-supported, not boilerplate" — Vasquez Rocks source description doesn't carry Tataviam strongly. If guaranteed-Tataviam is wanted for this v1 marquee POI, that's a `FACT_OVERRIDES` entry in `precache-curated-pois.ts` (same pattern as the Mount Whitney/Badwater anchor at id `6dbb1b74-7aac-4f1e-91ad-9df46391e1b0`). **Resolved in Move 2 — source enrichment of the Vasquez Rocks description (added Tataviam + Fernandeño Tataviam Band of Mission Indians) was sufficient; no FACT_OVERRIDES patch needed. Pattern confirmed: data fixes at source over code-side overrides.**
+
+**One narration_audio data quirk:** the spot-check upsert payload doesn't set `generated_at` on conflict, so the pre-existing narrator_b/unfiltered row's `generated_at` timestamp lies (still says 17:14:00 from H1.6.3 flip even though audio + text + duration_ms + cost are all fresh from H1.5.3 22:06). One-line fix in the script (add `generated_at: new Date().toISOString()` to the payload) if it matters; not blocking.
+
+### One-off temp scripts (safe to delete)
+
+Underscore-prefixed helpers from the H1.5/H1.6 + Phase G1 arcs:
+- [scripts/poi-import/_voice_check.mjs](scripts/poi-import/_voice_check.mjs) — voice_configs reader from H1 spot-check
+- [scripts/poi-import/_voice_check_h15.mjs](scripts/poi-import/_voice_check_h15.mjs) — voice_configs + narration_audio audit from H1.6 pre-flight
+- [scripts/poi-import/_apply-curator-overrides.mjs](scripts/poi-import/_apply-curator-overrides.mjs) — Phase G1 brief reinstatement (3 editorial POIs)
+- [scripts/poi-import/_h163_storage_cleanup.mjs](scripts/poi-import/_h163_storage_cleanup.mjs) — Vasquez Storage delete via Storage API (Storage cannot be DELETEd via SQL — see H1.6.3 for the `storage.protect_delete()` trigger note)
+- [scripts/poi-import/diag-intrinsic-depth-recon.mjs](scripts/poi-import/diag-intrinsic-depth-recon.mjs) — Phase G1 read-only recon
+
+All safe to delete or keep as historical helpers.
 
 ## Session workflow
 
