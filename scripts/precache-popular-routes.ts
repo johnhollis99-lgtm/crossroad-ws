@@ -677,7 +677,10 @@ async function main() {
   for (const poi of pois) {
     for (const { mode, depth } of combos) {
       const voiceId     = voiceConfig.voice_id;
-      const cacheKey    = `${mode}-${depth}-${voiceId}`;
+      // Cache key shape changed 2026-05-20 (Move 3b.2): {mode}-{depth}-{audience_mode}.
+      // Voice_id dropped — post-H1.5.1 narrator collapse, audience_mode is the
+      // semantic discriminator. Matches the route's new writer + mobile's new reader.
+      const cacheKey    = `${mode}-${depth}-${audience}`;
 
       // Check pois.narration_cache (fastest)
       if (poi.narration_cache?.[cacheKey]) {

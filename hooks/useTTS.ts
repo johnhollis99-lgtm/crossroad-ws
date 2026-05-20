@@ -62,26 +62,33 @@ export function useTTS(options: TTSOptions) {
   };
 
   // ── Voice config lookup ───────────────────────────────────────────────────
-  // Reads the active voice for a given mode from voice_configs.
-  // Throws — never silently falls back — to prevent generating audio under the
-  // wrong voice_id and producing orphaned Storage objects.
-  const lookupVoiceConfig = async (mode: NarrationMode): Promise<VoiceConfigRow> => {
-    const cached = voiceConfigRef.current.get(mode);
+  // Reads the active voice for a given audience_mode from voice_configs.
+  // Axis fixed 2026-05-20 (Move 3b.2 / drift 5.41) — `voice_configs.mode` is
+  // the audience-mode column (family/kids/unfiltered/local), NOT the trip
+  // mode (driving/hiking/city). The prior code queried by trip mode and
+  // always returned zero rows in production; the bug was masked because
+  // mobile pre-supplied voice_id to the route, which made its own lookup
+  // unnecessary. Now that the route does its own (correctly-axis'd) lookup,
+  // mobile's lookup is only used by `speakText` (filters-screen preview).
+  // Throws — never silently falls back — to prevent generating audio under
+  // the wrong voice_id and producing orphaned Storage objects.
+  const lookupVoiceConfig = async (audienceMode: AudienceMode): Promise<VoiceConfigRow> => {
+    const cached = voiceConfigRef.current.get(audienceMode);
     if (cached) return cached;
 
     const { data, error: dbErr } = await supabase
       .from('voice_configs')
       .select('voice_id, provider, voice_settings')
-      .eq('mode', mode)
+      .eq('mode', audienceMode)
       .eq('is_active', true)
       .single();
 
     if (dbErr) {
-      throw new Error(`[useTTS] voice_configs query failed for mode '${mode}': ${dbErr.message}`);
+      throw new Error(`[useTTS] voice_configs query failed for audience '${audienceMode}': ${dbErr.message}`);
     }
     if (!data) {
       throw new Error(
-        `[useTTS] no active voice configured for mode '${mode}' — run pnpm audition --commit to set one`,
+        `[useTTS] no active voice configured for audience '${audienceMode}' — run pnpm audition --commit to set one`,
       );
     }
 
@@ -90,36 +97,46 @@ export function useTTS(options: TTSOptions) {
       provider: data.provider,
       speakingRate: (data.voice_settings as Record<string, number> | null)?.speakingRate,
     };
-    voiceConfigRef.current.set(mode, config);
+    voiceConfigRef.current.set(audienceMode, config);
     return config;
   };
 
   // ── Cache key ─────────────────────────────────────────────────────────────
-  const buildCacheKey = (mode: NarrationMode, depth: NarrationDepth, voiceId: string): string =>
-    `${mode}-${depth}-${voiceId}`;
+  // Shape changed 2026-05-20 (Move 3b.2): {mode}-{depth}-{audience_mode}.
+  // Voice_id dropped — post-H1.5.1 narrator collapse, audience_mode is the
+  // semantic cache discriminator and voice_id is redundant. Route writes the
+  // same shape via update_poi_narration_cache RPC. Stale {mode}-{depth}-{voiceId}
+  // keys in existing pois.narration_cache rows become unread (deferred to
+  // Move 3b.3 cleanup); narration_audio table fallback handles them.
+  const buildCacheKey = (mode: NarrationMode, depth: NarrationDepth, audienceMode: AudienceMode): string =>
+    `${mode}-${depth}-${audienceMode}`;
 
   // ── Step 1: pois.narration_cache (O(1), same row) ────────────────────────
   const checkPoiJsonCache = (poi: POI, cacheKey: string): string | null =>
     poi.narration_cache?.[cacheKey] ?? null;
 
   // ── Step 2: narration_audio table (authoritative, includes prompt_version) ─
-  // audience_mode filter added 2026-05-19 (H1.6.2) — two audiences can now
-  // share the same narrator_slug (e.g. kids + local both at narrator_a in the
-  // current voice_configs), so the audience_mode column disambiguates which
-  // narration to return.
+  // WHERE shape changed 2026-05-20 (Move 3b.2): drop narrator_slug filter.
+  // Post-H1.5.1 narrator collapse, audience_mode is sufficient to disambiguate
+  // — narrator_slug is 1:1 with audience_mode (Sadachbia=family, Sulafat=kids,
+  // Iapetus=local, Schedar=unfiltered). Also tightens the lookup with the
+  // mode (trip-mode) filter for completeness.
+  // The `.order(generated_at desc).limit(1)` handles the transition window —
+  // if both an old voice_id-keyed row AND a new logical-slug row exist for
+  // the same POI, the newer one sorts first and we return its audio_url.
   const checkNarrationAudioTable = async (
     poiId: string,
     depth: NarrationDepth,
-    voiceId: string,
     audienceMode: AudienceMode,
+    mode: NarrationMode,
   ): Promise<string | null> => {
     const { data } = await supabase
       .from('narration_audio')
       .select('audio_url')
       .eq('poi_id', poiId)
-      .eq('narrator_slug', voiceId)
       .eq('audience_mode', audienceMode)
       .eq('depth', depth)
+      .eq('mode', mode)
       .eq('status', 'ready')
       .order('generated_at', { ascending: false })
       .limit(1)
@@ -129,12 +146,15 @@ export function useTTS(options: TTSOptions) {
   };
 
   // ── Step 3: server generation (only when generateIfMissing=true) ──────────
-  // audience_mode added 2026-05-19 (H1.6.2) so the server can write the new
-  // narration_audio.audience_mode column.
+  // Request body simplified 2026-05-20 (Move 3b.2). Route now fetches POI
+  // fields from DB by poi_id and resolves voice_id from voice_configs by
+  // audience_mode — mobile no longer needs to pre-supply poi_name /
+  // poi_category / poi_tags / voice_id. Sending audience_mode + mode + depth
+  // is sufficient. The route's loose body validation tolerates extra fields
+  // for any legacy mobile builds still in flight.
   const generateOnServer = async (
     poi: POI,
     depth: NarrationDepth,
-    voiceId: string,
     audienceMode: AudienceMode,
   ): Promise<string | null> => {
     if (!(await hasSignal())) {
@@ -147,12 +167,8 @@ export function useTTS(options: TTSOptions) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         poi_id:        poi.id,
-        poi_name:      poi.name,
-        poi_category:  poi.category,
-        poi_tags:      poi.tags ?? [],
         mode:          options.mode,
         depth,
-        voice_id:      voiceId,
         audience_mode: audienceMode,
       }),
     });
@@ -174,10 +190,8 @@ export function useTTS(options: TTSOptions) {
       poi?: POI,
       generateIfMissing = false,
     ): Promise<string | null> => {
-      const voiceConfig = await lookupVoiceConfig(options.mode);
-      const voiceId = voiceConfig.voiceId;
-      const cacheKey = buildCacheKey(options.mode, depth, voiceId);
       const audienceMode: AudienceMode = options.audienceMode ?? 'family';
+      const cacheKey = buildCacheKey(options.mode, depth, audienceMode);
 
       // 1. JSON cache on the POI row (fastest path — no extra query)
       if (poi) {
@@ -186,12 +200,12 @@ export function useTTS(options: TTSOptions) {
       }
 
       // 2. narration_audio table (authoritative — used for prompt_version invalidation)
-      const fromTable = await checkNarrationAudioTable(poiId, depth, voiceId, audienceMode);
+      const fromTable = await checkNarrationAudioTable(poiId, depth, audienceMode, options.mode);
       if (fromTable) return fromTable;
 
       // 3. Generate on server (opt-in)
       if (!generateIfMissing || !poi) return null;
-      return generateOnServer(poi, depth, voiceId, audienceMode);
+      return generateOnServer(poi, depth, audienceMode);
     },
     [options.mode, options.audienceMode],
   );
@@ -303,7 +317,8 @@ export function useTTS(options: TTSOptions) {
           setError('No signal — preview unavailable');
           return;
         }
-        const voiceConfig = await lookupVoiceConfig(options.mode);
+        const audienceMode: AudienceMode = options.audienceMode ?? 'family';
+        const voiceConfig = await lookupVoiceConfig(audienceMode);
         const res = await fetch(`${SERVER}/api/narration/preview`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -320,7 +335,7 @@ export function useTTS(options: TTSOptions) {
         setLoading(false);
       }
     },
-    [options.mode],
+    [options.mode, options.audienceMode],
   );
 
   return {
