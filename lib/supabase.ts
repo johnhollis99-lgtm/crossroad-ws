@@ -117,7 +117,7 @@ export async function countPOIsAlongRoute(
   const { data, error } = await supabase.rpc('count_corridor_pois', {
     route_geom: wkt,
     corridor_width_miles: corridorMi,
-    category_filter: categories?.length ? categories : null,
+    category_filter: categories ?? null,
     mode_filter: mode ?? null,
     min_significance: options.minSignificance ?? 0,
   });

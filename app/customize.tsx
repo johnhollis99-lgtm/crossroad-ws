@@ -384,7 +384,7 @@ export default function CustomizeScreen() {
       const rpcParams = {
         corridorMi:       Math.max(0.1, corridorMi),
         mode,
-        categories:       slugs.length ? slugs : null,
+        categories:       slugs,
         minSignificance:  minRelevance,
         density,
         version:          myVersion,
