@@ -98,22 +98,29 @@ export async function countPOIsAlongRoute(
     pts.map(p => `${p.longitude} ${p.latitude}`).join(',')
   })`;
 
-  // count:'exact' without head:true → PostgREST sends a POST with body, avoiding GET URL limits.
-  // min_significance forwarded from `options` (drift 5.96) so the live count tracks the relevance
-  // slider on customize; default 0 = unfiltered, matching the SQL function's own default.
-  const { count, error } = await supabase.rpc('get_corridor_pois', {
+  // Dedicated count RPC (migration 20260520000002). PostgREST's
+  // count='exact' on get_corridor_pois materializes the full result
+  // set before counting; under C1+G2's heavier WHERE + dual ST_DWithin
+  // OR-branch, concurrent count calls (home page route-alternative
+  // fan-out) crossed Supabase's statement_timeout and surfaced as
+  // HTTP 500. count_corridor_pois mirrors the same WHERE clause but
+  // skips ORDER BY + SELECT columns. Returns bigint in `data`.
+  // min_significance forwarded from `options` (drift 5.96) so the live
+  // count tracks the relevance slider on customize; default 0 = no
+  // additional floor above the per-category floors.
+  const { data, error } = await supabase.rpc('count_corridor_pois', {
     route_geom: wkt,
     corridor_width_miles: corridorMi,
     category_filter: categories?.length ? categories : null,
     mode_filter: mode ?? null,
     min_significance: options.minSignificance ?? 0,
-  }, { count: 'exact' }).limit(0);
+  });
 
   if (error) {
     console.error('[Supabase] countPOIsAlongRoute error:', error);
     return null;
   }
-  return count;
+  return data == null ? null : Number(data);
 }
 
 // Reduces a polyline to at most maxPoints using uniform stride sampling
