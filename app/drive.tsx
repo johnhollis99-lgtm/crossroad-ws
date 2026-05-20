@@ -222,7 +222,7 @@ function DrivePoiMarker({
     >
       {isActive
         ? <ActivePoiMarker themeColors={themeColors} />
-        : <PoiMarkerX size="curated" />}
+        : <PoiMarkerX size="curated" tier={poi.priority_tier ?? 'standard'} />}
     </Marker>
   );
 }

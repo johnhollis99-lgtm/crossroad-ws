@@ -62,6 +62,9 @@ export interface ThemeColors {
   /** CVD-aware icon accent. Cobalt when CVD-safe is off, amber when on. */
   accent:            string;
 
+  /** Warm ochre — curator/iconic POI marker tier (G2 c5d0a1e + C1 d7a78aa). */
+  gold:              string;
+
   danger:            string;
   dangerDeep:        string;
   dangerTint:        string;
@@ -99,6 +102,7 @@ function buildTheme(opts: { cvdSafe: boolean }): Theme {
       secondaryTint:     pineColors.secondaryTint,
       secondaryTintEdge: pineColors.secondaryTintEdge,
       accent:            opts.cvdSafe ? pineColors.cvdSafe : pineColors.secondary,
+      gold:              pineColors.gold,
       danger:            pineColors.danger,
       dangerDeep:        pineColors.dangerDeep,
       dangerTint:        pineColors.dangerTint,

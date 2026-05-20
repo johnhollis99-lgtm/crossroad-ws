@@ -29,9 +29,21 @@ import Svg, { Circle, Text as SvgText } from 'react-native-svg';
 import { useTheme } from '../design/theme';
 
 export type PoiMarkerXSize = 'curated' | 'reveal';
+export type PoiMarkerXTier = 'curator' | 'iconic' | 'standard';
 
 export interface PoiMarkerXProps {
   size?: PoiMarkerXSize;
+  /**
+   * Tier-aware coloring (drift: tier-styled markers, 2026-05-20).
+   * 'curator' + 'iconic' → gold ring + fill (warm ochre, indicates a
+   * server-side bypass POI per G2 c5d0a1e + C1 d7a78aa: always surfaces
+   * regardless of user REACH up to 25mi cap).
+   * 'standard' → emerald ring + fill (matches user REACH corridor).
+   * Iconic shares curator gold until Phase F lands the iconic_local
+   * importer + dedicated iconic styling. Cobalt outline + cream halo
+   * are tier-invariant for cross-style legibility.
+   */
+  tier?: PoiMarkerXTier;
 }
 
 const WRAPPER_PX = 40;
@@ -49,20 +61,26 @@ const GLYPH: Record<PoiMarkerXSize, GlyphCfg> = {
   reveal:  { fontSize: 14, haloWidth: 2.2, ringRadius: 11, ringStroke: 1.0, outlineWidth: 0.4 },
 };
 
-export function PoiMarkerX({ size = 'curated' }: PoiMarkerXProps) {
+export function PoiMarkerX({ size = 'curated', tier = 'standard' }: PoiMarkerXProps) {
   const { theme } = useTheme();
   const { fontSize, haloWidth, ringRadius, ringStroke, outlineWidth } = GLYPH[size];
   const center = WRAPPER_PX / 2;
 
+  // Tier-aware ring + fill color. Standard tier keeps the Pine emerald.
+  // Curator + iconic tiers render gold — signals "always surfaces regardless
+  // of user REACH up to the 25mi C1 cap." Cobalt outline + cream halo stay
+  // constant across tiers (they carry cross-map-style legibility).
+  const tierColor = tier === 'standard' ? theme.colors.primary : theme.colors.gold;
+
   return (
     <View style={styles.wrap} pointerEvents="none">
       <Svg width={WRAPPER_PX} height={WRAPPER_PX} viewBox={`0 0 ${WRAPPER_PX} ${WRAPPER_PX}`}>
-        {/* Outer target ring — emerald, thin, framing the glyph. */}
+        {/* Outer target ring — tier-colored, thin, framing the glyph. */}
         <Circle
           cx={center}
           cy={center}
           r={ringRadius}
-          stroke={theme.colors.primary}
+          stroke={tierColor}
           strokeWidth={ringStroke}
           fill="none"
           opacity={0.9}
@@ -77,7 +95,7 @@ export function PoiMarkerX({ size = 'curated' }: PoiMarkerXProps) {
           fontSize={fontSize}
           fontFamily={theme.fontFamilies.serif}
           fontWeight="700"
-          fill={theme.colors.primary}
+          fill={tierColor}
           stroke={theme.colors.ink}
           strokeWidth={haloWidth}
           strokeLinejoin="round"

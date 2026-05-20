@@ -36,6 +36,7 @@ export const pineColors = {
   secondaryTintEdge: 'rgba(96,165,250,0.28)',
 
   cvdSafe:           '#F59E0B',   // amber — replaces icon accent when CVD-safe is on
+  gold:              '#D4A017',   // warm ochre — curator/iconic POI marker tier (C-series)
 
   danger:            '#E11D48',   // rose — End trip / destructive CTAs
   dangerDeep:        '#BE123C',
