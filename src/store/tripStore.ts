@@ -35,6 +35,17 @@ export type Detail         = 'full_drive' | 'light_touch';
 export type NarrativeFocus = 'the_land_speaks' | 'local_color';
 export type NarratorSlug   = 'narrator_a' | 'narrator_b';
 
+/**
+ * Canonical category-label list (9 entries). Single source of truth —
+ * customize.tsx's chip rail imports this. Order matches rendering order
+ * on the customize page. Adding/removing a label requires bumping the
+ * persist version below so existing users get reseeded.
+ */
+export const ALL_CATEGORY_LABELS = [
+  'History', 'Nature', 'Architecture', 'Food',
+  'Music', 'Weird', 'Roadside', 'Film', 'Science',
+] as const;
+
 interface TripState {
   /** Drive vs Hike toggle on home; persists across nav and restart. */
   activeTripMode: TripMode;
@@ -69,7 +80,7 @@ export const useTripStore = create<TripState>()(
   persist(
     (set) => ({
       activeTripMode:     'driving',
-      selectedCategories: [],
+      selectedCategories: [...ALL_CATEGORY_LABELS],
       detail:             DEFAULTS.detail,
       narrativeFocus:     DEFAULTS.narrativeFocus,
       narratorSlug:       DEFAULTS.narratorSlug,
@@ -101,7 +112,7 @@ export const useTripStore = create<TripState>()(
         narrativeFocus:     state.narrativeFocus,
         narratorSlug:       state.narratorSlug,
       }),
-      version: 3,
+      version: 4,
       migrate: (persisted, fromVersion) => {
         // v1 → v2 (J1a, 2026-05-19): pace + narrativeFocus + narratorSlug
         // added. Older blobs fill with the addendum defaults; nothing else
@@ -109,6 +120,12 @@ export const useTripStore = create<TripState>()(
         // v2 → v3 (J1a-followups, 2026-05-19): `pace` field renamed to
         // `detail`. Carry the persisted value forward under the new key;
         // option identifiers (full_drive / light_touch) are unchanged.
+        // v3 → v4 (category opt-out default, 2026-05-20): empty
+        // selectedCategories arrays reseed with the full label list so
+        // existing users get the opt-out default too. Non-empty arrays
+        // kept (explicit curation respected). Same RPC result either way
+        // (empty → null filter; full → ANY(9 slugs)); change is purely
+        // visual default.
         let p = (persisted ?? {}) as Record<string, unknown>;
         if (fromVersion < 2) {
           p = {
@@ -121,6 +138,12 @@ export const useTripStore = create<TripState>()(
         if (fromVersion < 3) {
           const { pace, ...rest } = p as { pace?: Detail } & Record<string, unknown>;
           p = { ...rest, detail: pace ?? DEFAULTS.detail };
+        }
+        if (fromVersion < 4) {
+          const existing = p.selectedCategories as string[] | undefined;
+          if (!existing || existing.length === 0) {
+            p = { ...p, selectedCategories: [...ALL_CATEGORY_LABELS] };
+          }
         }
         return p as unknown as TripState;
       },

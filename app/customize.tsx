@@ -61,7 +61,7 @@ import {
   Wordmark,
 } from '../src/components';
 import type { IconProps } from '../src/components';
-import { useTripStore } from '../src/store/tripStore';
+import { useTripStore, ALL_CATEGORY_LABELS } from '../src/store/tripStore';
 import { curateRoutePOIs } from '../src/lib/curation/curateRoutePOIs';
 
 // ── Constants ────────────────────────────────────────────────────────────────
@@ -87,10 +87,7 @@ const PEEK_SPRING  = { useNativeDriver: false as const, friction: 9, tension: 80
 // (0.25mi hiking / 1mi driving) and is still forwarded to Drive as
 // filters.corridorMi for the Drive-page corridor slider's initial value.
 
-const ALL_CATEGORIES = [
-  'History', 'Nature', 'Architecture', 'Food',
-  'Music', 'Weird', 'Roadside', 'Film', 'Science',
-];
+const ALL_CATEGORIES = ALL_CATEGORY_LABELS;
 
 // Maps UI display labels → category icon component (Pine duotone glyphs).
 const CATEGORY_ICONS: Record<string, React.ComponentType<IconProps>> = {
