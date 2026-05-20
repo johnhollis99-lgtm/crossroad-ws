@@ -55,16 +55,14 @@ import {
   IconRoadside,
   IconScience,
   IconWeird,
-  LabeledSlider,
   NarratorCard,
   OptionCard,
-  SegmentedTrio,
   TripStat,
   Wordmark,
 } from '../src/components';
 import type { IconProps } from '../src/components';
 import { useTripStore } from '../src/store/tripStore';
-import { curateRoutePOIs, type Density } from '../src/lib/curation/curateRoutePOIs';
+import { curateRoutePOIs } from '../src/lib/curation/curateRoutePOIs';
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
@@ -79,12 +77,15 @@ const PEEK_SPRING  = { useNativeDriver: false as const, friction: 9, tension: 80
 // per POI (addendum §4) and the runtime narration route accepts only
 // 'standard' anyway. The saveTrip payload still writes 'ride_along' until
 // the trips.depth column is dropped — see CLAUDE.md J1a-deferred note.
-
-const DENSITY_OPTIONS = [
-  { value: 'sparse'   as const, label: 'Sparse'   },
-  { value: 'balanced' as const, label: 'Balanced' },
-  { value: 'dense'    as const, label: 'Dense'    },
-];
+//
+// J1a-followups (2026-05-19): Density, Min relevance, and POI distance
+// sliders removed from Trip Setup per curator's Expo walk-through. Density
+// and min_relevance hardcoded in the saveTrip payload until trips.density
+// + trips.min_relevance CHECK columns are dropped; poi_distance_m has no
+// CHECK and is dropped from the payload entirely (DB DEFAULT 500 applies).
+// See CLAUDE.md J1a-followups-deferred note. The corridor stays mode-aware
+// (0.25mi hiking / 1mi driving) and is still forwarded to Drive as
+// filters.corridorMi for the Drive-page corridor slider's initial value.
 
 const ALL_CATEGORIES = [
   'History', 'Nature', 'Architecture', 'Food',
@@ -117,16 +118,6 @@ const CAT_SLUG: Record<string, string> = {
   'Film':         'art',
   'Science':      'geology',
 };
-
-const POI_MIN          = 0;
-const POI_MAX_DRIVING  = 20;
-const POI_MAX_HIKING   = 2;
-const POI_STEP         = 0.5;
-const POI_DEFAULT_DRV  = 1;
-const POI_DEFAULT_HIKE = 0.5;
-
-const RELEVANCE_MIN  = 0;
-const RELEVANCE_MAX  = 100;
 
 const SERVER_URL = (process.env.EXPO_PUBLIC_SERVER_URL ?? 'http://localhost:3001');
 
@@ -276,8 +267,6 @@ export default function CustomizeScreen() {
   // ── Trip-mode awareness ──────────────────────────────────────────────────
   const activeTripMode = useTripStore(s => s.activeTripMode);
   const isHiking       = activeTripMode === 'hiking';
-  const poiMax         = isHiking ? POI_MAX_HIKING : POI_MAX_DRIVING;
-  const poiDefault     = isHiking ? POI_DEFAULT_HIKE : POI_DEFAULT_DRV;
 
   // ── Category state ───────────────────────────────────────────────────────
   const selectedCats         = useTripStore(s => s.selectedCategories);
@@ -293,36 +282,30 @@ export default function CustomizeScreen() {
     toggleCategoryStore(cat);
   }, [selectedCats, toggleCategoryStore]);
 
-  // ── Trip prefs (J1a — Pace + Narrative Focus from Zustand) ────────────────
-  const pace             = useTripStore(s => s.pace);
-  const setPace          = useTripStore(s => s.setPace);
-  const narrativeFocus   = useTripStore(s => s.narrativeFocus);
-  const setNarrativeFocus = useTripStore(s => s.setNarrativeFocus);
-  const narratorSlug     = useTripStore(s => s.narratorSlug);
+  // ── Trip prefs (J1a — Detail + Narrative Focus from Zustand) ──────────────
+  const detail             = useTripStore(s => s.detail);
+  const setDetail          = useTripStore(s => s.setDetail);
+  const narrativeFocus     = useTripStore(s => s.narrativeFocus);
+  const setNarrativeFocus  = useTripStore(s => s.setNarrativeFocus);
+  const narratorSlug       = useTripStore(s => s.narratorSlug);
+
+  // J1a-followups (2026-05-19): the live POI / pace stats in the header
+  // strip still need values for the corridor query and the curation pass.
+  // Now derived from trip mode rather than user-controlled sliders.
+  // Matches home's defaults (app/index.tsx) so the customize stats agree
+  // with what the user saw on the home preview.
+  const corridorMi   = isHiking ? 0.25 : 1;
+  const density      = isHiking ? 'dense' : 'balanced';
+  const minRelevance = 0;
 
   // ── State ────────────────────────────────────────────────────────────────
   const [narrators,        setNarrators]        = useState<NarratorRecord[]>([]);
   const [loadingNarrators, setLoadingNarrators] = useState(true);
   const [selectedNarrator, setSelectedNarrator] = useState<NarratorRecord | null>(null);
   const [catsScrolled,     setCatsScrolled]     = useState(false);
-  const [poiDist,          setPoiDistRaw]       = useState(poiDefault);
-  const setPoiDist = useCallback((next: number) => {
-    if (__DEV__) console.info('[customize] filter:slider-change', { which: 'poiDist', value: next });
-    setPoiDistRaw(next);
-  }, []);
   const [saving,           setSaving]           = useState(false);
   const [mapStyleId,       setMapStyleId]       = useState<MapStyleId>('dark');
   const [liveStoryCount,   setLiveStoryCount]   = useState<number | null>(routeInfo.story_count);
-  const [density,          setDensityRaw]       = useState<Density>(isHiking ? 'dense' : 'balanced');
-  const [minRelevance,     setMinRelevanceRaw]  = useState<number>(0);
-  const setDensity = useCallback((next: Density) => {
-    if (__DEV__) console.info('[customize] filter:slider-change', { which: 'density', value: next });
-    setDensityRaw(next);
-  }, []);
-  const setMinRelevance = useCallback((next: number) => {
-    if (__DEV__) console.info('[customize] filter:slider-change', { which: 'relevance', value: next });
-    setMinRelevanceRaw(next);
-  }, []);
   const [curatedCount,     setCuratedCount]     = useState<number | null>(null);
   const [avgPaceMin,       setAvgPaceMin]       = useState<number | null>(null);
 
@@ -333,11 +316,6 @@ export default function CustomizeScreen() {
   const scrollToCategories = useCallback(() => {
     scrollViewRef.current?.scrollTo({ y: Math.max(0, categoriesY - 12), animated: true });
   }, [categoriesY]);
-
-  // Clamp current poiDist if the mode-driven max shrinks beneath it
-  useEffect(() => {
-    if (poiDist > poiMax) setPoiDist(poiMax);
-  }, [poiMax]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => { loadMapStyle().then(setMapStyleId); }, []);
 
@@ -407,7 +385,7 @@ export default function CustomizeScreen() {
       const slugs = selectedCats.map(c => CAT_SLUG[c] ?? c.toLowerCase());
       const mode = isHiking ? 'hiking' : 'driving';
       const rpcParams = {
-        corridorMi:       Math.max(0.1, poiDist),
+        corridorMi:       Math.max(0.1, corridorMi),
         mode,
         categories:       slugs.length ? slugs : null,
         minSignificance:  minRelevance,
@@ -458,7 +436,7 @@ export default function CustomizeScreen() {
       });
     }, 150);
     return () => clearTimeout(handle);
-  }, [selectedCats, poiDist, isHiking, density, minRelevance, tripDurationMin]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [selectedCats, isHiking, tripDurationMin]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (__DEV__) {
@@ -493,10 +471,6 @@ export default function CustomizeScreen() {
       Alert.alert('Select a narrator', 'Choose a narrator before starting your trip.');
       return;
     }
-    if (poiDist < POI_MIN || poiDist > poiMax) {
-      Alert.alert('Invalid distance', `POI distance must be between ${POI_MIN} and ${poiMax} miles.`);
-      return;
-    }
 
     setSaving(true);
 
@@ -514,9 +488,13 @@ export default function CustomizeScreen() {
       // deferred-migration backlog.
       depth:           'ride_along',
       categoryFilter:  selectedCats,
-      poiDistanceM:    Math.round(poiDist * 1609.34),
-      density,
-      minRelevance,
+      // J1a-followups: density + min_relevance UI removed; hardcoded
+      // until the trips.density / trips.min_relevance CHECK columns
+      // are dropped. Same pattern as `depth` above. poi_distance_m has
+      // no CHECK and is omitted from the payload entirely so the DB
+      // DEFAULT 500 applies. See CLAUDE.md J1a-followups-deferred note.
+      density:         'balanced' as const,
+      minRelevance:    0,
       status:          'active',
       startedAt:       new Date().toISOString(),
     };
@@ -546,20 +524,25 @@ export default function CustomizeScreen() {
         // J1a: legacy `depth` removed from filters payload. drive.tsx
         // never reads it; legacy driving.tsx / trail.tsx fall through
         // their `?? 'ride_along'` defaults inside useTTS.
+        // J1a-followups: density/minRelevance still emitted with the
+        // mode-aware defaults so drive.tsx's curation pass keeps
+        // matching the home preview; corridorMi seeds drive.tsx's
+        // story-corridor slider initial value.
         categoryFilter: selectedCats.map(c => CAT_SLUG[c] ?? c.toLowerCase()),
-        corridorMi:     Math.max(0.1, poiDist),
+        corridorMi,
         tone:           'warm',
         voice:          selectedNarrator.slug ?? 'canyon_guide',
         density,
         minRelevance,
         tripMode:       isHiking ? 'hiking' : 'driving',
-        // J1a additions — pace + focus + reserved narrator slug.
-        pace,
+        // J1a additions — detail (was `pace`) + focus + reserved
+        // narrator slug.
+        detail,
         narrativeFocus,
         narratorSlug,
       }),
     });
-  }, [selectedNarrator, saving, selectedCats, poiDist, routeInfo, params, navigation, density, minRelevance, isHiking, poiMax, pace, narrativeFocus, narratorSlug]);
+  }, [selectedNarrator, saving, selectedCats, routeInfo, params, navigation, isHiking, corridorMi, density, minRelevance, detail, narrativeFocus, narratorSlug]);
 
   // ── Narrator grid: chunk into rows of 2 ──────────────────────────────────
   const narratorRows: NarratorRecord[][] = [];
@@ -804,24 +787,24 @@ export default function CustomizeScreen() {
           </Text>
         </Pressable>
 
-        {/* ── Pace (J1a — addendum §6) ────────────────────────────────────── */}
+        {/* ── Detail (J1a — addendum §6; renamed from "Pace" in J1a-followups) ── */}
         <Text style={[theme.textVariants.eyebrow, styles.sectionLabel, { color: theme.colors.inkSoft }]}>
-          Pace
+          Detail
         </Text>
         <View style={styles.optionRow}>
           <OptionCard
             title="Full Drive"
             sub="Hear every story at its full length. Best when the journey is the destination."
-            selected={pace === 'full_drive'}
-            onSelect={() => setPace('full_drive')}
-            testID="pace-full-drive"
+            selected={detail === 'full_drive'}
+            onSelect={() => setDetail('full_drive')}
+            testID="detail-full-drive"
           />
           <OptionCard
             title="Light Touch"
             sub="Hear only the standout moments, compressed. Best for everyday drives and family trips."
-            selected={pace === 'light_touch'}
-            onSelect={() => setPace('light_touch')}
-            testID="pace-light-touch"
+            selected={detail === 'light_touch'}
+            onSelect={() => setDetail('light_touch')}
+            testID="detail-light-touch"
           />
         </View>
 
@@ -881,42 +864,6 @@ export default function CustomizeScreen() {
           />
         </View>
 
-        {/* ── Density ──────────────────────────────────────────────────────── */}
-        <Text style={[theme.textVariants.eyebrow, styles.sectionLabel, { color: theme.colors.inkSoft }]}>
-          Density
-        </Text>
-        <SegmentedTrio
-          options={DENSITY_OPTIONS}
-          value={density}
-          onChange={setDensity}
-          testID="density-segments"
-        />
-
-        {/* ── Min relevance ───────────────────────────────────────────────── */}
-        <View style={{ marginTop: 18 }}>
-          <LabeledSlider
-            label="Min relevance"
-            value={minRelevance}
-            onChange={setMinRelevance}
-            min={RELEVANCE_MIN}
-            max={RELEVANCE_MAX}
-            step={1}
-          />
-        </View>
-
-        {/* ── POI distance ────────────────────────────────────────────────── */}
-        <View style={{ marginTop: 18 }}>
-          <LabeledSlider
-            label="POI distance"
-            value={poiDist}
-            onChange={setPoiDist}
-            min={POI_MIN}
-            max={poiMax}
-            step={POI_STEP}
-            formatValue={(v) => fmtMiles(v)}
-            formatEdge={(v) => fmtMiles(v)}
-          />
-        </View>
       </ScrollView>
 
       {/* ── Sticky Start trip CTA ─────────────────────────────────────────── */}

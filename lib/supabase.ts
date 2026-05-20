@@ -283,7 +283,13 @@ export async function saveTrip(params: {
   narratorName?: string;
   depth: string;
   categoryFilter: string[];
-  poiDistanceM: number;
+  /**
+   * Per-trip POI corridor in meters; optional post-J1a-followups since the
+   * customize UI no longer exposes a slider for it. trips.poi_distance_m
+   * carries a DB DEFAULT of 500 and has no CHECK constraint, so omitting
+   * the field from the INSERT lets the default apply.
+   */
+  poiDistanceM?: number;
   /** Curation density preference; columns added in 20260512000001. */
   density?: TripDensity;
   /** Minimum significance_score 0–100; columns added in 20260512000001. */
@@ -305,7 +311,9 @@ export async function saveTrip(params: {
       narrator_name:    params.narratorName,
       depth:            params.depth,
       category_filter:  params.categoryFilter,
-      poi_distance_m:   params.poiDistanceM,
+      // poi_distance_m omitted when undefined so the trips DB DEFAULT (500)
+      // applies — J1a-followups dropped the customize-side slider.
+      ...(params.poiDistanceM !== undefined && { poi_distance_m: params.poiDistanceM }),
       density:          params.density ?? 'balanced',
       min_relevance:    params.minRelevance ?? 0,
       status:           params.status ?? 'pending',

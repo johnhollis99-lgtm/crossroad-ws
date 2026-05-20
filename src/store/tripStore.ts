@@ -3,9 +3,9 @@
  *
  * Zustand + persist middleware (AsyncStorage) for cross-screen state that
  * needs to survive navigation and app restart but is NOT bound to a specific
- * saved trip record. Per-trip settings (density, min_relevance,
+ * saved trip record. Per-trip settings (depth, poi_distance_m,
  * category_filter) live on the `trips` table; session-level settings
- * (activeTripMode, selectedCategories, pace, narrativeFocus, narratorSlug)
+ * (activeTripMode, selectedCategories, detail, narrativeFocus, narratorSlug)
  * live here.
  *
  * Convention (per session handoff): every screen that reads cross-screen
@@ -19,6 +19,11 @@
  *   narrativeFocus   — The Land Speaks / + Local Color (addendum §1.2)
  *   narratorSlug     — reserved for J1b narrator picker (no UI yet); the
  *                       field persists so J1b is additive UI-only
+ *
+ * J1a-followups (2026-05-19):
+ *   `pace` renamed to `detail` — the conceptual axis name shifts
+ *   (curator walk-through feedback); option identifiers
+ *   (full_drive / light_touch) keep their values. Schema v2 → v3.
  */
 
 import { create } from 'zustand';
@@ -26,7 +31,7 @@ import { persist, createJSONStorage } from 'zustand/middleware';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 export type TripMode       = 'driving' | 'hiking';
-export type Pace           = 'full_drive' | 'light_touch';
+export type Detail         = 'full_drive' | 'light_touch';
 export type NarrativeFocus = 'the_land_speaks' | 'local_color';
 export type NarratorSlug   = 'narrator_a' | 'narrator_b';
 
@@ -35,8 +40,8 @@ interface TripState {
   activeTripMode: TripMode;
   /** Category chip selection shared between home and customize. */
   selectedCategories: string[];
-  /** Pace preference — addendum §6. Default Full Drive. */
-  pace: Pace;
+  /** Detail preference — addendum §6 (was `pace` in J1a). Default Full Drive. */
+  detail: Detail;
   /** Narrative focus — addendum §1.2. Default The Land Speaks. */
   narrativeFocus: NarrativeFocus;
   /**
@@ -49,13 +54,13 @@ interface TripState {
   setSelectedCategories: (cats: string[]) => void;
   toggleCategory: (cat: string) => void;
   clearSelectedCategories: () => void;
-  setPace: (p: Pace) => void;
+  setDetail: (d: Detail) => void;
   setNarrativeFocus: (f: NarrativeFocus) => void;
   setNarratorSlug: (n: NarratorSlug) => void;
 }
 
 const DEFAULTS = {
-  pace:           'full_drive'      as Pace,
+  detail:         'full_drive'      as Detail,
   narrativeFocus: 'the_land_speaks' as NarrativeFocus,
   narratorSlug:   'narrator_a'      as NarratorSlug,
 };
@@ -65,7 +70,7 @@ export const useTripStore = create<TripState>()(
     (set) => ({
       activeTripMode:     'driving',
       selectedCategories: [],
-      pace:               DEFAULTS.pace,
+      detail:             DEFAULTS.detail,
       narrativeFocus:     DEFAULTS.narrativeFocus,
       narratorSlug:       DEFAULTS.narratorSlug,
 
@@ -82,7 +87,7 @@ export const useTripStore = create<TripState>()(
 
       clearSelectedCategories: () => set({ selectedCategories: [] }),
 
-      setPace:           (p) => set({ pace: p }),
+      setDetail:         (d) => set({ detail: d }),
       setNarrativeFocus: (f) => set({ narrativeFocus: f }),
       setNarratorSlug:   (n) => set({ narratorSlug: n }),
     }),
@@ -92,24 +97,32 @@ export const useTripStore = create<TripState>()(
       partialize: (state) => ({
         activeTripMode:     state.activeTripMode,
         selectedCategories: state.selectedCategories,
-        pace:               state.pace,
+        detail:             state.detail,
         narrativeFocus:     state.narrativeFocus,
         narratorSlug:       state.narratorSlug,
       }),
-      version: 2,
+      version: 3,
       migrate: (persisted, fromVersion) => {
         // v1 → v2 (J1a, 2026-05-19): pace + narrativeFocus + narratorSlug
         // added. Older blobs fill with the addendum defaults; nothing else
         // moves.
+        // v2 → v3 (J1a-followups, 2026-05-19): `pace` field renamed to
+        // `detail`. Carry the persisted value forward under the new key;
+        // option identifiers (full_drive / light_touch) are unchanged.
+        let p = (persisted ?? {}) as Record<string, unknown>;
         if (fromVersion < 2) {
-          return {
-            ...(persisted as Partial<TripState>),
-            pace:           DEFAULTS.pace,
+          p = {
+            ...p,
+            pace:           DEFAULTS.detail,
             narrativeFocus: DEFAULTS.narrativeFocus,
             narratorSlug:   DEFAULTS.narratorSlug,
-          } as TripState;
+          };
         }
-        return persisted as TripState;
+        if (fromVersion < 3) {
+          const { pace, ...rest } = p as { pace?: Detail } & Record<string, unknown>;
+          p = { ...rest, detail: pace ?? DEFAULTS.detail };
+        }
+        return p as unknown as TripState;
       },
     },
   ),
