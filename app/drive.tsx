@@ -49,10 +49,10 @@ import {
   IconSkipFwd,
   IconVolume,
   IconVolumeOff,
-  LabeledSlider,
   ModePillRow,
   PersonaPill,
   PoiMarkerX,
+  SegmentedTrio,
   StoriesBadge,
   TripStat,
   usePoiMarkerTracking,
@@ -74,9 +74,29 @@ const DRIVE_SNAPS = {
 };
 const GPS_EMIT_MS    = 5000;
 const STATUS_BAR_PAD = Platform.OS === 'ios' ? 52 : ((StatusBar.currentHeight ?? 24) + 10);
-const POI_MIN  = 0;
-const POI_MAX  = 20;
-const POI_STEP = 0.5;
+
+// C2 (2026-05-20): Drive page Reach control — 3 snap stops replacing the
+// pre-C2 free-slider Story Corridor. Mile values follow the curator's
+// "Nearby / Within sight / Geographical area" framing:
+//   Nearby      5mi  — direct-route landmarks, immediate roadside
+//   Within sight 10mi — clearly visible peaks, distinct features
+//   Geographical 20mi — region-defining features, distant ranges
+// Defaults to max ('geographical') per the opt-out UX direction.
+// Curator/iconic POIs bypass this value server-side via C1 up to a
+// 25mi cap, so a curator POI at 22mi surfaces even at 'geographical'.
+const REACH_OPTIONS = [
+  { value: 'nearby',       label: 'Nearby' },
+  { value: 'within_sight', label: 'Within sight' },
+  { value: 'geographical', label: 'Geographical area' },
+] as const;
+
+type ReachKey = typeof REACH_OPTIONS[number]['value'];
+
+const REACH_TO_MI: Record<ReachKey, number> = {
+  nearby:       5,
+  within_sight: 10,
+  geographical: 20,
+};
 
 const SERVER_URL   = process.env.EXPO_PUBLIC_SERVER_URL ?? 'http://localhost:3001';
 const MAPBOX_TOKEN = process.env.EXPO_PUBLIC_MAPBOX_TOKEN!;
@@ -385,7 +405,12 @@ export default function Drive() {
   const [elapsedMin,   setElapsedMin]   = useState(0);
   const [selectedPoi,  setSelectedPoi]  = useState<POI | null>(null);
   const [ratedPois,    setRatedPois]    = useState<Set<string>>(new Set());
-  const [poiDist,      setPoiDist]      = useState<number>(filters.corridorMi ?? 1);
+  // C2: Reach control replaces the pre-C2 continuous corridor slider.
+  // Defaults to 'geographical' (max) per opt-out UX; `filters.corridorMi`
+  // from nav-params is intentionally ignored — customize still emits it
+  // for its own POIS stat strip, but drive starts at max regardless.
+  const [reach, setReach] = useState<ReachKey>('geographical');
+  const poiDist = REACH_TO_MI[reach];
 
   const insets = useSafeAreaInsets();
   const driveSnaps = useMemo(() => ({
@@ -1208,19 +1233,24 @@ export default function Drive() {
                 ))
               )}
 
-              {/* Story corridor */}
-              <View style={{ marginTop: 18 }}>
-                <LabeledSlider
-                  label="Story corridor"
-                  value={poiDist}
-                  onChange={setPoiDist}
-                  min={POI_MIN}
-                  max={POI_MAX}
-                  step={POI_STEP}
-                  formatValue={(v) => fmtMiles(v)}
-                  formatEdge={(v) => fmtMiles(v)}
-                />
-              </View>
+              {/* Reach — C2 (2026-05-20): 3 snap stops, defaults to max.
+                  Replaces the pre-C2 continuous "Story corridor" slider.
+                  Curator/iconic POIs bypass this value server-side via
+                  C1 up to a 25mi cap (no UI affordance needed). */}
+              <Text
+                style={[
+                  theme.textVariants.eyebrow,
+                  { color: theme.colors.inkSoft, marginTop: 16, marginBottom: 8 },
+                ]}
+              >
+                Reach
+              </Text>
+              <SegmentedTrio
+                options={REACH_OPTIONS}
+                value={reach}
+                onChange={setReach}
+                testID="reach-segments"
+              />
 
               {/* Mode toggle */}
               <View style={{ marginTop: 18, marginBottom: 6 }}>
