@@ -1512,6 +1512,16 @@ The curator-gated editorial set provides per-POI quality filtering but does not 
 
 **Implementation status (2026-05-19):** the rule is **live in the Phase I.1 MVP simulator** at [scripts/simulate-trip/lookahead.ts](scripts/simulate-trip/lookahead.ts) (`clusterByCategory()` + the `POI_SUPPRESSED_CLUSTER` event type). Defaults: `cluster_min_count=3`, `cluster_radius_corridor_mi=5`, `cluster_top_n_kept=1`. The LA-Mammoth simulation confirmed 4 cluster-suppression firings in LA (history cluster downtown, nature cluster Hollywood hills) — pattern works as designed. **Still not in the server-side runtime worker** — the simulator is offline-only; the server-side path (WebSocket-emitting lookahead) is Phase I.3 work.
 
+### Region narration suppression at trip start inside polygon (raised 2026-05-20)
+
+Standing order landed in [docs/roadstory-narration-curation-addendum.md §3.4.1](docs/roadstory-narration-curation-addendum.md): when a trip begins with the user already inside one or more region polygons, region narrations do **not** fire at trip start. The runtime waits for sustained movement (GPS speed ≥ 5 mph for ≥ 5 consecutive seconds), then runs a 30-second settle timer from the moment movement is first detected. On timer expiry, the highest-tier containing region fires; subsequent containing regions follow the existing ~20-min rate limit.
+
+**Why this matters for v1:** opening the app from home is the common case. Both demo routes start inside region polygons — LA → Mammoth starts inside Los Angeles Basin (and often San Fernando Valley, depending on origin); any SFV start sits inside both. Without the suppression rule, the trip opens with a region narration firing in the parking lot before the user has even pulled onto the street.
+
+**Composes with existing rules** (per addendum §3.4.1): first-entry-per-trip applies (the inside-region fire counts as the first entry for that region); region queue suppression during active POI narration applies as normal; driving mode only (hiking mode handles region context at trip start separately); Light Touch / Full Drive pace gating applies as normal.
+
+**Implementation status (2026-05-20):** docs only. Server-side trigger logic against the WS server is **pending** — separate scope from the doc commit. Same shape as the cluster-suppression entry above: rule captured in the addendum + CLAUDE.md so it's referenceable; runtime work bundles into Phase I.3 (WebSocket-emitting lookahead). Worth thinking through alongside the cluster-suppression implementation since both touch the same fire-or-suppress decision path.
+
 ### Long-distance route alternatives limitation (legacy Directions API) (raised 2026-05-20)
 
 The home page's route fetch ([app/index.tsx](app/index.tsx) `fetchRoute`) uses Google's legacy Directions API (`maps.googleapis.com/maps/api/directions/json`) with `alternatives=true`. The API returns only 1 route for some long-distance trips because Google penalizes alternatives by absolute time-cost overhead — a +1h alternative on a 7h trip looks "much worse" by absolute time than the same +1h on a 4h trip, and gets suppressed.

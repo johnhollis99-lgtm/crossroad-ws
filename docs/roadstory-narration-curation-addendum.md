@@ -202,6 +202,12 @@ A region narration fires when the WS server detects the user has **entered a reg
 4. **Mode awareness.** Region narrations are driving-mode only by default. In hiking mode, region context is delivered at trip start, not on boundary crossings (you don't want a region change to fire mid-trail when you cross an ecoregion line by 50m).
 5. **Pace awareness.** Light Touch users only hear top-tier region transitions (geomorphic province + named valley); Full Drive users hear all five layers.
 
+#### 3.4.1. Trip start inside region polygon
+
+Trip start inside region polygon. When a trip begins with the user already inside one or more region polygons (the common case for any user opening the app from home), no region narrations fire at trip start. The app waits for sustained movement: GPS-reported speed ≥ 5 mph for ≥ 5 consecutive seconds. From the moment movement is first detected, a 30-second timer starts. When the timer expires, the highest-tier containing region fires as a region narration. Subsequent containing regions follow the existing ~20-minute rate limit between region narrations.
+
+Composes with existing rules: first-entry-per-trip applies (the inside-region fire counts as the first entry for that region); region queue suppression during active POI narration applies as normal; driving mode only (hiking mode handles region context at trip start separately); Light Touch / Full Drive pace gating applies as normal.
+
 ### 3.5. Narration generation
 
 Region narrations use a dedicated prompt template at `server/src/prompts/region_{audience}.ts`. The template injects:
