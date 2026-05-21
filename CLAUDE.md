@@ -260,7 +260,7 @@ User mental model / naming convention used in conversation:
 | `src/components/Wordmark.tsx` | Canonical brand wordmark. Reads "XRoad" (cap X + cap R, italic "oad") with bicolor X (`accent` ink-red) + Road (`ink`/`paper`). Sizes m/l/xl with proportional 4-hump horizon SVG. `background="pill"` variant adds a cream paper backing (light-theme constants, e2 shadow) for map-overlay screens. |
 | `src/components/ModePillRow.tsx` | Drive ↔ Hike-or-Walk selector (drift 5.93). Cream chip with ink-red active fill; car / mountain / walker SVG icons; underlying state stays `'driving'` / `'hiking'` (visible Hike label reads "Hike / Walk"). |
 | `src/components/CategoryChip.tsx` | Single category-filter chip primitive (drift 5.95). Active = ink-red fill + cream text; inactive = paperDeep (taupe) fill + ink border + ink text. Fraunces italic 14px. No shadow. |
-| `src/components/PoiMarkerX.tsx` | X-shaped POI marker visual (drift 5.94). 32×32 invisible hitbox wrapper around ink-red X glyph. Sizes `curated` (18px stroke 2.5) and `reveal` (12px stroke 1.8). Exports `usePoiMarkerTracking()` for the tracksViewChanges discipline. **Must be the child of a `<Marker>` inlined directly under `<ClusteredMapView>`** — see chip-family section's clusterer integration rule. |
+| `src/components/PoiMarkerX.tsx` | X-shaped POI marker visual (drift 5.94 + tier-styled 2026-05-20 per `46e3e20`). 32×32 invisible hitbox wrapper around bicolor X glyph — **emerald fill for standard tier (`theme.colors.primary` #10B981), gold (#D4A017) for curator/iconic tier**, with cobalt outline + cream halo (tier-invariant) for cross-style legibility. Sizes `curated` / `reveal` / `preview`. Exports `usePoiMarkerTracking()` for the tracksViewChanges discipline. **Must be the child of a `<Marker>` inlined directly under `<ClusteredMapView>`** — see chip-family section's clusterer integration rule. |
 | `src/components/PoiCallout.tsx` | Floating POI callout overlay (drift 5.97). Sibling of MapView (NOT a child Marker). Anchored via `pointForCoordinate`; sticky selection (tap-same toggles, pan repositions). |
 | `src/components/CoordinatesPill.tsx` | Floating coords readout above dropped pin (drift 5.99). Mono uppercase coord text + optional Fraunces-italic sublabel (geocoded address on web). |
 | `src/design/tokens.ts` | Field Notes design tokens — sole source of color / type / spacing / radius / elevation. No hardcoded hex anywhere else in `src/`. |
@@ -278,7 +278,7 @@ User mental model / naming convention used in conversation:
 **Current details (2026-05-20):**
 
 - **REACH control** is a `SegmentedTrio` of three cards (Nearby / Within sight / Geographical area), defaults to max position. NOT a slider in implementation — segmented buttons. Per `e7200e8`.
-- **POI markers — tier-styled.** Gold (`#D4A017`, `gold` design token) for `editorial_curated = true` or `iconic_local = true` rows; red X unchanged for standard tier. Promotes curator via color rather than size/opacity so standard-tier visibility holds on dark + satellite map styles. Per `46e3e20`.
+- **POI markers — tier-styled.** Gold (`#D4A017`, `gold` design token) for `editorial_curated = true` or `iconic_local = true` rows; emerald X (`theme.colors.primary` #10B981) for standard tier. Cobalt outline + cream halo are tier-invariant. Promotes curator via color rather than size/opacity so standard-tier visibility holds on dark + satellite map styles. Per `46e3e20`.
 
 - **Back button** — top-left map overlay, inside `overlayTL` row before the narrator avatar chip. Circular dark button `←`. Shows confirmation alert before navigating back to customize.
 - **Sheet snap points** — two states only: `peek` (96px) and `expanded` (82% screen height). `default === expanded` so the hook naturally collapses to two snaps. Sheet starts expanded.
@@ -1236,6 +1236,12 @@ Verification scripts: `scripts/verify-migrations.mjs` (66/66 checks passed on 00
 - **Mt Whitney note**: the 32m exclusion is route-dependent. Whitney's centroid is 25.02mi from the straight LA→Mammoth line; on actual US-395 routes through Lone Pine (which is the realistic route in CalTrans data), Whitney surfaces because the route passes much closer to the eastern flank of the Sierra. The LA→Mammoth straight line is the verification route, not a real driving path.
 - **Caller-side**: no changes to `lib/supabase.ts` or any mobile/server consumer — RPC signatures and RETURNS shapes are unchanged from G2; the bypass is server-side only. Drive page's new "Reach" control (C2, commit `e7200e8`) is the user-facing standard-tier control; the C1 curator bypass operates orthogonally above it.
 
+**Applied 2026-05-20 (food_drink floor sentinel — override-only surfacing for food/drink):**
+- 20260520000003 `food_drink_floor_sentinel` — two coordinated changes on `public.category_significance_floors`: (1) widens the `significance_floor` CHECK from `(>= 0 AND <= 100)` to `(>= 0 AND <= 999)` so the sentinel value fits; (2) UPDATEs the `food_drink` row's `significance_floor` from 0 → 999. The G2 seed set food_drink=0 with the curator intent that food/drink surfaces only via `editorial_curated` / `iconic_local` override paths, but the RPC OR-chain (`editorial_curated OR iconic_local OR significance_score >= floor`) with floor=0 + `>=` comparator let zero-signal OSM bulk-imports through the score branch (Joyce's recon, Northridge, sig=0). The 999 sentinel makes the score branch effectively unreachable (live `significance_score` is capped near 100 by the recompute pipeline's component caps); the override branches stay live. **Sentinel convention codified in the migration header**: values 0–100 are real floors; 999 is the sentinel for override-only categories. CHECK upper bound capped at 999 (not unbounded) so future typos like `floor = 1000` still error loudly. Applied via MCP `apply_migration` (BEGIN/COMMIT-wrapped). Post-apply simulated the RPC OR-chain for Joyce's: `bypass_curator=false`, `bypass_iconic=false`, `passes_score_branch=false` — surfacing correctly empty until curation pass. Catalog state at resolution: 14 food_drink rows total, 0 `editorial_curated=TRUE`, 0 `iconic_local=TRUE`. Commit `8b49c80`.
+
+**Applied 2026-05-20 (region synopses — SFV + LA Basin curated 3-min descriptions):**
+- 20260520000004 `region_synopses_sfv_la_basin` — two UPDATEs on `public.regions` replacing the imported Wikidata-excerpt descriptions for San Fernando Valley (id `733e4582...`) and Los Angeles Basin (id `f63e48f5...`) with hand-crafted ~3-min narration scripts (367w / 414w respectively). Dollar-quoted string literals (`$narration$ ... $narration$`) used so the embedded apostrophes survive without escaping. Length exceeds the addendum §3.5 "60–90 seconds" baseline intentionally — these are finished narrations, not seed text (see new standing order in addendum §3.5 codifying the up-to-3-min exception for area synopses). Audio regen happens out-of-band via `scripts/regen-region-synopses-direct.ts` — a one-off direct-text-to-TTS path that bypasses the standard region prompt template + Haiku step (no LLM rewrite). New `narrator_a.opus` + `narrator_b.opus` overwrite existing v1 Storage paths at `regions/{region_id}/{narrator_slug}.opus`; matching `narration_audio` rows updated in place via 6-column upsert. Voice plan: narrator_b → Sadachbia 1.0× (current active family voice); narrator_a → Iapetus 1.0× (historical narrator_a/family voice, matches the v1 file identity). Live regen spend $0.1407 (4 generations × Google Chirp 3 HD). Commit `29a4e88`.
+
 **Deferred to Phase D3** (per roadmap §4 — bundled with voice audition):
 - `voice_configs.narrator_slug` column add + partial unique index swap from `(mode) WHERE is_active=true` to `(mode, narrator_slug) WHERE is_active=true` + 8 new voice rows (4 audience × 2 narrator). All one coordinated migration.
 
@@ -1266,7 +1272,11 @@ Verification scripts: `scripts/verify-migrations.mjs` (66/66 checks passed on 00
 - Git binary (not on PATH): `C:\Users\johnh\AppData\Local\GitHubDesktop\app-3.5.8\resources\app\git\cmd\git.exe`
 - **`.gitignore`** — covers: `node_modules/` (all sub-packages), `.env` + `server/.env` (secrets), `.expo/`, `dist/`, `admin/.next/`, `scripts/*/cache/`, `scripts/audition-output/`, `*.opus`, `*.tsbuildinfo`, OS files, `.claude/scheduled_tasks.lock`, `.claude/settings.local.json`, `supabase/.temp/`, plus session-scoped pre-handoff working notes (`docs/alignment-plan.md`, `docs/codebase-audit.md` — added 2026-05-11 per chore(gitignore) commit, files retained locally for historical context).
 - **Recent commit history (top of `main`, 2026-05-20):**
-  - `46e3e20` feat(drive): tier-styled POI markers — gold (`#D4A017`) for `editorial_curated` and `iconic_local` POIs; red X unchanged for standard tier (promotes curator via color rather than size/opacity to preserve standard-tier visibility on dark + satellite map styles)
+  - `957d58c` Standing order amendment — tier-tie tiebreak (smallest polygon wins) — one-line addition to addendum §3.4.1 + CLAUDE.md cross-reference; codifies smallest-polygon-wins on tier ties (e.g., SFV before its containing Transverse Ranges province), matching the existing `detect_regions_at_location` RPC's most-specific-wins semantic
+  - `feb4679` Standing order — Trip start inside region polygon (5mph/5s/30s docs) — addendum §3.4.1 new subsection + CLAUDE.md cross-reference under "Open architectural concerns"; rule waits for sustained movement before firing region narrations at trip start (the common case for users opening the app from home, e.g., LA → Mammoth starting inside Los Angeles Basin / San Fernando Valley). Runtime implementation pending Phase I.3.
+  - `29a4e88` Region synopses — SFV + LA Basin curated 3-min descriptions + audio regen — migration `20260520000004_region_synopses_sfv_la_basin.sql` + one-off `scripts/regen-region-synopses-direct.ts` (direct-text-to-TTS, no LLM rewrite step); replaces v1 imported descriptions with hand-crafted narrations; 4 audio files overwritten at `regions/{id}/{narrator_slug}.opus`; live spend $0.1407
+  - `8b49c80` food_drink significance floor → 999 sentinel (override-only surfacing) — migration `20260520000003_food_drink_floor_sentinel.sql`; CHECK widened to 0–999, food_drink row promoted to sentinel; closes the Joyce's recon ticket (zero-signal OSM bulk-import surfacing through floor=0 + `>=` comparator gap)
+  - `46e3e20` feat(drive): tier-styled POI markers — gold (`#D4A017`) for `editorial_curated` and `iconic_local` POIs; emerald X unchanged for standard tier (promotes curator via color rather than size/opacity to preserve standard-tier visibility on dark + satellite map styles)
   - `d7a78aa` C1 — RPC corridor extension for curator/iconic POIs (25mi visibility-horizon bypass cap; both `get_corridor_pois` + `get_nearby_pois`)
   - `e7200e8` C2 — Drive page Detail picker redesign (SegmentedTrio: Nearby / Within sight / Geographical area; defaults to max)
   - `7549676` C0 — stat strip header: PACE → STORIES PER
@@ -1522,6 +1532,32 @@ Standing order landed in [docs/roadstory-narration-curation-addendum.md §3.4.1]
 
 **Implementation status (2026-05-20):** docs only. Server-side trigger logic against the WS server is **pending** — separate scope from the doc commit. Same shape as the cluster-suppression entry above: rule captured in the addendum + CLAUDE.md so it's referenceable; runtime work bundles into Phase I.3 (WebSocket-emitting lookahead). Worth thinking through alongside the cluster-suppression implementation since both touch the same fire-or-suppress decision path.
 
+### Narrator_a/family production lookup orphan (raised 2026-05-20)
+
+Catalog v1 closed with narrator_a audio generated and stored for all 54 regions (and a handful of POIs), but the post-H1.5 voice_configs collapse points the production family lookup at narrator_b only (Sadachbia). The narrator_a/family audio files are present on Storage + `narration_audio` rows at status=ready, but the mobile runtime never reaches them — `useTTS` queries voice_configs by audience_mode and resolves family → narrator_b unambiguously.
+
+**Why this matters for UI work:** any screen that assumes a live two-narrator A/B picker is mis-modeling the current state. The narrator picker UI in [app/customize.tsx](app/customize.tsx) renders a four-narrator-preset grid (legacy Phase J1a stub), but only one narrator/audience combo is wired through to runtime per audience mode. The narrator_a audio exists for sampling and A/B comparison; runtime ignores it.
+
+**Resolution path:** Phase D3 — `voice_configs.narrator_slug` column add + partial unique index swap + 8 new voice rows (4 audience × 2 narrator). See "Deferred to Phase D3" under Migration backlog. After D3, both narrator slugs become live per audience and the narrator_a audio becomes runtime-reachable. Until then, treat narrator_a/family files as A/B reference material, not production assets.
+
+**v1 status — not blocking.** v1 launch ships single-narrator-per-audience; the orphan files are inert. The concern is captured here because it's load-bearing context for any UI work that touches narrator selection between now and D3.
+
+### Stat-strip POI count drift across screens (raised 2026-05-20)
+
+Three screens display POI counts for the same route via three intentionally different query/curation paths:
+
+| Screen | Source | Curation | Corridor | Categories |
+|---|---|---|---:|---|
+| Home (nav route card) | `count_corridor_pois` RPC raw | none | 1mi | all (no filter) |
+| Customize (POIS strip) | `get_corridor_pois` → `curateRoutePOIs()` | applied | 1mi (driving) / 0.25mi (hiking) | user-selected slugs (8 unique from 9 UI labels) |
+| Drive (StoriesBadge) | `get_corridor_pois` → `curateRoutePOIs()` | applied | 20mi (REACH default) | forwarded from customize |
+
+Recon 2026-05-20 confirmed all three behaviors are intentional but produce different numbers (LA→Mammoth demo: nav=34, drive=37, customize=~39). The drift will widen sharply on routes with denser editorial coverage (drive's 20mi corridor + C1's 25mi curator-bypass will pull in editorial POIs that the 1mi corridors miss).
+
+**Customize widening to 20mi was considered + dropped this session** — would have made the map-peek preview overlay too dense relative to the actual 1mi corridor the customize curation pass operates on (preview should reflect the curated count the user is configuring, not the wider drive-page set).
+
+**v1 status — intentionally tolerated.** Numbers happen to land in the 30s for the demo route by coincidence; for v1 the drift is below the threshold where users compare across screens. Re-evaluate post-launch if drift becomes user-visible (denser route corridors will trip this first — anything in the LA basin or Bay Area).
+
 ### Long-distance route alternatives limitation (legacy Directions API) (raised 2026-05-20)
 
 The home page's route fetch ([app/index.tsx](app/index.tsx) `fetchRoute`) uses Google's legacy Directions API (`maps.googleapis.com/maps/api/directions/json`) with `alternatives=true`. The API returns only 1 route for some long-distance trips because Google penalizes alternatives by absolute time-cost overhead — a +1h alternative on a 7h trip looks "much worse" by absolute time than the same +1h on a 4h trip, and gets suppressed.
@@ -1557,6 +1593,32 @@ Scope: text input field for origin parallel to the existing destination field, G
 
 Not v1-blocking. Quality-of-life feature for power users planning ahead.
 
+### food_drink iconic_local curation pass (v1.1, raised 2026-05-20)
+
+The food_drink floor is now sentinel-999 (override-only) per commit `8b49c80`. The override branches (`editorial_curated = TRUE OR iconic_local = TRUE`) stay live, but **zero food_drink rows currently carry either flag** across the catalog's 14 food_drink POIs. Surfacing is correctly empty for food/drink until a curation pass marks the iconic candidates.
+
+Starter candidates from this session's recon: Cole's P.E. Buffet (LA), Phillippe the Original (LA), Musso & Frank Grill (Hollywood), The Original Pantry Cafe (LA), Apple Pan (LA), Original Tommy's (LA), Roscoe's House of Chicken and Waffles (LA), Schat's Bakkery (Bishop), Tadich Grill (SF), Swan Oyster Depot (SF), In-N-Out Baldwin Park original location, Bob's Big Boy Burbank.
+
+**Required before migration:** curator review of the list — some may not exist in the catalog at all (search by name first), others may need new POI rows seeded as `source_type='editorial'` with a curator-authored description + signature hook. Once the candidate list is greenlit, the migration is a small UPDATE setting `iconic_local = TRUE` + populating `iconic_local_reasons` and `signature_hook` per row.
+
+### City of Los Angeles region row (v1.1, raised 2026-05-20)
+
+DB currently has "Los Angeles Basin" (geomorphic region_type) but **no civic "City of LA" region row**. The civic LA boundary is genuinely different from the basin — the basin extends from the Santa Monicas to Palos Verdes including unincorporated county land, whereas the city polygon is the LADWP service area shape with carve-outs (Beverly Hills, West Hollywood, Santa Monica, Culver City, etc., all separate cities embedded in the geographic basin).
+
+Scope:
+- Schema CHECK widening on `regions.region_type` to add a new value (`'municipality'` or `'civic'` — call to make during the v1.1 pass).
+- OSM polygon import from relation `207359` (LA city boundary; complete coverage including the SFV panhandle).
+- New row INSERT with curator-authored description (history of incorporation + annexation pattern).
+- Narration generation via the existing region pipeline (or via the direct-text-to-TTS path from `29a4e88` if the description is hand-crafted at 3-min length).
+
+**Bundle with LA Basin polygon-adequacy fix below** — both touch the regions table and both are tied to the LA basin's geographic complexity; the curator-narration audit work overlaps.
+
+### LA Basin polygon adequacy fix (v1.1, raised 2026-05-15, see decision doc)
+
+Existing tracking: [docs/decisions/v1.1-polygon-followups.md](docs/decisions/v1.1-polygon-followups.md). Current LA Basin polygon is a 15km buffer circle (Wikidata Q2887490 centroid + 15km radius), `polygon_quality: inadequate_buffer_v1`, covers only ~5.9% of the real ~12,000 km² basin area. Narration accuracy is unaffected (description text is correct), but the trigger zone misses most of the basin in production — a user driving from downtown LA to Long Beach (well within the real basin) won't be inside the polygon for most of the trip.
+
+Fix path: replace the Wikidata circle with an OSM polygon import or curator-drawn boundary. Class A polygon quality flag, low-priority per the v1.1 followups doc; ranked after the City of LA region work since both touch the same surface.
+
 ## Completed v1 work (catalog v1 closed 2026-05-19)
 
 Snapshot of what's landed in main as of catalog-v1-close. Curator-approved verification samplers cleared the final cycle; no further policy changes or generation cycles in flight. See [docs/decisions/2026-05-15-top-tier-poi-first-run.md](docs/decisions/2026-05-15-top-tier-poi-first-run.md) §Catalog v1 closed for the full close-out detail.
@@ -1574,6 +1636,15 @@ Snapshot of what's landed in main as of catalog-v1-close. Curator-approved verif
 - **Phase I.1 + I.2 MVP (lookahead worker + CLI simulator) — done.** Landed post-catalog-v1-close (commit `ab33921`). Pure-function ranking pipeline at `scripts/simulate-trip/lookahead.ts` implementing addendum §10 + §10.3: effective_score = (sig + boost) × narrator_weight[category], cluster suppression (driving mode, N≥3 same-category within 5 corridor-mi), density gap (drop sig<75 within 60s of last narration end), region rate-limit (1 per 20 min). **Key design decision:** the editorial-gate IS the gate; the runtime lookahead does NOT re-apply `category_significance_floors` (the floor was the algorithm-surface filter at export.ts SELECT time; once the curator marks a POI `editorial_curated = TRUE`, the floor is done). Iconic Local Override + Pace=Light Touch + WebSocket emission + mobile UI + real GPS deferred to Phase I.3. First simulation artifact at [docs/simulations/2026-05-19-la-mammoth.md](docs/simulations/2026-05-19-la-mammoth.md) (LA → Mammoth via I-5/CA-14/US-395; 11 POI fires + 7 region fires; 8.2% airtime ratio).
 
 **Cumulative spend at close: $15.64** ($2.52 Claude + $13.12 TTS, per `llm_calls` lifetime audit). Per-narration cost averages ~$0.053 across all 295 v1 narrations.
+
+## Session resolutions (post-catalog-v1, 2026-05-20)
+
+Small backlog items closed after catalog-v1 close (2026-05-19). None reshape the v1 launch slate; all four are doc + small-migration corrections that surfaced during demo-route walk-throughs.
+
+- **food_drink significance floor adjustment** — CLOSED by `8b49c80`. Migration `20260520000003_food_drink_floor_sentinel.sql` widened the floor CHECK to 0–999 and set food_drink floor = 999 (sentinel). The G2 seed had set floor=0 with the curator intent that food/drink surfaces only via override paths, but the RPC OR-chain (`editorial_curated OR iconic_local OR significance_score >= floor`) with floor=0 + `>=` comparator let zero-signal OSM rows through the score branch. Sentinel makes the score branch unreachable; override branches stay live. See "Applied 2026-05-20 (food_drink floor sentinel)" under Migration backlog for the full mechanics.
+- **Joyce's recon ticket** — CLOSED by same commit (`8b49c80`). Root cause for posterity: Joyce's (Northridge, OSM way `1171899495`, score=0, no description, no tags, never curated) surfaced on the LA → Mammoth demo route via the floor=0 score-branch gap. Catalog state at resolution: 14 food_drink rows total, 0 `editorial_curated=TRUE`, 0 `iconic_local=TRUE` — surfacing is now correctly empty for food_drink until the v1.1 curation pass (see "food_drink iconic_local curation pass" under Post-launch feature backlog).
+- **Region synopses — SFV + LA Basin** — CLOSED by `29a4e88`. Migration `20260520000004_region_synopses_sfv_la_basin.sql` replaced imported Wikidata-excerpt descriptions on both regions with hand-crafted ~3-min narrations (367w SFV / 414w LA Basin). Audio regen via the new one-off direct-text-to-TTS path at `scripts/regen-region-synopses-direct.ts` — bypasses the standard region prompt template + Haiku step (no LLM rewrite/reshape); 4 audio files overwritten at `regions/{id}/{narrator_slug}.opus`; spend $0.1407.
+- **Standing order — Trip start inside region polygon** — CLOSED by `feb4679` + `957d58c`. Rule + tier-tie tiebreak landed in addendum §3.4.1 + cross-referenced in CLAUDE.md "Open architectural concerns." When a trip begins with the user already inside one or more region polygons, no region narrations fire at trip start; the app waits for sustained movement (≥5 mph for ≥5s) + a 30s settle timer, then fires the highest-tier containing region (smallest polygon wins on tier ties). Runtime implementation against the WS server lookahead worker is pending Phase I.3; bundles with the cluster-suppression rule.
 
 ## Trip simulator (Phase I.1 + I.2 MVP, `scripts/simulate-trip/`)
 

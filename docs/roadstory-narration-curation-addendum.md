@@ -220,6 +220,8 @@ Region narrations use a dedicated prompt template at `server/src/prompts/region_
 
 Output length is fixed at **Standard depth** (60–90 seconds) regardless of intrinsic depth weighting elsewhere. Regions need room to breathe but not 3 minutes — the user is *driving into* the region, not stopping at a single point.
 
+**Exception — geographical area synopses.** Geographical area synopses can run up to ~3 minutes (or longer if absolutely necessary). Don't force length — redundancy kills. Use full length only when the region has genuinely interesting material to land. Applied first to San Fernando Valley + Los Angeles Basin (commit `29a4e88`, hand-crafted descriptions + direct-text-to-TTS regen). When the region's existing narration is a generic ecoregion / geomorphic-province description, the 60–90s baseline is the right ceiling; the exception unlocks for regions with deep history layers that warrant the longer form.
+
 ### 3.6. Caching
 
 Region narrations cache forever — regions don't change. Cache key:
