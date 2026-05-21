@@ -397,6 +397,10 @@ INSERT INTO voice_configs (mode, provider, voice_id, narrator_slug, display_name
 
 The partial unique index `(mode) WHERE is_active = true` will need to be replaced with `(mode, narrator_slug) WHERE is_active = true`. One migration. Low blast radius.
 
+### 5.7. v1.0 launch scope: single narrator
+
+**narrator_b set 4 carries all narrative_modes (`soul`, `local`, `family`) for v1.0 launch.** The two-narrator model described in §5.1–§5.6 is the locked design but not the launch posture — narrator_a config files in `server/prompts/voices/` remain orphaned pending the audition workflow that will follow launch. Full gating conditions on multi-narrator activation are documented in [docs/roadstory-unified-roadmap.md](roadstory-unified-roadmap.md) (v1.1+ backlog → "Multi-narrator routing"). The conditions are specific — (a) full content approval, and (b) functioning application preview approved — not a generic post-launch deferral.
+
 ---
 
 ## 6. Pace Setting
@@ -1022,6 +1026,8 @@ This is a v1.1+ scope shift. Not for launch.
 **food_drink — Bucket B carveout (v2 amendment, 2026-05-21).** Shipped in migration `20260521000002_food_drink_bucket_b.sql`. All food_drink POIs route to `{local}` regardless of `editorial_curated`. The `narrative_modes_override` per-row escape hatch remains available for the Madonna-Inn-class iconic-class opt-in workstream (deferred). This supersedes the prior framing that food_drink would be Bucket C-promotable via `iconic_local` curation — food/drink in Soul mode is a category mismatch with the soul doctrine, and per-row override is the right granularity for the rare iconic exceptions when they emerge.
 
 **Tier 2 callout seed — shipped 2026-05-21.** Two commit paths landed in the same lap. (1) Commit `804b6d2` — nine California food landmarks via editorial seed `scripts/poi-import/seeds/editorial-tier2-iconic-food-drink-2026-05-21.sql` (Philippe the Original, Musso & Frank Grill, Bob's Big Boy Burbank, The Apple Pan, Original Tommy's, Roscoe's Hollywood, Erick Schat's Bakkery, Tadich Grill, Swan Oyster Depot) — exercises the food_drink → `{local}` Bucket B trigger on the INSERT path; new rows route automatically without any per-row override. (2) Commit `92c0b6e` — In-N-Out Museum at Baldwin Park, category=`history` with `narrative_modes_override = TRUE` lock to `{local}` — exercises the override path for category-edge entries where the food_drink Bucket B carveout doesn't naturally apply (the venue is historically a museum, not a restaurant slug). Corpus state moves food_drink rows from 14 → 23, all routing to `{local}`. The two paths together establish the canonical Tier 2 pattern for the broader iconic food workstream (deferred — see roadmap v1.1 Backlog "Iconic food import gap workstream").
+
+**Tier 1 delivery (commit `d1d6c7f`).** First Tier 1 iconic_local editorial seed: 4 California landmarks — Madonna Inn, Salvation Mountain, Cabazon Dinosaurs, Roy's Motel & Café — using the `landmark` category slug (commit `0be4031`). These are the first end-to-end INSERT-path test of the landmark slug + Bucket C dual-mode routing. The trigger correctly resolved category=landmark → bypassed Bucket A history-editorial guard → bypassed Bucket B venue guard → engaged Bucket C dual-mode on `editorial_curated=TRUE` → emitted `narrative_modes={soul,local}` with no override needed on any of the 4 rows. Pattern now production-validated for green-field Tier 1 INSERTs. Editorial length calibration: Madonna Inn at 550w / ~3:30 spoken (committed pre-recalibration); subsequent Tier 1 entries target 450–500w / 3:00–3:30 spoken at 150 wpm via the narrator_b set 4 voice profile.
 
 **Two types of editorial content** (forward-looking, v1.1+ scope; not implemented in the initial Layer 3 migration):
 

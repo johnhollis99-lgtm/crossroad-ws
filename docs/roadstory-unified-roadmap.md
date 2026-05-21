@@ -635,6 +635,14 @@ Final cleanup, content QA, performance.
 
 ---
 
+## v1.0 Launch Scope Notes
+
+Delivery-posture clarifications that aren't tasks — they pin what actually ships at v1.0 vs. what stays deferred. Pre-launch hardening notes that affect downstream wiring belong here; backlog items affecting post-launch work belong in v1.1 below.
+
+**Narration voice (v1.0).** Single narrator — narrator_b set 4 — for all narrative_modes (`soul`, `local`, `family`). Voice locked via the Madonna Inn Tier 1 Soul audio preview (`scripts/narration-preview/output/madonna-inn-tier1-2026-05-21T22-16-02.opus`). The narrator_a config artifacts in `server/prompts/voices/` remain orphaned and inactive at launch. Multi-narrator routing deferred to post-launch, specifically gated on: (a) full content approval, AND (b) functioning application preview approved.
+
+---
+
 ## v1.1 Backlog
 
 Smaller post-launch items than the v1.5 design-lap decisions below — fixes, follow-ups, and perf concerns that surface during pre-launch hardening or shortly after launch. Some are cross-referenced in CLAUDE.md's "Open architectural concerns" or "Post-launch feature backlog" sections; this is the canonical roadmap home.
@@ -652,6 +660,10 @@ CLAUDE.md cross-refs: "City of Los Angeles region row" + "LA Basin polygon adequ
 narrator_a/family audio is generated and stored in production but doesn't surface in-app — `voice_configs` only queries narrator_b/family today (post the H1.5 narrator-collapse). Awaits J0 audition activation (Chirp 3 HD audition pass; taste-led narrator-B voice selection across 4 audience modes).
 
 CLAUDE.md cross-ref: "Narrator_a/family production lookup orphan" entry in Open architectural concerns.
+
+### Multi-narrator routing
+
+Activate narrator_a configs (currently orphaned awaiting J0 audition) plus the audience-mode-based routing layer that fans `narrative_modes` out across voices. Gated specifically on (a) full content approval and (b) functioning application preview approved — not just v1.1+ broadly. Includes voice audition workflow for any additional voices. v1.0 ships single-narrator (narrator_b set 4 covers all narrative_modes); see "v1.0 Launch Scope Notes → Narration voice" above for the locked v1.0 posture.
 
 ### Stat-strip count mismatch across screens
 
