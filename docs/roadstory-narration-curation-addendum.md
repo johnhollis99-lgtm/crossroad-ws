@@ -892,4 +892,119 @@ For implementation details + drift log, see `CLAUDE.md` — has running per-comm
 
 ---
 
+## 15. Mode Bifurcation — Soul vs Local as Parallel Paradigms
+
+**Status:** Open architectural direction (raised 2026-05-20). Supersedes the additive "+Local Color" framing in §1.x for v1.1+ thinking. Not in scope for v1 launch — v1 ships Soul-only with "+Local Color" remaining as a loose seed.
+
+### 15.1. The shift
+
+Soul and Local are two distinct modes the user toggles between in real time. Not a base-plus-overlay; a context switch between two parallel paradigms.
+
+- **Soul mode (the land speaks):** geology, volcanism, rivers, seas, mountains, indigenous history, deep historical context. The contemplative voice. Default for open-road driving.
+- **Local mode:** utility + discovery. Great restaurants, attractions, museums, theme parks, distinctive local places. The wayfinder voice. What you flip into when you enter a town.
+
+### 15.2. The on-the-fly toggle
+
+User toggles between modes mid-trip without restarting. Drive the 395 → Soul. Pull into Bishop for dinner → Local. Back on the 395 → Soul. Toggle lives on the drive page, easy thumb-reach.
+
+When the toggle fires: active narration finishes uninterrupted; POI lookup switches by category routing; next narration uses the active mode's prompt template and voice; map markers shift to reflect the active mode's POI set.
+
+### 15.3. Catalog routing (no new data source)
+
+Same curated catalog, sliced by category. No external API integration, no new POI source. Each `category_slug` is tagged for which mode(s) it surfaces in:
+
+- **Soul-only categories:** history, nature, geology, indigenous_culture, plus the gap categories (engineering, viewpoint, recreation, volcanic, hot_springs, native_history, bridges, dams, mining, legends).
+- **Local-only categories:** food_drink, theme_park, local_culture (music + roadside), and the Local-leaning portion of architecture.
+- **Architecture is the edge case** — historic landmarks (missions, NRHP buildings, civic landmarks) belong to Soul; museums and notable contemporary architecture belong to Local. May need a sub-tag or per-row routing rather than category-level.
+
+Categories not yet in the catalog (gas, lodging, services) are explicit non-goals for v1.1 Local — separate scope if/when added later.
+
+### 15.4. Category model on the chip rail
+
+The chip rail splits per active mode:
+
+- **Soul-mode chips:** history, geology, nature, indigenous_culture, etc.
+- **Local-mode chips:** food, attractions, theme_parks, local_culture (rebrandable per chip rail UX).
+
+Per-mode defaults: Soul defaults to all-chips-on (current behavior). Local defaults TBD — possibly all-on for consistency, possibly food-only-on with the rest opt-in.
+
+### 15.5. Narration generation (Local mode is single-variant, three registers)
+
+Soul mode keeps the existing matrix (4 audience × 2 narrator × ~1.2 depth ≈ 9.6 generations per POI).
+
+Local mode is single-variant on the technical axes: one voice (narrator_b's casual register — the existing "local casual voice"), one audience (no per-audience variants for Local), one depth (standard). One generation per Local POI. But the prompt template has three registers depending on tier and brand:
+
+- **Gold tier (iconic_local / editorial_curated):** full destination-tier narration. The "this is THE place" voice — history, what makes it singular, why it's worth stopping. Cole's gets the French dip story; Schat's gets the Bishop bakery history.
+- **Emerald non-chain:** medium narration. A sentence or two of context — what it is, why it's worth knowing about. The solid local place that isn't iconic.
+- **Emerald chain (brand field present):** utility-brief. "Denny's, half a mile up on the right." Identification only, no history. Same narrator voice, much shorter generation.
+
+Cache key adds a `narrative_mode` dimension: `{poi_id}/{trip_mode}/{narrative_mode}/{audience}/{narrator_slug}/{depth}.opus`. For Local rows, audience/narrator/depth collapse to fixed values; only `poi_id` and `narrative_mode` actually vary.
+
+Disambiguation: `trip_mode` (driving/hiking/venue_tour) is orthogonal to `narrative_mode` (soul/local). Different concerns, both needed in the key.
+
+### 15.6. Surfacing logic per mode (significance + override + brand-aware spatial dedup)
+
+Soul mode keeps the locked-in 70 floor + per-category Soul-side floors + override paths via `editorial_curated` / `iconic_local` (§2).
+
+**Local mode uses significance + override on the existing fields, with brand-aware spatial dedup layered on top.** The existing `significance_score` is the rating signal; `iconic_local` / `editorial_curated` flag the destination tier. No external rating API needed — the database does the work.
+
+Tier mapping uses the existing visual system:
+
+- `iconic_local` OR `editorial_curated` → **gold X marker** (top-tier Local — destination places). Never applied to chain locations.
+- Standard tier above per-category Local floor → **emerald X marker** (popular/decent Local, including chains when surfaced)
+- Below floor → doesn't surface
+
+Per-category Local floors land lower than Soul's 70. For food_drink specifically, a floor around 25–30 filters truly zero-signal rows (Joyce's at 0) while letting reasonable rows surface in sparse areas. The food_drink `iconic_local` curation pass flags Cole's / Phillippe / Musso & Frank / Schat's / Tadich / etc. for gold-tier surfacing.
+
+The parked food_drink `iconic_local` curation pass is the foundational Local-mode curation step — without it, Local food surfacing is emerald-only with no destination-tier highlights.
+
+**Chain restaurants are not excluded — they're spatially deduped.** A single chain location in a sparse area where it's the only food option should surface as emerald. Three chain-siblings clustered in a dense area should not all paint the map.
+
+Mechanism: when a `brand` field is present on a POI (sourced from OSM `brand=*` tag during import), Local-mode queries cap surfacing to 1 location per brand within a spatial radius (proposed: ~5 miles). Outside the radius, the chain surfaces independently. Implications:
+
+- Single Denny's in a small 395 town: surfaces as emerald (no brand-siblings within radius)
+- Three McDonald's clustered in dense sprawl: nearest-1 (or highest-significance-1) surfaces, others suppressed
+- Chain locations never get gold — `iconic_local` / `editorial_curated` flags are not applied to chain rows by curation discipline
+- Per-category floor still applies; very low-significance chain rows below floor still don't surface at all
+
+Narration for surfaced chains uses the emerald-chain register from §15.5 — utility-brief, no historical depth.
+
+### 15.7. Audience-mode naming collision
+
+The audience-mode set is currently `family | kids | unfiltered | local`. The `local` audience name will collide with Local *narrative mode* once bifurcation lands. Rename before bifurcation work: candidates `insider`, `native`, `resident`. Pick one and refactor cleanly in advance.
+
+### 15.8. Monetization
+
+Local mode as a paid feature is the intended business model. Soul mode is the free/base tier — complete and valuable on its own, the soul of the product. Local mode is the premium layer that turns the app from contemplative companion into wayfinder.
+
+Pricing model TBD; possible shapes:
+
+- Monthly subscription unlocks Local mode globally
+- One-time purchase for permanent Local-mode access
+- Free trial of Local mode for the first N trips, then conversion prompt
+
+Mode toggle becomes a conversion moment for free-tier users. Critical design constraint: the prompt must not feel punitive. Soul mode by itself has to feel like a complete, satisfying product — not a deliberately crippled free tier. Users who never upgrade should feel they got something whole.
+
+### 15.9. v1 vs v1.1+ disposition
+
+**v1 launch (current):** Soul mode is what ships. The "+Local Color" opt-in stays as it is (additive narrative flavor) — a partial seed of the eventual Local mode but explicitly not the locked design.
+
+**v1.1+ scope (this section):** the bifurcation needs, in rough order:
+
+1. Audience-mode rename (`local` → `insider` / etc.) to free up the name
+2. Category-to-mode routing tags (slug-level for most, per-row for architecture)
+3. Food_drink `iconic_local` curation pass (foundational Local catalog seed)
+4. Local prompt templates — three registers (gold destination tier / emerald non-chain medium / emerald chain utility-brief)
+5. Local-mode chip rail variant
+6. In-trip mode toggle UI on the drive page
+7. Local-mode significance floors / per-category surfacing gate tuning
+8. Brand field import (OSM `brand=*` tag) + brand-aware spatial dedup query rule (1-per-brand within ~5mi)
+9. Cache key extension for `narrative_mode`
+10. Monetization wiring (subscription / IAP) tied to the toggle
+11. "+Local Color" deprecation disposition once Local mode is live
+
+This is a v1.1+ scope shift. Not for launch.
+
+---
+
 **End of addendum.** Hand to build chat for incremental implementation per §11 (status table in §14.1).

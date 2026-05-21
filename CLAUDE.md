@@ -1581,6 +1581,10 @@ Short trips: typically 1-3 routes. Mid trips: consistently 2-3. **Long trips (>5
 
 **v1 status — not blocking.** Mid-trip cases (the v1 demo class) all work on legacy. Long-distance degradation (LA→SF, LA→S Tahoe) is a known limitation; users on those routes see 1 route option instead of 2-3. Bundles with whatever real-time routing-quality work earns its keep at scale post-launch, when `TRAFFIC_AWARE_OPTIMAL` also pays for itself on rush-hour and incident-aware routing.
 
+### Mode Bifurcation — Soul vs Local as parallel paradigms (raised 2026-05-20)
+
+v1.1+ architectural direction locked as [docs/roadstory-narration-curation-addendum.md §15](docs/roadstory-narration-curation-addendum.md). Supersedes the addendum's additive "+Local Color" framing in §1.x: Soul and Local become two distinct paradigms the user toggles between mid-trip, not a base-plus-overlay. Soul mode = the land speaks (geology / geography / anthropology, contemplative voice, free tier); Local mode = utility + discovery (food / attractions / theme parks, wayfinder voice, paid tier). Same curated catalog sliced by category, no new data sources. Local mode is single-variant on the technical axes (one voice / one audience / one depth) but the prompt template has three registers (gold destination tier / emerald non-chain medium / emerald chain utility-brief), with chain restaurants brand-aware spatially deduped (1-per-brand within ~5mi) rather than excluded. v1 ships Soul-only; "+Local Color" remains as a loose additive seed until bifurcation lands. Not v1-blocking. Scope sequence + 11-item v1.1+ punchlist in §15.9 of the addendum.
+
 ## Post-launch feature backlog
 
 Items deliberately deferred past v1 launch. Captured here so the rationale and scope survive across sessions.
