@@ -311,11 +311,12 @@ Quick scan of where each phase actually stands. Detail in each phase's section b
 | L — Venue Tour V3 | ○ NOT STARTED | Awaits Phase H expansion (audience × narrator matrix) and venue-tour narration templates |
 | M — UI Handoff Phase 3 Remainder | ◐ PARTIAL | Pine landed most of Phase 3 surface work. Trip Summary screen + Group features (Prompts 14 + 16) not done |
 | N — Pre-Launch | ○ NOT STARTED | E2E test trips, cache warming, perf testing, offline cache verification, cost review |
+| v1.1 Backlog | — | Smaller post-launch items: City of LA region + LA Basin polygon adequacy, narrator_a/family orphan, stat-strip drift, Pattern 6 nature noise, import-time significance floor refactor, recompute-trigger perf concern |
 | v1.5 Backlog | — | Conversational Query Mode (decision doc landed); other deferred items |
 
 **Catalog v1 status** — closed 2026-05-19. 295 v1 narrations live (108 regions + 187 POIs). $15.64 lifetime spend per `llm_calls` audit. See [docs/decisions/2026-05-15-top-tier-poi-first-run.md](decisions/2026-05-15-top-tier-poi-first-run.md) §Catalog v1 closed for full close-out detail.
 
-**Post-catalog-v1 commit stack** (2026-05-19 → 2026-05-20):
+**Post-catalog-v1 commit stack** (2026-05-19 → 2026-05-21):
 
 | SHA | Description |
 |---|---|
@@ -325,6 +326,16 @@ Quick scan of where each phase actually stands. Detail in each phase's section b
 | `7549676` | C0 — stat strip header: PACE → STORIES PER |
 | `d7a78aa` | C1 — RPC corridor extension for curator/iconic POIs (25mi cap) |
 | `e7200e8` | C2 — Drive page Detail slider redesign (Reach: Nearby / Within sight / Geographical area) |
+| `46e3e20` | Tier-styled POI markers — emerald (standard) + gold (curator/iconic) |
+| `8b49c80` | food_drink significance floor → 999 sentinel (override-only surfacing); closes Joyce's recon |
+| `29a4e88` | Region synopses — SFV + LA Basin curated 3-min descriptions + audio regen |
+| `feb4679` | Standing order — Trip start inside region polygon (5mph/5s/30s settle) |
+| `957d58c` | Standing order amendment — tier-tie tiebreak (smallest polygon wins) |
+| `696578b` | Mode Bifurcation §15 addendum — Soul vs Local as parallel paradigms (v1.1+ direction) |
+| `f3d029d` | Mode Bifurcation Layer 1+2 — per-row `narrative_modes` column + slug defaults + heuristic population + Layer 3 review export |
+| `828cded` | Mode Bifurcation Layer 3 review prep — parent context columns + pattern clustering doc |
+| `a0d994f` | Mode Bifurcation Layer 3 — editorial-gate framework + override migration for top 200 + dynamic trigger |
+| `0cdaafd` | Mode Bifurcation §15.10 addendum — The Editorial Gate sub-section |
 
 The C-series identifiers (C0/C1/C2) are informal session-arc names — not roadmap phases (the "C" letter is taken by Venue Tour). Reference by SHA when sequencing matters.
 
@@ -621,6 +632,61 @@ Final cleanup, content QA, performance.
 - Performance test: target narration latency ≥10 sec before trigger zone
 - Verify offline cache works: 4-hour drive pre-cache <50MB
 - Cost review: log analysis to verify per-trip cost is in line with monetization tier projections
+
+---
+
+## v1.1 Backlog
+
+Smaller post-launch items than the v1.5 design-lap decisions below — fixes, follow-ups, and perf concerns that surface during pre-launch hardening or shortly after launch. Some are cross-referenced in CLAUDE.md's "Open architectural concerns" or "Post-launch feature backlog" sections; this is the canonical roadmap home.
+
+### City of Los Angeles region row + LA Basin polygon adequacy (bundled)
+
+DB has "Los Angeles Basin" (geomorphic region) but **no civic "City of LA" region row**. The civic boundary is genuinely different from the basin (LADWP service area with carve-outs vs. geographic basin). Scope: schema CHECK widening on `regions.region_type` for `'municipality'` or similar, OSM relation `207359` polygon import, INSERT, narration generation.
+
+Bundle with **LA Basin polygon adequacy** — current Wikidata 15km buffer circle covers only ~5.9% of the real ~12,000 km² basin. Flag: `polygon_quality: inadequate_buffer_v1`. Existing tracking: [docs/decisions/v1.1-polygon-followups.md](decisions/v1.1-polygon-followups.md). Both touch the regions table; do them together.
+
+CLAUDE.md cross-refs: "City of Los Angeles region row" + "LA Basin polygon adequacy fix" entries in Post-launch feature backlog.
+
+### narrator_a/family voice_configs orphan
+
+narrator_a/family audio is generated and stored in production but doesn't surface in-app — `voice_configs` only queries narrator_b/family today (post the H1.5 narrator-collapse). Awaits J0 audition activation (Chirp 3 HD audition pass; taste-led narrator-B voice selection across 4 audience modes).
+
+CLAUDE.md cross-ref: "Narrator_a/family production lookup orphan" entry in Open architectural concerns.
+
+### Stat-strip count mismatch across screens
+
+Three different POI counts surface across the three primary screens (home nav-raw / customize curated 1mi 8-slug / drive curated 20mi REACH 8-slug). Intentionally tolerated pre-launch — for the LA→Mammoth demo route, the three numbers land in the 30s by coincidence and don't visibly drift. Re-evaluate post-launch when denser route corridors (LA basin, Bay Area) will trip the user-noticeable threshold first.
+
+CLAUDE.md cross-ref: "Stat-strip POI count drift across screens" entry in Open architectural concerns.
+
+### Pattern 6 noise concern — Wikidata mountains routing as {soul}
+
+The Mode Bifurcation Layer 3 migration (commit `a0d994f`) routes 42 Wikidata mountains/peaks/lakes/falls in the top-200 to Bucket A `{soul}`. On long Soul-mode drives this could feel like landform spam — especially on routes through high-density Wikidata-nature corridors (Sierra, Coast Ranges). Re-evaluate post-launch with real user reactions. Mitigation options:
+
+- Tighten nature/geology per-category significance floor — only top peaks surface.
+- Add a Soul sub-toggle ("include landforms" on/off, user-controlled).
+- Distance/visibility-based pruning — only surface peaks within sight, not the full 20-mile horizon.
+
+### Import-time significance floor (poi-import refactor)
+
+`scripts/poi-import/` currently imports ~22k POIs raw; only a fraction ever surface after per-category floors filter them out. Pre-filter at INSERT time across all source-specific importers (`sources/osm.ts`, `sources/wikidata.ts`, `sources/nrhp.ts`, `sources/ca-landmarks.ts`, `sources/gnis.ts`). Reduces:
+- DB bloat (rows that never surface waste storage + index space)
+- Narration generation queue waste (curation passes review POIs that wouldn't surface anyway)
+- Embedding/indexing waste (if/when those land)
+- Quality-drift surface area (fewer noise rows to dedup against)
+
+Apply per-category floor at the categorization step, after slug assignment but before INSERT.
+
+### Bulk significance recompute trigger overhead (perf backlog)
+
+The `pois_narrative_modes_recompute` trigger (commit `a0d994f`) fires on `UPDATE OF (significance_score, …)`. When `recompute-significance.ts` runs corpus-wide, that's ~22k trigger fires × 2 SELECTs each (parent venue_type lookup + category slug lookup) = ~44k extra SELECTs per recompute. Acceptable for ad-hoc runs, potentially painful at scale.
+
+Mitigation options (evaluate if it bites):
+- **Session-scoped skip flag** — `SET LOCAL roadstory.skip_narrative_modes_trigger = 'on'` checked at trigger entry; recompute-significance sets it before bulk UPDATE.
+- **Temporary disable** — `ALTER TABLE public.pois DISABLE TRIGGER pois_narrative_modes_recompute` around bulk ops; ENABLE after. Riskier (forgotten disable = silent inconsistency).
+- **Defer-and-batch** — drop the trigger column list to exclude `significance_score`, accept that significance changes don't trigger mode recompute (modes don't depend on significance directly).
+
+Park as perf-optimization backlog. Park indefinitely if recompute-significance is rare enough.
 
 ---
 

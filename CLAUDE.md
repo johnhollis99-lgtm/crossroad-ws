@@ -437,11 +437,15 @@ dark mode. Triggers are chips; expanded panels are interactive UI.
 ### POI marker + clusterer integration (drift 5.94 — multi-commit)
 
 **Visual primitive:** [src/components/PoiMarkerX.tsx](src/components/PoiMarkerX.tsx).
-Ink-red X glyph centered inside a 32×32 invisible wrapper for a
-comfortable hitbox. `curated` = 18px stroke 2.5; `reveal` = 12px stroke
-1.8. Color locked to `lightTheme.colors.accent`. **This is the visual
-ONLY** — NOT a Marker, must be the child of a Marker rendered in the
-parent screen.
+Bicolor X glyph centered inside a 32×32 invisible wrapper for a
+comfortable hitbox. Tier-styled per commit `46e3e20` (2026-05-20):
+**emerald fill for standard tier** (`theme.colors.primary` = #10B981),
+**gold (#D4A017) for curator/iconic tier**. Cobalt outline + cream halo
+are tier-invariant. `curated` = 18px stroke 2.5; `reveal` = 12px stroke
+1.8. **This is the visual ONLY** — NOT a Marker, must be the child of
+a Marker rendered in the parent screen. (Historical note: pre-Pine
+Field Notes-era marker used ink-red `lightTheme.colors.accent`; current
+state lives in the L263 table entry.)
 
 **Critical clusterer rule (drift 5.94 root-cause):**
 react-native-map-clustering's [helpers.js:6](node_modules/react-native-map-clustering/lib/helpers.js#L6)
@@ -1649,6 +1653,16 @@ Small backlog items closed after catalog-v1 close (2026-05-19). None reshape the
 - **Joyce's recon ticket** — CLOSED by same commit (`8b49c80`). Root cause for posterity: Joyce's (Northridge, OSM way `1171899495`, score=0, no description, no tags, never curated) surfaced on the LA → Mammoth demo route via the floor=0 score-branch gap. Catalog state at resolution: 14 food_drink rows total, 0 `editorial_curated=TRUE`, 0 `iconic_local=TRUE` — surfacing is now correctly empty for food_drink until the v1.1 curation pass (see "food_drink iconic_local curation pass" under Post-launch feature backlog).
 - **Region synopses — SFV + LA Basin** — CLOSED by `29a4e88`. Migration `20260520000004_region_synopses_sfv_la_basin.sql` replaced imported Wikidata-excerpt descriptions on both regions with hand-crafted ~3-min narrations (367w SFV / 414w LA Basin). Audio regen via the new one-off direct-text-to-TTS path at `scripts/regen-region-synopses-direct.ts` — bypasses the standard region prompt template + Haiku step (no LLM rewrite/reshape); 4 audio files overwritten at `regions/{id}/{narrator_slug}.opus`; spend $0.1407.
 - **Standing order — Trip start inside region polygon** — CLOSED by `feb4679` + `957d58c`. Rule + tier-tie tiebreak landed in addendum §3.4.1 + cross-referenced in CLAUDE.md "Open architectural concerns." When a trip begins with the user already inside one or more region polygons, no region narrations fire at trip start; the app waits for sustained movement (≥5 mph for ≥5s) + a 30s settle timer, then fires the highest-tier containing region (smallest polygon wins on tier ties). Runtime implementation against the WS server lookahead worker is pending Phase I.3; bundles with the cluster-suppression rule.
+
+## Session resolutions (2026-05-21)
+
+Mode Bifurcation Layer 1+2+3 lap. v1.1+ architectural direction now locked as addendum §15; Layer 3 editorial-gate framework is live in production via the dynamic trigger.
+
+- **Mode Bifurcation §15 addendum — initial direction** — LANDED via `696578b`. Soul vs Local as parallel paradigms (supersedes the additive "+Local Color" framing in §1.x for v1.1+ thinking). v1 ships Soul-only; bifurcation is v1.1+ scope. 11-item v1.1+ punchlist captured in §15.9.
+- **Mode Bifurcation Layer 1+2** — LANDED via `f3d029d`. Migration `20260520000005_mode_bifurcation_narrative_modes.sql` adds `pois.narrative_modes text[]` (CHECK `<@ {soul,local}` + GIN index) and populates all 21,935 active rows via Layer 1 slug defaults + 4-rule Layer 2 heuristic (venue → +local; high-sig NRHP/CHL/wikidata → +local; theme-park/zoo children → local-only override; iconic_local/editorial_curated → +local). Corpus distribution: Soul-only 17,041 · Local-only 835 · Both 4,059. Plus `docs/mode-bifurcation-layer3-review.md` review export for the top 200.
+- **Mode Bifurcation Layer 3 review prep** — LANDED via `828cded`. Regenerated `docs/mode-bifurcation-layer3-review.md` with parent context columns + rule_applied attribution + 2 typo fixes; added `docs/mode-bifurcation-layer3-patterns.md` with 20 taste-clustered patterns (18 standard + 2 special). Moved Layer 3 curator review off per-row markup onto pattern-cluster decisions.
+- **Mode Bifurcation Layer 3 — editorial-gate framework** — LANDED via `a0d994f`. Migration `20260521000001_mode_bifurcation_editorial_gate.sql` adds `narrative_modes_override boolean` column + `public.recompute_narrative_modes(pois)` resolver function + `pois_narrative_modes_recompute` BEFORE INSERT OR UPDATE trigger. Three-bucket framework: A (always Soul) for nature/geology + editorial-historic-Manzanar-class; B (always Local) for theme-park/NP/museum-complex venues and children; C (editorial-gated) for everything else — `{local}` default, `{soul,local}` when `editorial_curated=TRUE`. Applied to top 200 via no-op self-assign UPDATE; 2 OSM-sourced Manzanar-class rows (Mission Chumash Barracks, Kuruvungna Springs) locked with `narrative_modes_override=TRUE`. Final top-200 distribution: 72 {soul} / 70 {local} / 58 {soul,local}. Trigger fires on all future inserts/updates of the 8 trigger columns; sub-200 rows untouched until trigger-column change.
+- **§15.10 Editorial Gate addendum sub-section** — LANDED via `0cdaafd`. Documents the three-bucket framework, the dynamic-trigger implementation, generalization of the food_drink floor=999 sentinel pattern (commit `8b49c80`) across all categories, and the v1.1+ two-types-of-editorial-content concept (subject-direct vs. locality-anchored — data model implications deferred).
 
 ## Trip simulator (Phase I.1 + I.2 MVP, `scripts/simulate-trip/`)
 

@@ -220,7 +220,7 @@ Region narrations use a dedicated prompt template at `server/src/prompts/region_
 
 Output length is fixed at **Standard depth** (60–90 seconds) regardless of intrinsic depth weighting elsewhere. Regions need room to breathe but not 3 minutes — the user is *driving into* the region, not stopping at a single point.
 
-**Exception — geographical area synopses.** Geographical area synopses can run up to ~3 minutes (or longer if absolutely necessary). Don't force length — redundancy kills. Use full length only when the region has genuinely interesting material to land. Applied first to San Fernando Valley + Los Angeles Basin (commit `29a4e88`, hand-crafted descriptions + direct-text-to-TTS regen). When the region's existing narration is a generic ecoregion / geomorphic-province description, the 60–90s baseline is the right ceiling; the exception unlocks for regions with deep history layers that warrant the longer form.
+**Standing order — geographical area synopses** (formalized 2026-05-21; supersedes the prior 60–90s cap for area synopses specifically). Geographical area synopses can run up to ~3 minutes (or longer if absolutely necessary). Don't force length — redundancy kills. Use full length only when the region has genuinely interesting material to land. First applied to San Fernando Valley + Los Angeles Basin (commit `29a4e88`, hand-crafted descriptions + direct-text-to-TTS regen). When the region's existing narration is a generic ecoregion / geomorphic-province description, the 60–90s baseline is the right ceiling; the standing order unlocks the longer form for regions with deep history layers that warrant it. **Scope:** this standing order applies only to area-synopsis length. Other narration types — point POI brief / standard / long per §4 — retain their existing length governance.
 
 ### 3.6. Caching
 
@@ -993,7 +993,7 @@ Mode toggle becomes a conversion moment for free-tier users. Critical design con
 
 1. Audience-mode rename (`local` → `insider` / etc.) to free up the name
 2. Category-to-mode routing tags (slug-level for most, per-row for architecture)
-3. Food_drink `iconic_local` curation pass (foundational Local catalog seed)
+3. Food_drink `iconic_local` curation pass (foundational Local catalog seed) — **first concrete application of the §15.10 Editorial Gate framework**, not a stand-alone concern. The Editorial Gate generalizes the discipline (`editorial_curated` as Soul-access control across all categories); the food_drink floor=999 sentinel (commit `8b49c80`) is the per-category precursor pattern; the food_drink curation pass is what fills Bucket C-promoted content for the category specifically.
 4. Local prompt templates — three registers (gold destination tier / emerald non-chain medium / emerald chain utility-brief)
 5. Local-mode chip rail variant
 6. In-trip mode toggle UI on the drive page

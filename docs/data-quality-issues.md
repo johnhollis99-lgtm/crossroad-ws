@@ -56,6 +56,14 @@ When Phase 6 (`poi_review_queue` admin app) is built, seed it with these three r
 - These outrank Hollywood Sign and Mission San Miguel Arcángel
 - Resolution: Venue Tour parent-child hierarchy (future). Children inside venue polygons should be suppressed from drive-by triggers.
 
+### Manzanar / Edwards AFB / Vasquez Rocks duplicate rows with inconsistent editorial_curated
+- Surfaced during Mode Bifurcation Layer 3 recon (2026-05-21). Each real-world place has multiple `pois` rows; `editorial_curated` is inconsistent across the dupes:
+  - **Manzanar National Historic Site** — 2 rows, both `source_type='editorial'`, both `slug='history'`, both NOT venue, both no parent. One curated=TRUE, the other curated=FALSE.
+  - **Edwards Air Force Base** — same shape: 2 rows, both `source_type='editorial'`, both history, one curated=TRUE, one curated=FALSE.
+  - **Vasquez Rocks** — 3 rows: editorial-history-TRUE (the primary editorial seed), nrhp-history-FALSE (NRHP listing of the historic property), osm-nature-FALSE (OSM rock-formation tag). Mixed slug — the nature row could plausibly be a distinct rock-formation feature; the nrhp + editorial-history rows are dupes of each other.
+- **Routing impact:** the Mode Bifurcation framework operates per-row, so the curated copy lands in Bucket C-promoted `{soul,local}` while the uncurated copy lands at Bucket C-default `{local}`. Same real-world place surfacing with mismatched modes.
+- **Resolution:** real fix is dedup via the `merged_into` mechanism — pick the editorial-curated row as primary, merge the duplicates into it, transfer `additional_sources`. Phase A 50m spatial pass missed these because the dupes were already separated by source-type during initial import; Phase B name-collapse may catch some on the next dedup run, but the Vasquez nature-slug row is a separate decision. Backlog.
+
 ---
 
 ## Phase 4 carry-forward (2026-05-07 — post-NRHP-fixup pipeline)
