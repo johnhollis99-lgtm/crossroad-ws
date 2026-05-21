@@ -43,6 +43,7 @@ scripts/poi-import/cache/
 scripts/narrative-extraction/cache/
 scripts/voice-audition/output/
 scripts/audition-output/
+scripts/narration-preview/output/
 *.opus
 
 # ── One-off utility scripts ───────────────────────────────────────────────────
