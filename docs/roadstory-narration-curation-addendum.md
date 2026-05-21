@@ -1005,6 +1005,34 @@ Mode toggle becomes a conversion moment for free-tier users. Critical design con
 
 This is a v1.1+ scope shift. Not for launch.
 
+### 15.10. The Editorial Gate
+
+**Default routing principle:** POIs default to `narrative_modes = {local}`. Soul access is earned by curated editorial content. The catalog's structural posture is wayfinder-by-default; the contemplative voice unlocks per row as the curator writes about it.
+
+**Three-bucket framework:**
+
+- **Bucket A (Always Soul-only):** landform, geological, and contemplative-historical categories where the Local-mode wayfinder voice doesn't fit. The editorial flag does NOT promote these to Local — a curated geological landform is a deeper Soul anchor, not a tourist destination.
+- **Bucket B (Always Local-only):** wayfinder destinations with no Soul angle even when there's content — theme parks and their ride children, National Park children (parent NP carries Soul; sub-features don't double-fire the contemplative voice), museum-complex children (parent venue carries Soul). The editorial flag does NOT promote these to Soul.
+- **Bucket C (Editorial-gated):** default `{local}`. Promotes to `{soul,local}` when `editorial_curated = TRUE`. Applies to most categories — the editorial flag is the gate that unlocks the contemplative voice on rows the curator has invested in.
+
+**Implementation.** A `BEFORE INSERT OR UPDATE` trigger on `pois` (the `pois_narrative_modes_recompute` trigger, fires on changes to `editorial_curated`, `parent_poi_id`, `source_type`, `category_id`, `significance_score`, `is_venue`, `venue_type`, or `narrative_modes_override`) calls `public.recompute_narrative_modes(row)` and sets `narrative_modes` per the three-bucket framework. As editorial content is written, rows automatically promote to `{soul,local}` without re-running migrations. A `narrative_modes_override` boolean (default FALSE) lets the curator lock individual rows to manual values that survive future trigger fires — used today for two OSM-sourced Manzanar-class historic sites that fall through Bucket A's `source_type = 'editorial'` predicate.
+
+**Generalization of the food_drink mechanism.** The Editorial Gate extends the food_drink override-only surfacing pattern (floor `999` sentinel, commit `8b49c80`) to all categories. Where food_drink uses the per-category significance floor as the gate, the framework here uses `editorial_curated` directly — the same "curator earns the surface, not the algorithm" principle applied at the routing layer rather than the floor layer. food_drink's `iconic_local` curation pass (§15.9 step 3) is the foundational seed of Bucket C-promoted content for that category; the gate generalizes the discipline across the catalog.
+
+**Two types of editorial content** (forward-looking, v1.1+ scope; not implemented in the initial Layer 3 migration):
+
+- **Subject-direct editorial:** the editorial is about the POI itself. Soul-mode narration anchors on the POI's own story — its architecture, its history, what makes it singular. The curator wrote the row's editorial because the row is the subject.
+- **Locality-anchored editorial:** the editorial is about a regional story that *happened near* the POI. The POI serves as a geographic trigger anchor, not the subject. Composes with the region narration layer (§3) and opens up "stories that happened here" content where the POI is convenient location rather than marquee subject — e.g., a sequence of locations along the route triggers a narration about the Vásquez stagecoach robberies that happened in the area, where each location's role is to be in the right place rather than to be the story's protagonist. Data model implications (separate `editorials` table; many-to-many anchoring between editorials and POIs; an `editorial_role` column on the join indicating subject-direct vs. locality-anchored; routing logic for which editorial fires when multiple anchor a single POI trigger) deferred to v1.1+.
+
+**Connection to §15.9 sequencing.** The Editorial Gate slots primarily into step 3 (foundational Local catalog seed via `iconic_local` curation) and step 7 (Local-mode significance floors / per-category surfacing gate tuning). It generalizes those steps' intent — rather than per-category floors and per-category iconic_local passes, the gate makes `editorial_curated` the single Soul-access control across the whole catalog. Per-category floors still exist for the significance filter (a row needs to be relevant enough to surface AT ALL); the gate decides which mode it surfaces IN.
+
+**Implementation cross-references:**
+
+- Layer 3 override migration: `supabase/migrations/20260521000001_mode_bifurcation_editorial_gate.sql` (commit `a0d994f`).
+- Resolver function: `public.recompute_narrative_modes(pois)` — encodes the three-bucket logic.
+- Trigger: `pois_narrative_modes_recompute` on `public.pois`.
+- Manual lock: `pois.narrative_modes_override boolean` — when TRUE, trigger leaves the row alone.
+
 ---
 
 **End of addendum.** Hand to build chat for incremental implementation per §11 (status table in §14.1).
