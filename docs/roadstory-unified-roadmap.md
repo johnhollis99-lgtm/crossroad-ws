@@ -667,6 +667,12 @@ The Mode Bifurcation Layer 3 migration (commit `a0d994f`) routes 42 Wikidata mou
 - Add a Soul sub-toggle ("include landforms" on/off, user-controlled).
 - Distance/visibility-based pruning — only surface peaks within sight, not the full 20-mile horizon.
 
+### Iconic food import gap workstream
+
+Wikipedia-documented food spots are filtered out by the 999 floor sentinel during import (commit `8b49c80`); the nine manual INSERTs landed 2026-05-21 (commit `804b6d2`) prove the seed pattern works under the Bucket B Local-only routing established by commit `a86e493`. The broader CA candidate pool — roughly 50+ spots meeting §8.2 inclusion criteria (Wikipedia article OR JBF America's Classics OR Roadfood OR NRHP/CHL/HCM): Pink's Hot Dogs, Canter's Deli, Langer's, El Cholo, Sam's Grill, House of Prime Rib, John's Grill, Vesuvio Cafe, Old Clam House, etc. — needs systematic Tier 2 ingestion bypassing the floor for qualifying rows. The 9-POI hand-seed isn't scalable to that volume; this is the ingestion-tooling slice (likely a `scripts/poi-import/sources/iconic-food-drink.ts` importer keyed off a curated candidate list).
+
+Addendum cross-ref: §15.10 "Tier 2 callout seed — shipped 2026-05-21" paragraph.
+
 ### Import-time significance floor (poi-import refactor)
 
 `scripts/poi-import/` currently imports ~22k POIs raw; only a fraction ever surface after per-category floors filter them out. Pre-filter at INSERT time across all source-specific importers (`sources/osm.ts`, `sources/wikidata.ts`, `sources/nrhp.ts`, `sources/ca-landmarks.ts`, `sources/gnis.ts`). Reduces:
