@@ -14,17 +14,19 @@
  *   scripts/narration-preview/output/<source>-<mode>-<timestamp>.txt
  *
  * v1 supports --mode tier1 and --mode tier2 (both locked to
- * narrator_b/family — Sadachbia via voice_configs DB lookup).
- *   tier1 — Sonnet 4.6, long-form cadence rewrite of curator-authored
- *           sources read from local sources/ files
+ * narrator_b/family — Sadachbia via voice_configs DB lookup, and both
+ * resolving --source against public.pois.source_id).
+ *   tier1 — Sonnet 4.6, long-form cadence rewrite. Requires the row to
+ *           have description + signature_hook + iconic_local_reasons
+ *           populated (full curator payload).
  *   tier2 — Haiku 4.5, brief iconic_local_callout rendering from the
  *           structured fields (signature_hook + iconic_local_reasons)
- *           on a public.pois row, looked up by source_id
+ *           on the row.
  * --mode standard remains reserved for future audience-tuning work.
  *
  * Run (from project root):
- *   npx tsx scripts/narration-preview/preview.ts --source madonna-inn
- *   npx tsx scripts/narration-preview/preview.ts --source madonna-inn --dry-run
+ *   npx tsx scripts/narration-preview/preview.ts --source editorial:tier1-iconic-landmarks-2026-05-21:01
+ *   npx tsx scripts/narration-preview/preview.ts --source editorial:tier1-iconic-landmarks-2026-05-21:01 --dry-run
  *   npx tsx scripts/narration-preview/preview.ts --mode tier2 --source editorial:tier2-iconic-food-drink-2026-05-21:01
  */
 
@@ -43,7 +45,6 @@ import {
   ICONIC_LOCAL_CALLOUT_SYSTEM_PROMPT,
   buildIconicLocalCalloutUserPrompt,
 } from './prompts/iconic_local_callout.js';
-import { MADONNA_INN_SOURCE, type SourceRecord } from './sources/madonna-inn.js';
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 const PROJECT_ROOT = resolve(SCRIPT_DIR, '..', '..');
@@ -80,10 +81,6 @@ const PRICING: Record<string, { in_per_tok: number; out_per_tok: number }> = {
   'claude-sonnet-4-6': { in_per_tok: 3.0 / 1_000_000, out_per_tok: 15.0 / 1_000_000 },
   // claude-haiku-4-5 pricing: $1/M input, $5/M output
   'claude-haiku-4-5-20251001': { in_per_tok: 1.0 / 1_000_000, out_per_tok: 5.0 / 1_000_000 },
-};
-
-const SOURCES: Record<string, SourceRecord> = {
-  'madonna-inn': MADONNA_INN_SOURCE,
 };
 
 function fail(msg: string): never {
@@ -124,7 +121,7 @@ function parseArgs(): CliArgs {
     else if (a === '--dry-run') out.dryRun = true;
     else if (a === '--help' || a === '-h') {
       console.log(
-        `Usage: npx tsx scripts/narration-preview/preview.ts --source <id> [--mode tier1|tier2|standard] [--audience family|kids|unfiltered|local] [--model <id>] [--cost-ceiling <usd>] [--dry-run]\n\nTier 1: --source resolves to a local sources/ key. Available: ${Object.keys(SOURCES).join(', ')}\nTier 2: --source resolves to a public.pois.source_id (DB lookup); requires signature_hook + iconic_local_reasons populated on the row.`,
+        `Usage: npx tsx scripts/narration-preview/preview.ts --source <id> [--mode tier1|tier2|standard] [--audience family|kids|unfiltered|local] [--model <id>] [--cost-ceiling <usd>] [--dry-run]\n\nBoth --mode tier1 and --mode tier2 resolve --source against public.pois.source_id.\n  Tier 1 requires the row to have description + signature_hook + iconic_local_reasons populated (full curator payload).\n  Tier 2 requires signature_hook + iconic_local_reasons populated (brief-callout fields).`,
       );
       process.exit(0);
     } else {
@@ -133,7 +130,7 @@ function parseArgs(): CliArgs {
   }
   if (!out.source) {
     fail(
-      `--source <id> required.\n  Tier 1: pick a local sources/ key (${Object.keys(SOURCES).join(', ')}).\n  Tier 2: pass a POI source_id (e.g., editorial:tier2-iconic-food-drink-2026-05-21:01).`,
+      `--source <id> required. Both --mode tier1 and --mode tier2 resolve --source against public.pois.source_id (e.g., editorial:tier1-iconic-landmarks-2026-05-21:01).`,
     );
   }
   if (out.mode !== 'tier1' && out.mode !== 'tier2' && out.mode !== 'standard') {
@@ -163,56 +160,75 @@ interface ResolvedSource {
 }
 
 async function resolveSource(supabase: SupabaseClient, args: CliArgs): Promise<ResolvedSource> {
-  if (args.mode === 'tier2') {
-    // Tier 2: fetch row from public.pois by source_id. Fail loudly if the row
-    // is missing or if signature_hook / iconic_local_reasons aren't populated
-    // — rendering a blank or partial callout silently would waste curator
-    // listening time and obscure the actual data problem.
-    const { data, error } = await supabase
-      .from('pois')
-      .select('name, signature_hook, iconic_local_reasons, source_id')
-      .eq('source_id', args.source)
-      .is('merged_into', null)
-      .limit(1);
-    if (error) fail(`pois query: ${error.message}`);
-    if (!data || data.length === 0) {
+  // Both tiers resolve --source against public.pois.source_id. The row lookup
+  // is identical; mode-specific field requirements are enforced after the row
+  // is loaded. Failing loudly on missing fields (rather than rendering a
+  // blank or partial preview) saves curator listening time and surfaces the
+  // actual data problem.
+  const { data, error } = await supabase
+    .from('pois')
+    .select('name, signature_hook, iconic_local_reasons, description, source_citation, source_id')
+    .eq('source_id', args.source)
+    .is('merged_into', null)
+    .limit(1);
+  if (error) fail(`pois query: ${error.message}`);
+  if (!data || data.length === 0) {
+    fail(
+      `no POI with source_id='${args.source}' found in public.pois (or row is soft-merged). Preview tool resolves --source against public.pois.source_id for both --mode tier1 and --mode tier2.`,
+    );
+  }
+  const row = data[0] as {
+    name: string;
+    signature_hook: string | null;
+    iconic_local_reasons: string[] | null;
+    description: string | null;
+    source_citation: string | null;
+  };
+  if (!row.name) {
+    fail(`POI source_id='${args.source}' has null name — cannot render preview.`);
+  }
+
+  if (args.mode === 'tier1') {
+    // Tier 1 requires the full curator payload: description + hook + reasons.
+    // The hook + reasons aren't passed to the Tier 1 prompt builder, but
+    // requiring them gates incomplete rows out of the Tier 1 render path.
+    if (!row.description || row.description.trim().length === 0) {
       fail(
-        `no POI with source_id='${args.source}' found in public.pois (or row is soft-merged). Tier 2 mode resolves --source against public.pois.source_id.`,
+        `POI source_id='${args.source}' missing description (required for Tier 1 cadence rewrite). Populate description in public.pois before previewing.`,
       );
-    }
-    const row = data[0] as {
-      name: string;
-      signature_hook: string | null;
-      iconic_local_reasons: string[] | null;
-    };
-    if (!row.name) {
-      fail(`POI source_id='${args.source}' has null name — cannot render callout.`);
     }
     if (!row.signature_hook || row.signature_hook.trim().length === 0) {
       fail(
-        `POI source_id='${args.source}' missing signature_hook (required for Tier 2 iconic_local_callout). Populate signature_hook in public.pois before previewing.`,
+        `POI source_id='${args.source}' missing signature_hook (required for Tier 1 cadence rewrite). Populate signature_hook in public.pois before previewing.`,
       );
     }
     if (!row.iconic_local_reasons || row.iconic_local_reasons.length === 0) {
       fail(
-        `POI source_id='${args.source}' has empty iconic_local_reasons[] (required for Tier 2 iconic_local_callout). Populate iconic_local_reasons in public.pois before previewing.`,
+        `POI source_id='${args.source}' has empty iconic_local_reasons[] (required for Tier 1 cadence rewrite). Populate iconic_local_reasons in public.pois before previewing.`,
       );
     }
     return {
       name: row.name,
-      signatureHook: row.signature_hook,
-      iconicLocalReasons: row.iconic_local_reasons,
+      description: row.description,
+      sourceCitation: row.source_citation ?? undefined,
     };
   }
-  // Tier 1: local SOURCES map
-  if (!(args.source in SOURCES)) {
-    fail(`unknown Tier 1 source '${args.source}'. Available: ${Object.keys(SOURCES).join(', ')}`);
+
+  // Tier 2: brief-callout fields required (signature_hook + iconic_local_reasons).
+  if (!row.signature_hook || row.signature_hook.trim().length === 0) {
+    fail(
+      `POI source_id='${args.source}' missing signature_hook (required for Tier 2 iconic_local_callout). Populate signature_hook in public.pois before previewing.`,
+    );
   }
-  const src = SOURCES[args.source]!;
+  if (!row.iconic_local_reasons || row.iconic_local_reasons.length === 0) {
+    fail(
+      `POI source_id='${args.source}' has empty iconic_local_reasons[] (required for Tier 2 iconic_local_callout). Populate iconic_local_reasons in public.pois before previewing.`,
+    );
+  }
   return {
-    name: src.name,
-    description: src.description,
-    sourceCitation: src.source_citation,
+    name: row.name,
+    signatureHook: row.signature_hook,
+    iconicLocalReasons: row.iconic_local_reasons,
   };
 }
 
