@@ -79,6 +79,8 @@ const MAX_TOKENS = 1500;
 const PRICING: Record<string, { in_per_tok: number; out_per_tok: number }> = {
   // claude-sonnet-4-6 pricing: $3/M input, $15/M output
   'claude-sonnet-4-6': { in_per_tok: 3.0 / 1_000_000, out_per_tok: 15.0 / 1_000_000 },
+  // claude-opus-4-7 pricing: $15/M input, $75/M output
+  'claude-opus-4-7': { in_per_tok: 15.0 / 1_000_000, out_per_tok: 75.0 / 1_000_000 },
   // claude-haiku-4-5 pricing: $1/M input, $5/M output
   'claude-haiku-4-5-20251001': { in_per_tok: 1.0 / 1_000_000, out_per_tok: 5.0 / 1_000_000 },
 };
