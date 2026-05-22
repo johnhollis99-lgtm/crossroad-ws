@@ -18,10 +18,18 @@ export const SOURCE_NAME = 'gnis' as const;
 const USER_AGENT      = 'XRoad-POI-Import/0.1 (johnhollis99@gmail.com)';
 const CACHE_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
 const S3_BUCKET       = 'https://prd-tnm.s3.amazonaws.com';
-const S3_PREFIX       = 'StagedProducts/GeographicNames/State/TXT_FORMAT';
+// USGS reorganized the GeographicNames bucket in late 2025: the old
+// `State/TXT_FORMAT/CA_Features_YYYYMMDD.zip` layout was replaced by
+// `DomesticNames/DomesticNames_<ST>_Text.zip` (no date in filename;
+// freshness is tracked via LastModified on the S3 object).
+const S3_KEY_CA       = 'StagedProducts/GeographicNames/DomesticNames/DomesticNames_CA_Text.zip';
 const GAZ_BASE_URL    = 'https://edits.nationalmap.gov/apps/gaz-domestic/public/summary';
 
-// Low base — dedup pass boosts significance when cross-referenced with Wikidata or OSM
+// Low base — silent topographic label layer per curator decision. Written as
+// 0.05 on the 0–1 scale; recompute-significance normalises to 5 on the 0–100
+// scale (matches the "+5 base" spec in roadstory-poi-pipeline-prompts.md §3e).
+// recompute owns the final score; cross-source boosts come from there, not
+// from the dedup pass (per drift 5.07 score-clamp fix).
 const BASE_SIGNIFICANCE = 0.05;
 
 const inflateRawAsync = promisify(inflateRaw);
@@ -34,20 +42,23 @@ interface ClassSpec {
   tags: string[];
 }
 
+// Categories per curator decision 2026-05-22: GNIS as silent topographic
+// label layer. Summit/Range → geology; Crater/Lava → volcanic; Geyser/Hot
+// Spring → hot_springs; landscape water/coast features → nature.
 const CLASS_MAP: Record<string, ClassSpec> = {
-  'Summit':     { slug: 'nature',  trip_mode: 'hiking', tags: ['summit']     },
-  'Falls':      { slug: 'nature',  trip_mode: 'all',    tags: ['waterfall']  },
-  'Cape':       { slug: 'nature',  trip_mode: 'all',    tags: ['cape']       },
-  'Arch':       { slug: 'geology', trip_mode: 'hiking', tags: ['arch']       },
-  'Bay':        { slug: 'nature',  trip_mode: 'all',    tags: ['bay']        },
-  'Pillar':     { slug: 'geology', trip_mode: 'hiking', tags: ['formation']  },
-  'Crater':     { slug: 'geology', trip_mode: 'all',    tags: ['crater']     },
-  'Geyser':     { slug: 'geology', trip_mode: 'all',    tags: ['geyser']     },
-  'Hot Spring': { slug: 'geology', trip_mode: 'all',    tags: ['hot_spring'] },
-  'Lava':       { slug: 'geology', trip_mode: 'all',    tags: ['lava']       },
-  'Lake':       { slug: 'nature',  trip_mode: 'all',    tags: ['lake']       },
-  'Island':     { slug: 'nature',  trip_mode: 'all',    tags: ['island']     },
-  'Range':      { slug: 'nature',  trip_mode: 'all',    tags: ['range']      },
+  'Summit':     { slug: 'geology',     trip_mode: 'hiking', tags: ['summit']     },
+  'Falls':      { slug: 'nature',      trip_mode: 'all',    tags: ['waterfall']  },
+  'Cape':       { slug: 'nature',      trip_mode: 'all',    tags: ['cape']       },
+  'Arch':       { slug: 'nature',      trip_mode: 'hiking', tags: ['arch']       },
+  'Bay':        { slug: 'nature',      trip_mode: 'all',    tags: ['bay']        },
+  'Pillar':     { slug: 'nature',      trip_mode: 'hiking', tags: ['formation']  },
+  'Crater':     { slug: 'volcanic',    trip_mode: 'all',    tags: ['crater']     },
+  'Geyser':     { slug: 'hot_springs', trip_mode: 'all',    tags: ['geyser']     },
+  'Hot Spring': { slug: 'hot_springs', trip_mode: 'all',    tags: ['hot_spring'] },
+  'Lava':       { slug: 'volcanic',    trip_mode: 'all',    tags: ['lava']       },
+  'Lake':       { slug: 'nature',      trip_mode: 'all',    tags: ['lake']       },
+  'Island':     { slug: 'nature',      trip_mode: 'all',    tags: ['island']     },
+  'Range':      { slug: 'geology',     trip_mode: 'all',    tags: ['range']      },
 };
 
 // ---- Minimal ZIP reader (single-file archives, deflate or stored) ------------
@@ -75,30 +86,24 @@ async function extractZipEntry(buf: Buffer): Promise<Buffer> {
   throw new Error(`Unsupported ZIP compression method: ${compressionMethod}`);
 }
 
-// ---- S3 listing → latest CA file URL ----------------------------------------
+// ---- S3 listing → CA file URL (verifies presence + reports LastModified) -----
 
-async function findLatestCaZipUrl(): Promise<string> {
-  // List objects under the state TXT_FORMAT prefix filtered to CA_Features
-  const listUrl =
-    `${S3_BUCKET}/?prefix=${S3_PREFIX}/CA_Features&max-keys=50`;
-
+async function findLatestCaZipUrl(): Promise<{ url: string; lastModified: string }> {
+  // Single-key probe via S3 listing — confirms the object exists and surfaces
+  // its LastModified for cache freshness logging.
+  const listUrl = `${S3_BUCKET}/?prefix=${S3_KEY_CA}&max-keys=1`;
   const res = await fetch(listUrl, {
     headers: { 'User-Agent': USER_AGENT, Accept: 'application/xml' },
   });
   if (!res.ok) throw new Error(`S3 listing returned HTTP ${res.status}`);
   const xml = await res.text();
 
-  // Extract all <Key>...</Key> that end in .zip
-  const keyRe = /<Key>([^<]+\.zip)<\/Key>/g;
-  const keys: string[] = [];
-  let m: RegExpExecArray | null;
-  while ((m = keyRe.exec(xml)) !== null) keys.push(m[1]!);
-
-  if (keys.length === 0) throw new Error('No CA_Features ZIP found in S3 listing');
-
-  // Filenames encode their update date: CA_Features_YYYYMMDD.zip — sort desc → newest first
-  keys.sort().reverse();
-  return `${S3_BUCKET}/${keys[0]!}`;
+  const keyMatch = xml.match(/<Key>([^<]+\.zip)<\/Key>/);
+  if (!keyMatch || keyMatch[1] !== S3_KEY_CA) {
+    throw new Error(`CA file not found at expected key ${S3_KEY_CA}`);
+  }
+  const lastModified = xml.match(/<LastModified>([^<]+)<\/LastModified>/)?.[1] ?? 'unknown';
+  return { url: `${S3_BUCKET}/${S3_KEY_CA}`, lastModified };
 }
 
 // ---- HTTP download + 30-day cache -------------------------------------------
@@ -169,8 +174,10 @@ export async function runImport(opts: ImportOptions): Promise<ImportResult> {
 
   let zipUrl: string;
   try {
-    zipUrl = await findLatestCaZipUrl();
+    const probe = await findLatestCaZipUrl();
+    zipUrl = probe.url;
     console.log(chalk.cyan(`[gnis] source: ${zipUrl}`));
+    console.log(chalk.gray(`[gnis] upstream LastModified: ${probe.lastModified}`));
   } catch (err) {
     console.error(chalk.red(`[gnis] could not locate download URL: ${err}`));
     result.errors++;
@@ -245,7 +252,15 @@ export async function runImport(opts: ImportOptions): Promise<ImportResult> {
   let skippedBbox   = 0;
   let skippedCounty = 0;
 
-  const countyTarget = opts.county?.toLowerCase();
+  // USGS DomesticNames county column carries short names ("Mono", "San Bernardino"),
+  // not "Mono County". Normalise CLI input by stripping the " County" suffix and
+  // doing exact-match comparison instead of substring (avoids "Lake" matching
+  // "Lake County" + every county containing "lake" in description).
+  const countyTarget = opts.county?.toLowerCase().replace(/\s+county$/i, '').trim();
+
+  // Hot-spring / geyser name-filter regex. USGS rolled both old classes into
+  // generic "Spring"; name-matching is the only signal still available.
+  const HOT_SPRING_NAME_RE = /\bhot\s+spring|\bgeyser/i;
 
   for (let li = 1; li < lines.length; li++) {
     const line = lines[li];
@@ -255,11 +270,18 @@ export async function runImport(opts: ImportOptions): Promise<ImportResult> {
 
     const cols         = line.split('|');
     const featureClass = cols[C.featureClass]?.trim() ?? '';
-    const spec         = CLASS_MAP[featureClass];
+    const featureName  = cols[C.featureName]?.trim()  ?? '';
+
+    // Spring class is conditionally accepted: only when name carries the
+    // "hot spring" / "geyser" signal. All other Springs are ordinary water
+    // sources and out of scope for the topographic-label layer.
+    let spec = CLASS_MAP[featureClass];
+    if (!spec && featureClass === 'Spring' && HOT_SPRING_NAME_RE.test(featureName)) {
+      spec = { slug: 'hot_springs', trip_mode: 'all', tags: ['hot_spring'] };
+    }
     if (!spec) { skippedClass++; continue; }
 
-    const featureId   = cols[C.featureId]?.trim()  ?? '';
-    const featureName = cols[C.featureName]?.trim() ?? '';
+    const featureId = cols[C.featureId]?.trim() ?? '';
     if (!featureId || !featureName) continue;
 
     const lat = parseFloat(cols[C.latDec]?.trim() ?? '');
@@ -280,7 +302,7 @@ export async function runImport(opts: ImportOptions): Promise<ImportResult> {
 
     if (countyTarget) {
       const county = C.countyName !== -1 ? (cols[C.countyName]?.trim().toLowerCase() ?? '') : '';
-      if (!county.includes(countyTarget)) { skippedCounty++; continue; }
+      if (county !== countyTarget) { skippedCounty++; continue; }
     }
 
     if (opts.limit != null && pois.length >= opts.limit) break;

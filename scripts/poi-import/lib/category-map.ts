@@ -24,7 +24,8 @@ const OSM_RULES: Array<{
   { match: (k, v) => k === 'natural' && v === 'peak', slug: 'nature', trip_mode: 'hiking', tags: ['summit'] },
   // Hot springs / geysers — geothermal features get the dedicated slug rather
   // than getting bucketed into generic 'nature'.
-  { match: (k, v) => k === 'natural' && (v === 'hot_spring' || v === 'geyser'), slug: 'hot_springs', tags: [v] },
+  { match: (k, v) => k === 'natural' && v === 'hot_spring', slug: 'hot_springs', tags: ['hot_spring'] },
+  { match: (k, v) => k === 'natural' && v === 'geyser',     slug: 'hot_springs', tags: ['geyser']     },
   { match: (k, v) => k === 'natural' && v === 'waterfall', slug: 'nature', tags: ['waterfall'] },
   { match: (k, v) => k === 'waterway' && v === 'waterfall', slug: 'nature', tags: ['waterfall'] },
   { match: (k, v) => k === 'natural' && v === 'cave_entrance', slug: 'geology', tags: ['cave'] },
