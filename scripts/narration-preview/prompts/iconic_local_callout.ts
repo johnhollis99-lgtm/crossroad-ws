@@ -49,6 +49,8 @@ You will receive three fields:
 
 Use the signature_hook as your conceptual core. Pull at most one or two threads from iconic_local_reasons to add texture. Don't try to fit everything. The brief lives or dies on its tightness.
 
+When attributing facts to named people or institutions, mirror the source's framing precisely — don't reframe institutional awards as personal declarations. Don't compute elapsed years; state years directly.
+
 Output the paragraph and nothing else. No preamble, no markdown, no title.`;
 
 export const ICONIC_LOCAL_CALLOUT_VOICE_MAPPING = {
