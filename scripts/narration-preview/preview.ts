@@ -1,11 +1,11 @@
 /**
  * scripts/narration-preview/preview.ts
  *
- * Curator preview tool: synthesizes audio for Tier 1 (and future Tier 2 /
- * audience-tuning) sources via Claude Sonnet 4.6 + Google Chirp 3 HD TTS.
+ * Curator preview tool: synthesizes audio for Tier 1 / Tier 2 / (future)
+ * audience-tuning sources via Claude + Google Chirp 3 HD TTS.
  *
  * Pipeline:
- *   curator-authored source → Claude (cadence rewrite or synthesis)
+ *   curator-authored source → Claude (cadence rewrite or callout)
  *   → ssmlize() → Google TTS → local .opus + .txt
  *
  * Local artifact only — does NOT write to narration_audio or upload to
@@ -13,13 +13,19 @@
  *   scripts/narration-preview/output/<source>-<mode>-<timestamp>.opus
  *   scripts/narration-preview/output/<source>-<mode>-<timestamp>.txt
  *
- * v1 supports --mode tier1 (locked to narrator_b/family — Sadachbia via
- * voice_configs DB lookup). --mode standard is reserved for future Tier 2
- * + audience-tuning work and currently exits with a "not yet wired" message.
+ * v1 supports --mode tier1 and --mode tier2 (both locked to
+ * narrator_b/family — Sadachbia via voice_configs DB lookup).
+ *   tier1 — Sonnet 4.6, long-form cadence rewrite of curator-authored
+ *           sources read from local sources/ files
+ *   tier2 — Haiku 4.5, brief iconic_local_callout rendering from the
+ *           structured fields (signature_hook + iconic_local_reasons)
+ *           on a public.pois row, looked up by source_id
+ * --mode standard remains reserved for future audience-tuning work.
  *
  * Run (from project root):
  *   npx tsx scripts/narration-preview/preview.ts --source madonna-inn
  *   npx tsx scripts/narration-preview/preview.ts --source madonna-inn --dry-run
+ *   npx tsx scripts/narration-preview/preview.ts --mode tier2 --source editorial:tier2-iconic-food-drink-2026-05-21:01
  */
 
 import { readFileSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
@@ -33,6 +39,10 @@ import {
   TIER1_SOUL_FULL_SYSTEM_PROMPT,
   buildTier1UserPrompt,
 } from './prompts/tier1-soul-full.js';
+import {
+  ICONIC_LOCAL_CALLOUT_SYSTEM_PROMPT,
+  buildIconicLocalCalloutUserPrompt,
+} from './prompts/iconic_local_callout.js';
 import { MADONNA_INN_SOURCE, type SourceRecord } from './sources/madonna-inn.js';
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
@@ -60,7 +70,8 @@ function loadEnv(): void {
 loadEnv();
 
 // ── Config ─────────────────────────────────────────────────────────────────
-const DEFAULT_MODEL = 'claude-sonnet-4-6';
+const DEFAULT_MODEL_TIER1 = 'claude-sonnet-4-6';
+const DEFAULT_MODEL_TIER2 = 'claude-haiku-4-5-20251001';
 const DEFAULT_COST_CEILING_USD = 1.0;
 const MAX_TOKENS = 1500;
 
@@ -81,7 +92,7 @@ function fail(msg: string): never {
 }
 
 // ── CLI parsing ────────────────────────────────────────────────────────────
-type Mode = 'tier1' | 'standard';
+type Mode = 'tier1' | 'tier2' | 'standard';
 type Audience = 'family' | 'kids' | 'unfiltered' | 'local';
 
 interface CliArgs {
@@ -98,7 +109,7 @@ function parseArgs(): CliArgs {
     source: '',
     mode: 'tier1',
     audience: 'family',
-    model: DEFAULT_MODEL,
+    model: '', // sentinel — resolved post-parse based on mode
     costCeiling: DEFAULT_COST_CEILING_USD,
     dryRun: false,
   };
@@ -108,12 +119,12 @@ function parseArgs(): CliArgs {
     if (a === '--source') out.source = args[++i] ?? '';
     else if (a === '--mode') out.mode = (args[++i] as Mode) ?? 'tier1';
     else if (a === '--audience') out.audience = (args[++i] as Audience) ?? 'family';
-    else if (a === '--model') out.model = args[++i] ?? DEFAULT_MODEL;
+    else if (a === '--model') out.model = args[++i] ?? '';
     else if (a === '--cost-ceiling') out.costCeiling = parseFloat(args[++i] ?? '1');
     else if (a === '--dry-run') out.dryRun = true;
     else if (a === '--help' || a === '-h') {
       console.log(
-        `Usage: npx tsx scripts/narration-preview/preview.ts --source <id> [--mode tier1|standard] [--audience family|kids|unfiltered|local] [--model <id>] [--cost-ceiling <usd>] [--dry-run]\n\nAvailable sources: ${Object.keys(SOURCES).join(', ')}`,
+        `Usage: npx tsx scripts/narration-preview/preview.ts --source <id> [--mode tier1|tier2|standard] [--audience family|kids|unfiltered|local] [--model <id>] [--cost-ceiling <usd>] [--dry-run]\n\nTier 1: --source resolves to a local sources/ key. Available: ${Object.keys(SOURCES).join(', ')}\nTier 2: --source resolves to a public.pois.source_id (DB lookup); requires signature_hook + iconic_local_reasons populated on the row.`,
       );
       process.exit(0);
     } else {
@@ -121,36 +132,93 @@ function parseArgs(): CliArgs {
     }
   }
   if (!out.source) {
-    fail(`--source <id> required. Available: ${Object.keys(SOURCES).join(', ')}`);
+    fail(
+      `--source <id> required.\n  Tier 1: pick a local sources/ key (${Object.keys(SOURCES).join(', ')}).\n  Tier 2: pass a POI source_id (e.g., editorial:tier2-iconic-food-drink-2026-05-21:01).`,
+    );
   }
-  if (!(out.source in SOURCES)) {
-    fail(`unknown source '${out.source}'. Available: ${Object.keys(SOURCES).join(', ')}`);
-  }
-  if (out.mode !== 'tier1' && out.mode !== 'standard') {
-    fail(`--mode must be tier1 or standard, got '${out.mode}'`);
+  if (out.mode !== 'tier1' && out.mode !== 'tier2' && out.mode !== 'standard') {
+    fail(`--mode must be tier1, tier2, or standard, got '${out.mode}'`);
   }
   if (out.mode === 'standard') {
-    fail(`--mode standard not yet wired — reserved for Tier 2 + audience-tuning work. Use --mode tier1 (default) for v1.`);
+    fail(
+      `--mode standard not yet wired — reserved for future audience-tuning work. Use --mode tier1 (Tier 1 cadence rewrite) or --mode tier2 (Tier 2 iconic_local_callout).`,
+    );
+  }
+  // Resolve model default from mode if --model not explicitly set
+  if (!out.model) {
+    out.model = out.mode === 'tier2' ? DEFAULT_MODEL_TIER2 : DEFAULT_MODEL_TIER1;
   }
   return out;
+}
+
+// ── Source resolution (mode-aware) ─────────────────────────────────────────
+interface ResolvedSource {
+  name: string;
+  // Tier 1 fields
+  description?: string;
+  sourceCitation?: string;
+  // Tier 2 fields
+  signatureHook?: string;
+  iconicLocalReasons?: string[];
+}
+
+async function resolveSource(supabase: SupabaseClient, args: CliArgs): Promise<ResolvedSource> {
+  if (args.mode === 'tier2') {
+    // Tier 2: fetch row from public.pois by source_id. Fail loudly if the row
+    // is missing or if signature_hook / iconic_local_reasons aren't populated
+    // — rendering a blank or partial callout silently would waste curator
+    // listening time and obscure the actual data problem.
+    const { data, error } = await supabase
+      .from('pois')
+      .select('name, signature_hook, iconic_local_reasons, source_id')
+      .eq('source_id', args.source)
+      .is('merged_into', null)
+      .limit(1);
+    if (error) fail(`pois query: ${error.message}`);
+    if (!data || data.length === 0) {
+      fail(
+        `no POI with source_id='${args.source}' found in public.pois (or row is soft-merged). Tier 2 mode resolves --source against public.pois.source_id.`,
+      );
+    }
+    const row = data[0] as {
+      name: string;
+      signature_hook: string | null;
+      iconic_local_reasons: string[] | null;
+    };
+    if (!row.name) {
+      fail(`POI source_id='${args.source}' has null name — cannot render callout.`);
+    }
+    if (!row.signature_hook || row.signature_hook.trim().length === 0) {
+      fail(
+        `POI source_id='${args.source}' missing signature_hook (required for Tier 2 iconic_local_callout). Populate signature_hook in public.pois before previewing.`,
+      );
+    }
+    if (!row.iconic_local_reasons || row.iconic_local_reasons.length === 0) {
+      fail(
+        `POI source_id='${args.source}' has empty iconic_local_reasons[] (required for Tier 2 iconic_local_callout). Populate iconic_local_reasons in public.pois before previewing.`,
+      );
+    }
+    return {
+      name: row.name,
+      signatureHook: row.signature_hook,
+      iconicLocalReasons: row.iconic_local_reasons,
+    };
+  }
+  // Tier 1: local SOURCES map
+  if (!(args.source in SOURCES)) {
+    fail(`unknown Tier 1 source '${args.source}'. Available: ${Object.keys(SOURCES).join(', ')}`);
+  }
+  const src = SOURCES[args.source]!;
+  return {
+    name: src.name,
+    description: src.description,
+    sourceCitation: src.source_citation,
+  };
 }
 
 // ── Main ───────────────────────────────────────────────────────────────────
 async function main(): Promise<void> {
   const args = parseArgs();
-  const source = SOURCES[args.source]!;
-  console.log(`=== Narration preview — ${source.name} ===`);
-  console.log(`Mode: ${args.mode}  ·  Model: ${args.model}  ·  Cost ceiling: $${args.costCeiling.toFixed(2)}`);
-  console.log('');
-
-  // Tier 1 locks to family/narrator_b
-  if (args.audience !== 'family') {
-    console.warn(
-      `(Note: --audience ${args.audience} ignored in --mode tier1. v1 Tier 1 locks to narrator_b/family via voice_configs.)`,
-    );
-  }
-  const AUDIENCE_MODE = 'family' as const;
-  const NARRATOR_SLUG = 'narrator_b' as const;
 
   // Env
   if (!process.env['ANTHROPIC_API_KEY']) fail('ANTHROPIC_API_KEY not set in root .env');
@@ -163,6 +231,22 @@ async function main(): Promise<void> {
     process.env['SUPABASE_SERVICE_ROLE_KEY']!,
     { auth: { persistSession: false } },
   );
+
+  // Resolve source (Tier 1: local file. Tier 2: DB lookup with strict validation.)
+  const source = await resolveSource(supabase, args);
+
+  console.log(`=== Narration preview — ${source.name} ===`);
+  console.log(`Mode: ${args.mode}  ·  Model: ${args.model}  ·  Cost ceiling: $${args.costCeiling.toFixed(2)}`);
+  console.log('');
+
+  // Both tiers lock to family/narrator_b in v1
+  if (args.audience !== 'family') {
+    console.warn(
+      `(Note: --audience ${args.audience} ignored in --mode ${args.mode}. v1 locks to narrator_b/family via voice_configs.)`,
+    );
+  }
+  const AUDIENCE_MODE = 'family' as const;
+  const NARRATOR_SLUG = 'narrator_b' as const;
 
   // Voice resolution via voice_configs
   const { data: voiceRows, error: vcErr } = await supabase
@@ -185,13 +269,24 @@ async function main(): Promise<void> {
   console.log(`Voice: ${voice.voice_id} @ rate ${speakingRate}  (${voice.display_name})`);
   console.log('');
 
-  // Build prompts
-  const systemPrompt = TIER1_SOUL_FULL_SYSTEM_PROMPT;
-  const userPrompt = buildTier1UserPrompt({
-    name: source.name,
-    description: source.description,
-    sourceCitation: source.source_citation,
-  });
+  // Build prompts (mode-aware)
+  let systemPrompt: string;
+  let userPrompt: string;
+  if (args.mode === 'tier2') {
+    systemPrompt = ICONIC_LOCAL_CALLOUT_SYSTEM_PROMPT;
+    userPrompt = buildIconicLocalCalloutUserPrompt({
+      name: source.name,
+      signature_hook: source.signatureHook!,
+      iconic_local_reasons: source.iconicLocalReasons!,
+    });
+  } else {
+    systemPrompt = TIER1_SOUL_FULL_SYSTEM_PROMPT;
+    userPrompt = buildTier1UserPrompt({
+      name: source.name,
+      description: source.description!,
+      sourceCitation: source.sourceCitation,
+    });
+  }
 
   if (args.dryRun) {
     console.log('=== DRY RUN — prompts only, no API spend ===');
@@ -205,11 +300,13 @@ async function main(): Promise<void> {
     return;
   }
 
-  // Cost projection (rough, defensive guardrail)
+  // Cost projection (rough, defensive guardrail). Tier 2 outputs ~70-80 words /
+  // ~500 chars; Tier 1 outputs roughly source length.
   const pricing = PRICING[args.model] ?? PRICING['claude-sonnet-4-6']!;
   const estimatedInputTokens = Math.ceil((systemPrompt.length + userPrompt.length) / 4);
-  const estimatedOutputTokens = Math.ceil(source.description.length / 4);
-  const estimatedTtsChars = source.description.length;
+  const estimatedOutputChars = args.mode === 'tier2' ? 500 : (source.description?.length ?? 1000);
+  const estimatedOutputTokens = Math.ceil(estimatedOutputChars / 4);
+  const estimatedTtsChars = estimatedOutputChars;
   const estClaudeCost = estimatedInputTokens * pricing.in_per_tok + estimatedOutputTokens * pricing.out_per_tok;
   const estTtsCost = (estimatedTtsChars / 1_000_000) * 16;
   const estTotal = estClaudeCost + estTtsCost;
@@ -261,23 +358,32 @@ async function main(): Promise<void> {
     .join('')
     .trim();
 
-  // Delimiter-marked protocol (robust to embedded double-quotes from
-  // verbatim source quoted material — see prompts/tier1-soul-full.ts
-  // OUTPUT section for rationale).
-  const narrationMatch = raw.match(/<<<NARRATION>>>\s*([\s\S]+?)\s*<<<END_NARRATION>>>/);
-  const themesMatch = raw.match(/<<<KEY_THEMES>>>\s*([\s\S]+?)\s*<<<END_KEY_THEMES>>>/);
-  if (!narrationMatch) {
-    fail(`Claude output missing <<<NARRATION>>> delimiter block.\n  raw: ${raw.slice(0, 400)}`);
+  // Output parsing (mode-aware).
+  //   Tier 1 — delimiter-marked protocol with <<<NARRATION>>> + <<<KEY_THEMES>>>
+  //            (robust to embedded double-quotes from verbatim source quoted
+  //            material; see prompts/tier1-soul-full.ts OUTPUT section for
+  //            rationale).
+  //   Tier 2 — raw paragraph. The iconic_local_callout prompt instructs
+  //            single-paragraph output with no preamble, markdown, or title.
+  let narrationText: string;
+  let keyThemes: string[] = [];
+  if (args.mode === 'tier2') {
+    narrationText = raw;
+    if (!narrationText) fail('Claude returned empty narration (Tier 2 callout)');
+  } else {
+    const narrationMatch = raw.match(/<<<NARRATION>>>\s*([\s\S]+?)\s*<<<END_NARRATION>>>/);
+    const themesMatch = raw.match(/<<<KEY_THEMES>>>\s*([\s\S]+?)\s*<<<END_KEY_THEMES>>>/);
+    if (!narrationMatch) {
+      fail(`Claude output missing <<<NARRATION>>> delimiter block.\n  raw: ${raw.slice(0, 400)}`);
+    }
+    narrationText = narrationMatch[1]!.trim();
+    keyThemes = themesMatch
+      ? themesMatch[1]!
+          .split(',')
+          .map((s) => s.trim())
+          .filter(Boolean)
+      : [];
   }
-  const narrationText = narrationMatch[1]!.trim();
-  const keyThemes = themesMatch
-    ? themesMatch[1]!
-        .split(',')
-        .map((s) => s.trim())
-        .filter(Boolean)
-    : [];
-  const parsed = { narration: narrationText, key_themes: keyThemes };
-  if (!parsed.narration) fail('Claude returned empty narration');
   const cleanedTextForCount = stripMarkersAndTags(narrationText);
   const approxWordCount = cleanedTextForCount.split(/\s+/).filter(Boolean).length;
   const markerCounts = {
@@ -319,10 +425,13 @@ async function main(): Promise<void> {
   );
   console.log('');
 
-  // Write output artifacts (gitignored)
+  // Write output artifacts (gitignored). Tier 2 source_ids contain colons —
+  // sanitize for filesystem use; the raw source_id is preserved verbatim in
+  // the TXT header for traceability.
   if (!existsSync(OUTPUT_DIR)) mkdirSync(OUTPUT_DIR, { recursive: true });
   const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
-  const baseName = `${args.source}-${args.mode}-${stamp}`;
+  const safeSource = args.source.replace(/[^a-zA-Z0-9_-]+/g, '_');
+  const baseName = `${safeSource}-${args.mode}-${stamp}`;
   const opusPath = resolve(OUTPUT_DIR, `${baseName}.opus`);
   const txtPath = resolve(OUTPUT_DIR, `${baseName}.txt`);
 
@@ -332,8 +441,9 @@ async function main(): Promise<void> {
   writeFileSync(opusPath, audioBuffer);
 
   const totalCost = claudeCost + ttsCost;
+  const previewLabel = args.mode === 'tier2' ? 'Tier 2 callout' : 'Tier 1 preview';
   const txtHeader = [
-    `# ${source.name} — Tier 1 preview`,
+    `# ${source.name} — ${previewLabel}`,
     `# ----------------------------------------------------------------------`,
     `# source:            ${args.source}`,
     `# mode:              ${args.mode}`,
@@ -352,7 +462,7 @@ async function main(): Promise<void> {
     `# total_cost_usd:    ${totalCost.toFixed(6)}`,
     `# fallback_to_plain: ${usedPlainFallback ? 'YES' : 'no'}`,
     `# generated_at:      ${new Date().toISOString()}`,
-    `# key_themes:        ${(parsed.key_themes ?? []).join(', ')}`,
+    `# key_themes:        ${keyThemes.join(', ')}`,
     `# ----------------------------------------------------------------------`,
     ``,
   ].join('\n');
