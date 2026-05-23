@@ -38,10 +38,12 @@
  *                         the per-POI generation loop. Use to remove known bad
  *                         selections (duplicates, venue children that surface in
  *                         corridor mode but aren't drive-by appropriate).
- *   --audience <a>        Audience mode for voice lookup (family|kids|unfiltered|local).
- *                         Indexes into voice_configs.mode, which is the audience
- *                         taxonomy — distinct from --mode, which is the trip
- *                         taxonomy (driving|hiking|city). Default: family.
+ *   --narrator-slug <s>   Narrator slug for voice lookup (narrator_a|narrator_b).
+ *                         Indexes into voice_configs.narrator_slug — distinct from
+ *                         --mode, which is the trip taxonomy (driving|hiking|city).
+ *                         Default: narrator_a (Window Seat). Migration Batch 2
+ *                         (Track C, 2026-05-22) collapsed audience-mode lookup
+ *                         to the narrator_slug key per addendum §5.
  */
 
 import { readFileSync } from 'node:fs';
@@ -73,8 +75,8 @@ function loadEnv(): void {
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 type NarrationMode  = 'driving' | 'hiking' | 'city';
-type AudienceMode   = 'family' | 'kids' | 'unfiltered' | 'local';
-const AUDIENCES: readonly AudienceMode[] = ['family', 'kids', 'unfiltered', 'local'];
+type NarratorSlug   = 'narrator_a' | 'narrator_b';
+const NARRATOR_SLUGS: readonly NarratorSlug[] = ['narrator_a', 'narrator_b'];
 type NarrationDepth = 'glance' | 'ride_along' | 'deep_dive';
 
 interface POIRow {
@@ -89,7 +91,10 @@ interface POIRow {
 }
 
 interface VoiceConfigRow {
-  mode: string;
+  // Migration Batch 2 (Track C, 2026-05-22): legacy `mode` field (audience
+  // taxonomy on voice_configs) retired here. voice_configs.mode column is
+  // dropped by Track D migration 20260522000010; lookup is by narrator_slug.
+  narrator_slug: string;
   voice_id: string;
   provider: string;
   voice_settings: { speakingRate?: number } | null;
@@ -203,12 +208,16 @@ async function generateText(poi: POIRow, depth: NarrationDepth): Promise<{ text:
 }
 
 // ── Upload audio buffer to Supabase Storage ───────────────────────────────────
+// Migration Batch 2 (Track C, 2026-05-22): storage path now keyed by
+// narrator_slug instead of voice_id — see precache-curated-pois.ts /
+// precache-top-tier-pois.ts FILE_SUFFIX shape; this convention shadows
+// narrator across a future voice swap.
 async function uploadAudio(
-  poiId: string, mode: NarrationMode, depth: NarrationDepth, voiceId: string,
+  poiId: string, mode: NarrationMode, depth: NarrationDepth, narratorSlug: string,
   audioBuffer: Buffer,
 ): Promise<string> {
   const sb          = getAdminClient();
-  const storagePath = `${poiId}/${mode}/${depth}/${voiceId}.opus`;
+  const storagePath = `${poiId}/${mode}/${depth}/${narratorSlug}.opus`;
 
   const { error } = await sb.storage
     .from(STORAGE_BUCKET)
@@ -221,12 +230,16 @@ async function uploadAudio(
 }
 
 // ── Upsert narration_audio row ────────────────────────────────────────────────
-// audienceMode added 2026-05-19 (H1.6.2) — disambiguates rows that share a
-// narrator_slug across audiences. Unique index na_unique widened to include
-// audience_mode by migration 20260519000002.
+// Migration Batch 2 (Track C, 2026-05-22): narrator_slug is now the canonical
+// identifier (the prior `voiceId` arg name was misleading — it was the
+// post-collapse logical slug, not the underlying Google voice id). audience_mode
+// is written as NULL because narrator_slug fully disambiguates rows
+// post-collapse; the column itself stays in the schema (defer-drop with the
+// audience-mode cleanup in a future batch). onConflict shape unchanged — the
+// na_unique constraint still has audience_mode as a member, but NULL ranks
+// as a stable value under the constraint's NULLS NOT DISTINCT semantics.
 async function upsertNarrationAudio(args: {
-  poiId: string; voiceId: string; depth: NarrationDepth; mode: NarrationMode;
-  audienceMode: AudienceMode;
+  poiId: string; narratorSlug: string; depth: NarrationDepth; mode: NarrationMode;
   audioUrl: string; charCount: number; costUsd: number; narrationText: string;
 }): Promise<string | undefined> {
   const { data, error } = await getAdminClient()
@@ -234,8 +247,8 @@ async function upsertNarrationAudio(args: {
     .upsert(
       {
         poi_id:          args.poiId,
-        narrator_slug:   args.voiceId,
-        audience_mode:   args.audienceMode,
+        narrator_slug:   args.narratorSlug,
+        audience_mode:   null,
         depth:           args.depth,
         mode:            args.mode,
         audio_url:       args.audioUrl,
@@ -465,19 +478,18 @@ async function fetchTopCombos(limit: number): Promise<Array<{ mode: NarrationMod
   return combos.slice(0, limit);
 }
 
-// ── Fetch active voice for the chosen audience ────────────────────────────────
-// voice_configs.mode is the AUDIENCE taxonomy (family/kids/unfiltered/local) —
-// distinct from --mode, which is the trip taxonomy (driving/hiking/city). A
-// single run uses one audience voice across all trip-mode × depth combos.
-//
-// Fails loud on missing/duplicate rows for the same reasons as
-// server/routes/narration.js lookupVoiceConfig — silent fallback would orphan
-// generated audio under the wrong voice_id.
-async function fetchActiveVoiceForAudience(audience: AudienceMode): Promise<VoiceConfigRow> {
+// ── Fetch active voice for the chosen narrator ────────────────────────────────
+// Migration Batch 2 (Track C, 2026-05-22): voice lookup now keyed by
+// voice_configs.narrator_slug ('narrator_a' / 'narrator_b' per addendum §5).
+// The pre-Batch-2 `mode` (audience taxonomy) column is dropped by Track D
+// migration 20260522000010; the unique index (mode, narrator_slug) WHERE
+// is_active=true narrows to a single (narrator_slug) WHERE is_active=true
+// once the column is gone.
+async function fetchActiveVoiceForNarrator(narratorSlug: NarratorSlug): Promise<VoiceConfigRow> {
   const { data, error } = await getAdminClient()
     .from('voice_configs')
-    .select('mode, voice_id, provider, voice_settings')
-    .eq('mode', audience)
+    .select('narrator_slug, voice_id, provider, voice_settings')
+    .eq('narrator_slug', narratorSlug)
     .eq('is_active', true);
 
   if (error) {
@@ -485,15 +497,13 @@ async function fetchActiveVoiceForAudience(audience: AudienceMode): Promise<Voic
   }
   if (!data || data.length === 0) {
     throw new Error(
-      `[precache] no active voice configured for audience '${audience}' — ` +
-      `run \`pnpm audition --commit --mode=${audience} --voice=<id>\` to set one`,
+      `[precache] no active voice configured for narrator '${narratorSlug}' — ` +
+      `run \`pnpm audition --commit --narrator-slug=${narratorSlug} --voice=<id>\` to set one`,
     );
   }
   if (data.length > 1) {
-    // voice_configs has a partial unique index on (mode) WHERE is_active=true —
-    // hitting >1 means the index is missing or has drifted. Surface it.
     throw new Error(
-      `[precache] voice_configs has ${data.length} active rows for audience '${audience}' — partial unique index likely missing`,
+      `[precache] voice_configs has ${data.length} active rows for narrator '${narratorSlug}' — partial unique index likely missing`,
     );
   }
   return data[0] as VoiceConfigRow;
@@ -524,11 +534,11 @@ async function main() {
       ? excludeIdsRaw.split(',').map(s => s.trim()).filter(Boolean)
       : [],
   );
-  const audienceRaw = get('--audience');
-  const audience: AudienceMode = (() => {
-    if (audienceRaw === undefined) return 'family';  // default
-    if ((AUDIENCES as readonly string[]).includes(audienceRaw)) return audienceRaw as AudienceMode;
-    console.error(`[precache] invalid --audience '${audienceRaw}' — must be one of: ${AUDIENCES.join(', ')}`);
+  const narratorSlugRaw = get('--narrator-slug');
+  const narratorSlug: NarratorSlug = (() => {
+    if (narratorSlugRaw === undefined) return 'narrator_a';  // default
+    if ((NARRATOR_SLUGS as readonly string[]).includes(narratorSlugRaw)) return narratorSlugRaw as NarratorSlug;
+    console.error(`[precache] invalid --narrator-slug '${narratorSlugRaw}' — must be one of: ${NARRATOR_SLUGS.join(', ')}`);
     process.exit(1);
   })();
 
@@ -666,21 +676,22 @@ async function main() {
     console.log(`\n[precache] Estimated upper-bound cost: $${estUsd.toFixed(4)} (${pois.length} POIs × ${combos.length} combos; assumes none are cache hits — actual will be lower)`);
   }
 
-  // 4. Active voice for the chosen audience — fail loud if unseeded.
-  // One audience voice covers every trip-mode × depth combo in this run.
-  const voiceConfig = await fetchActiveVoiceForAudience(audience);
-  console.log(`[precache] Voice (${audience}): ${voiceConfig.provider}/${voiceConfig.voice_id}`);
+  // 4. Active voice for the chosen narrator — fail loud if unseeded.
+  // One narrator voice covers every trip-mode × depth combo in this run.
+  const voiceConfig = await fetchActiveVoiceForNarrator(narratorSlug);
+  console.log(`[precache] Voice (${narratorSlug}): ${voiceConfig.provider}/${voiceConfig.voice_id}`);
 
   // 5. Process each POI × combo
   let generated = 0, skipped = 0, failed = 0;
 
   for (const poi of pois) {
     for (const { mode, depth } of combos) {
-      const voiceId     = voiceConfig.voice_id;
-      // Cache key shape changed 2026-05-20 (Move 3b.2): {mode}-{depth}-{audience_mode}.
-      // Voice_id dropped — post-H1.5.1 narrator collapse, audience_mode is the
-      // semantic discriminator. Matches the route's new writer + mobile's new reader.
-      const cacheKey    = `${mode}-${depth}-${audience}`;
+      // Migration Batch 2 (Track C, 2026-05-22): cache key + narration_audio
+      // filter both keyed by narrator_slug instead of audience_mode. The
+      // voice_id (e.g. en-US-Chirp3-HD-Sadachbia) is still resolved via
+      // voiceConfig for the TTS generation call below, but it is no longer
+      // the cache discriminator.
+      const cacheKey = `${mode}-${depth}-${narratorSlug}`;
 
       // Check pois.narration_cache (fastest)
       if (poi.narration_cache?.[cacheKey]) {
@@ -689,15 +700,13 @@ async function main() {
       }
 
       // Check narration_audio table (only count ready rows — pending/failed are not usable)
-      // audience_mode filter added 2026-05-19 (H1.6.2) so two audiences sharing
-      // a narrator_slug don't false-positive the skip-if-ready check.
       const { data: existing } = await getAdminClient()
         .from('narration_audio')
         .select('id')
         .eq('poi_id', poi.id)
-        .eq('narrator_slug', voiceId)
-        .eq('audience_mode', audience)
+        .eq('narrator_slug', narratorSlug)
         .eq('depth', depth)
+        .eq('mode', mode)
         .eq('status', 'ready')
         .limit(1)
         .single();
@@ -708,7 +717,7 @@ async function main() {
       }
 
       if (dryRun) {
-        console.log(`  [dry-run] would generate: ${poi.name} / ${mode} / ${depth} / ${voiceId}`);
+        console.log(`  [dry-run] would generate: ${poi.name} / ${mode} / ${depth} / ${narratorSlug}`);
         generated++;
         continue;
       }
@@ -723,7 +732,7 @@ async function main() {
           text, mode, depth,
           voiceConfigOverride: {
             provider: voiceConfig.provider as 'google',
-            voiceId,
+            voiceId: voiceConfig.voice_id,
             speakingRate: voiceConfig.voice_settings?.speakingRate,
           },
         });
@@ -731,19 +740,21 @@ async function main() {
 
         const ttsCost = ttsOutput.costUsd;
 
-        // Upload to Storage
-        const audioUrl = await uploadAudio(poi.id, mode, depth, ttsOutput.voiceId, ttsOutput.audioBuffer);
+        // Upload to Storage — path keyed by narrator_slug (post-Batch-2), not
+        // the underlying Google voice_id. Determinism: a future voice swap
+        // for the same narrator overwrites the same cache key.
+        const audioUrl = await uploadAudio(poi.id, mode, depth, narratorSlug, ttsOutput.audioBuffer);
 
         // Upsert narration_audio row
         const narrationId = await upsertNarrationAudio({
-          poiId: poi.id, voiceId: ttsOutput.voiceId, depth, mode,
-          audienceMode: audience,
+          poiId: poi.id, narratorSlug, depth, mode,
           audioUrl, charCount: ttsOutput.characterCount, costUsd: ttsCost,
           narrationText: text,
         });
 
-        // Update pois.narration_cache
-        await patchNarrationCache(poi.id, `${mode}-${depth}-${ttsOutput.voiceId}`, audioUrl);
+        // Update pois.narration_cache — key matches the buildCacheKey shape
+        // in hooks/useTTS.ts: {mode}-{depth}-{narrator_slug}.
+        await patchNarrationCache(poi.id, cacheKey, audioUrl);
 
         // Log costs
         await Promise.all([

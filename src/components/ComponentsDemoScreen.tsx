@@ -20,7 +20,6 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useTheme, pineTheme } from '../design/theme';
 
 import {
-  AudienceMark,
   Card,
   CategoryChip,
   DangerButton,
@@ -29,6 +28,7 @@ import {
   Kicker,
   ModePillRow,
   NarrationCard,
+  NarratorMark,
   OfflineBadge,
   PrimaryButton,
   SegmentedControl,
@@ -212,30 +212,20 @@ function Panel() {
         <DangerButton label="End trip" onPress={() => { /* demo */ }} testID="demo-danger" />
       </Section>
 
-      <Section title="AudienceMark">
+      <Section title="NarratorMark">
         <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: theme.spacing.m }}>
           <View style={{ alignItems: 'center', gap: theme.spacing.xs }}>
-            <AudienceMark type="family" />
-            <Kicker>Family</Kicker>
+            <NarratorMark type="narrator_a" />
+            <Kicker>Window Seat</Kicker>
           </View>
           <View style={{ alignItems: 'center', gap: theme.spacing.xs }}>
-            <AudienceMark type="kids" />
-            <Kicker>Kids</Kicker>
-          </View>
-          <View style={{ alignItems: 'center', gap: theme.spacing.xs }}>
-            <AudienceMark type="unfiltered" />
-            <Kicker>Unfiltered</Kicker>
-          </View>
-          <View style={{ alignItems: 'center', gap: theme.spacing.xs }}>
-            <AudienceMark type="local" />
-            <Kicker>Local</Kicker>
+            <NarratorMark type="narrator_b" />
+            <Kicker>Shotgun</Kicker>
           </View>
         </View>
         <View style={{ flexDirection: 'row', gap: theme.spacing.m, marginTop: theme.spacing.m }}>
-          <AudienceMark type="family"     size={56} bg />
-          <AudienceMark type="kids"       size={56} bg />
-          <AudienceMark type="unfiltered" size={56} bg />
-          <AudienceMark type="local"      size={56} bg />
+          <NarratorMark type="narrator_a" size={56} bg />
+          <NarratorMark type="narrator_b" size={56} bg />
         </View>
       </Section>
 

@@ -4,7 +4,6 @@ const express    = require('express');
 const http       = require('http');
 const { Server } = require('socket.io');
 
-const narratorsRouter     = require('./routes/narrators');
 const contributionsRouter = require('./routes/contributions');
 const narrationRouter     = require('./routes/narration');
 
@@ -18,7 +17,6 @@ app.use(express.json({ limit: '64kb' }));
 
 // ── Routes ───────────────────────────────────────────────────────────────────
 app.get('/health', (_req, res) => res.json({ ok: true, ts: new Date().toISOString() }));
-app.use('/api/narrators',     narratorsRouter);
 app.use('/api/contributions', contributionsRouter);
 app.use('/api/narration',     narrationRouter);
 

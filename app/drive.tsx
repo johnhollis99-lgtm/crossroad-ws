@@ -1,12 +1,13 @@
 /**
  * XRoad — Trip / Drive screen (Pine, Phase 2).
  *
- * Full-screen map with floating chrome (PersonaPill + StoriesBadge top,
- * 3-column TripStat strip below), a recenter puck + MapStylePicker on the
- * right rail (visible only when the sheet is peeked), and a draggable
- * bottom sheet that toggles between retracted (watermark + minimal action
- * row) and deployed (full media controls + Up next + corridor slider +
- * mode toggle + footer) states.
+ * Full-screen map with floating chrome (StoriesBadge top-right;
+ * Migration Batch 2 / Track B retired PersonaPill alongside the legacy
+ * 4-narrator preset model), a 3-column TripStat strip below, a recenter
+ * puck + MapStylePicker on the right rail (visible only when the sheet
+ * is peeked), and a draggable bottom sheet that toggles between
+ * retracted (watermark + minimal action row) and deployed (full media
+ * controls + Up next + corridor slider + mode toggle + footer) states.
  *
  * Every existing handler / state machine / data binding from the previous
  * earthy-palette version is preserved — Audio, Socket.io, GPS, POI load,
@@ -14,7 +15,8 @@
  * untouched.
  *
  * Receives (JSON strings):
- *   narrator, filters, routePreview, originLocation, destination, tripId
+ *   filters, routePreview, originLocation, destination, tripId
+ *   (filters.narratorSlug carries the session narrator choice; see Track B)
  */
 
 import React, {
@@ -34,7 +36,7 @@ import type { LocationSubscription } from 'expo-location';
 import Svg, { Text as SvgText } from 'react-native-svg';
 
 import { getPOIsAlongRoute, submitContribution } from '../lib/supabase';
-import type { POI, NarratorRecord } from '../lib/supabase';
+import type { POI } from '../lib/supabase';
 import { MapStyleId, MAP_STYLES, loadMapStyle, saveMapStyle } from '../lib/mapStyle';
 import { MapStylePicker } from '../components/MapStylePicker';
 import { useSheetSnap } from '../hooks/useSheetSnap';
@@ -50,7 +52,6 @@ import {
   IconVolume,
   IconVolumeOff,
   ModePillRow,
-  PersonaPill,
   PoiMarkerX,
   SegmentedTrio,
   StoriesBadge,
@@ -101,14 +102,11 @@ const REACH_TO_MI: Record<ReachKey, number> = {
 const SERVER_URL   = process.env.EXPO_PUBLIC_SERVER_URL ?? 'http://localhost:3001';
 const MAPBOX_TOKEN = process.env.EXPO_PUBLIC_MAPBOX_TOKEN!;
 
-// Pine-coherent narrator avatar palette (Phase 2 spec). Reused from
-// customize.tsx; kept inline here so drive.tsx has no cross-screen import.
-const NARRATOR_AVATAR_PALETTE: Record<string, string> = {
-  'the-professor':     '#60A5FA',
-  'the-local':         '#9F7AEA',
-  'the-junior-ranger': '#10B981',
-  'the-truck-driver':  '#F59E0B',
-};
+// Migration Batch 2 (Track B, 2026-05-22): Pine NARRATOR_AVATAR_PALETTE
+// + avatarColorFor helper removed alongside the PersonaPill render. The
+// 4-narrator preset model (Professor / Local / Junior Ranger / Truck
+// Driver) is retired; narrator selection is two-narrator session state
+// (`narrator_a` / `narrator_b`) per addendum §5.
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -145,12 +143,6 @@ function fmtMiles(mi: number | undefined | null): string {
 function fmtRemaining(min: number): string {
   if (min < 60) return `${min}m`;
   return `${Math.floor(min / 60)}h ${min % 60}m`;
-}
-
-function avatarColorFor(narrator: NarratorRecord | null): string {
-  if (!narrator) return '#10B981';
-  const slug = narrator.slug ?? '';
-  return NARRATOR_AVATAR_PALETTE[slug] ?? narrator.avatar_color_bg ?? '#10B981';
 }
 
 // ── Watermark (Pine spec section 4 — breathing X + italic Road) ──────────────
@@ -367,7 +359,11 @@ export default function Drive() {
   const { theme }  = useTheme();
   const params     = route.params ?? {};
 
-  const narrator      = parse<NarratorRecord | null>(params.narrator, null);
+  // Migration Batch 2 (Track B, 2026-05-22): legacy `narrator` nav-param
+  // dropped — customize.tsx no longer serializes a NarratorRecord into the
+  // payload. Narrator selection now flows via `filters.narratorSlug`
+  // (session state from tripStore; default 'narrator_a' until J1b's
+  // 2-card picker lands).
   const filters       = parse<Record<string, any>>(params.filters, {});
   const routePreview  = parse<Record<string, any>>(params.routePreview, {});
   const origin        = parse<Record<string, any>>(params.originLocation, {});
@@ -399,7 +395,16 @@ export default function Drive() {
   const [playDuration, setPlayDuration] = useState(0);
   const [isPlaying,    setIsPlaying]    = useState(false);
   const [quietMode,    setQuietMode]    = useState(false);
-  const [trailMode,    setTrailMode]    = useState(false);
+  // Hiking-mode safeguard (Migration Batch 2, Track A): the home page's
+  // ModePillRow ("Drive" / "Hike/Walk") persists `activeTripMode` via
+  // Zustand; customize.tsx forwards it as `filters.tripMode`. Pre-Batch-2
+  // this initializer was hardcoded `false`, so the legacy home → hiking →
+  // filters → trail path was the only way Hike-mode reached the user — and
+  // the Pine drive page silently ignored the toggle from home. With the
+  // legacy screens deleted, drive must honor `filters.tripMode === 'hiking'`
+  // on entry so the topo map / hiking-mode RPC fetch / Hike pill all
+  // initialize correctly when the user picks Hike on home.
+  const [trailMode,    setTrailMode]    = useState(filters.tripMode === 'hiking');
   const [userLocation, setUserLocation] = useState<{ latitude: number; longitude: number } | null>(null);
   const [mapStyleId,   setMapStyleId]   = useState<MapStyleId>('dark');
   const [elapsedMin,   setElapsedMin]   = useState(0);
@@ -730,28 +735,12 @@ export default function Drive() {
     );
   }, [doEndTrip]);
 
-  const handleGoBack = useCallback(() => {
-    if (Platform.OS === 'web') {
-      if (window.confirm('Leave trip and go back?')) {
-        stopAudio().catch(() => {});
-        socketRef.current?.disconnect();
-        navigation.goBack();
-      }
-      return;
-    }
-    Alert.alert(
-      'Leave trip?', '',
-      [
-        { text: 'Stay', style: 'cancel' },
-        { text: 'Go back', onPress: () => {
-          stopAudio().catch(() => {});
-          socketRef.current?.disconnect();
-          navigation.goBack();
-        }},
-      ],
-      { cancelable: true }
-    );
-  }, [stopAudio, navigation]);
+  // Migration Batch 2 (Track B, 2026-05-22): `handleGoBack` removed
+  // alongside PersonaPill. The soft "leave trip" affordance was only
+  // exposed via PersonaPill's onBack tap. End Trip (hard reset to home)
+  // remains as the canonical exit path; soft-back can be re-added in a
+  // Batch 3 polish task if it surfaces as needed (the End trip pill is
+  // always visible per SKILL "Drive screen safety").
 
   // ── Feedback / share — handlers preserved as carriers; visual surface
   // dropped per Pine spec section 4 (sheet contents). Re-enable from a
@@ -762,7 +751,11 @@ export default function Drive() {
       userId: tripId ?? 'anonymous',
       type:   'narration_rating',
       poiId,
-      details: { rating, narrator_slug: narrator?.slug ?? '' },
+      // Migration Batch 2 (Track B, 2026-05-22): narrator_slug now sourced
+      // from the filters nav payload (session state). Empty string preserved
+      // as defensive fallback (matches pre-Batch-2 semantics when narrator
+      // was null).
+      details: { rating, narrator_slug: filters.narratorSlug ?? '' },
     });
   };
   void handleFeedback;
@@ -877,13 +870,10 @@ export default function Drive() {
       </MapView>
 
       {/* ── TOP OVERLAYS ─────────────────────────────────────────────────── */}
+      {/* Migration Batch 2 (Track B, 2026-05-22): PersonaPill removed.
+          Only StoriesBadge remains in the top row; layout pushes it to
+          the right edge via justifyContent: 'flex-end'. */}
       <View style={[s.topRow, { top: STATUS_BAR_PAD }]} pointerEvents="box-none">
-        <PersonaPill
-          initials={narrator?.avatar_initials ?? '??'}
-          avatarColor={avatarColorFor(narrator)}
-          name={narrator?.name ?? 'Narrator'}
-          onBack={handleGoBack}
-        />
         <StoriesBadge count={storiesAvailable} />
       </View>
 
@@ -1352,14 +1342,16 @@ const s = StyleSheet.create({
   userLocOuter: { width: 22, height: 22, borderRadius: 11, alignItems: 'center', justifyContent: 'center' },
   userLocInner: { width: 12, height: 12, borderRadius: 6,  borderWidth: 2 },
 
-  // Top row — PersonaPill left, StoriesBadge right
+  // Top row — StoriesBadge only (PersonaPill removed in Batch 2 Track B).
+  // justifyContent flex-end pushes the badge to the right edge so the
+  // top-left of the map is unobstructed.
   topRow: {
     position:       'absolute',
     left:           12,
     right:          12,
     flexDirection:  'row',
     alignItems:     'flex-start',
-    justifyContent: 'space-between',
+    justifyContent: 'flex-end',
   },
 
   // 3-column stats card

@@ -83,8 +83,9 @@ function parseArgs(): { regionNames: string[]; suffix: string | null } {
 }
 
 // ── Test config ────────────────────────────────────────────────────────────
+// Migration Batch 2 (Track C, 2026-05-22): AUDIENCE_MODE retired —
+// narrator_slug is the canonical key for both template lookup and voice_configs.
 const NARRATOR_SLUG = 'narrator_b' as const;
-const AUDIENCE_MODE = 'family' as const;
 const TRIP_MODE = 'driving' as const;
 const DEPTH = 'standard' as const;
 const HAIKU_MODEL = 'claude-haiku-4-5-20251001';
@@ -110,10 +111,9 @@ interface VoiceRow {
   voice_settings: { speakingRate?: number; pitch?: number };
 }
 
-interface RegionTemplate {
-  systemPrompt: string;
-  buildUserPrompt: (region: { name: string; display_name: string | null; description: string }) => string;
-}
+// Migration Batch 2 (Track C, 2026-05-22): region template returns an
+// Anthropic Messages array (Batch-1 pattern, narrator-keyed).
+type RegionMessages = Array<{ role: 'system' | 'user'; content: string }>;
 
 interface LeverStats {
   emDashes: number;
@@ -213,23 +213,29 @@ async function main(): Promise<void> {
     { auth: { persistSession: false } },
   );
 
-  // 1. Load region templates (feature-branch narrator_b_family with Tier 2 markers)
+  // 1. Load region templates (Batch 2 narrator-keyed registry —
+  //    pickRegionPrompt now returns a Messages array per the POI pattern).
   const { pickRegionPrompt } = require(REGION_TEMPLATES_PATH) as {
-    pickRegionPrompt: (n: string, a: string) => RegionTemplate;
+    pickRegionPrompt: (
+      narratorSlug: string,
+      region: any,
+      depth: string,
+      sources: Array<{ type: string; text: string }>,
+    ) => RegionMessages;
   };
-  const template = pickRegionPrompt(NARRATOR_SLUG, AUDIENCE_MODE);
 
-  // 2. Look up narrator_b family voice from voice_configs (read-only)
+  // 2. Look up narrator_b voice from voice_configs (read-only).
+  // Migration Batch 2 (Track C, 2026-05-22): query keyed by narrator_slug;
+  // voice_configs.mode column is dropped by Track D migration 20260522000010.
   const { data: voiceRows, error: vcErr } = await supabase
     .from('voice_configs')
     .select('voice_id, voice_settings')
-    .eq('mode', AUDIENCE_MODE)
     .eq('narrator_slug', NARRATOR_SLUG)
     .eq('is_active', true)
     .limit(1);
   if (vcErr) fail(`voice_configs query: ${vcErr.message}`);
   if (!voiceRows || voiceRows.length === 0) {
-    fail(`no active voice_configs row for ${NARRATOR_SLUG} × ${AUDIENCE_MODE}`);
+    fail(`no active voice_configs row for ${NARRATOR_SLUG}`);
   }
   const voice = voiceRows[0] as VoiceRow;
   const productionRate = voice.voice_settings?.speakingRate ?? 1.0;
@@ -286,8 +292,17 @@ async function main(): Promise<void> {
     const productionText = (prodRows && prodRows.length > 0 ? prodRows[0]!.narration_text : null) as string | null;
     const productionStats = productionText ? analyzeLevers(productionText) : null;
 
-    // 5b. Generate via Haiku — log cost IMMEDIATELY on return
-    const userPrompt = template.buildUserPrompt(region);
+    // 5b. Generate via Haiku — log cost IMMEDIATELY on return.
+    // Track C: build sources array and call the narrator-keyed selector.
+    const sources: Array<{ type: string; text: string }> = [];
+    if (region.description) sources.push({ type: 'description', text: region.description });
+    if (region.display_name && region.display_name !== region.name) {
+      sources.push({ type: 'alias', text: `Also known as: ${region.display_name}` });
+    }
+    const messages = pickRegionPrompt(NARRATOR_SLUG, region, DEPTH, sources);
+    const systemPrompt = messages.find(m => m.role === 'system')?.content ?? '';
+    const userPrompt = messages.find(m => m.role === 'user')?.content ?? '';
+
     const hr = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: {
@@ -298,7 +313,7 @@ async function main(): Promise<void> {
       body: JSON.stringify({
         model: HAIKU_MODEL,
         max_tokens: HAIKU_MAX_TOKENS,
-        system: template.systemPrompt,
+        system: systemPrompt,
         messages: [{ role: 'user', content: userPrompt }],
       }),
     });

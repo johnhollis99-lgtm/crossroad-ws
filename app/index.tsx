@@ -1994,13 +1994,15 @@ export default function MapScreen() {
             </View>
 
             {/* Row 2: Drive | Walk mode toggle (drift 5.93). Persists via
-                tripStore. Tapping Walk navigates to /hiking. */}
+                tripStore. Migration Batch 2 (Track A, 2026-05-22): legacy
+                hiking.tsx → filters.tsx → trail.tsx path retired. The
+                selection now flows through the Pine path — customize.tsx
+                reads `activeTripMode` directly and forwards to drive.tsx's
+                `filters.tripMode` (consumed by `trailMode` init for the
+                topo map / hiking-mode RPC fetch). */}
             <ModePillRow
               value={activeTripMode}
-              onChange={(next) => {
-                setActiveTripMode(next);
-                if (next === 'hiking') navigation.navigate('hiking');
-              }}
+              onChange={setActiveTripMode}
             />
 
             {/* Row 3: Search field */}

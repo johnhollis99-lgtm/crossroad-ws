@@ -28,6 +28,30 @@ export interface SpeedBreakpoint {
   mph: number;
 }
 
+/**
+ * One urban (denser POI catalog) override segment along a route. The
+ * lookahead's per-mile filter uses corridor_mi as the spatial cap
+ * inside [start_mile, end_mile).
+ */
+export interface CorridorSegment {
+  start_mile: number;   // inclusive
+  end_mile: number;     // exclusive
+  corridor_mi: number;  // half-width in miles
+  label: string;        // human label for logs
+}
+
+/**
+ * Per-route corridor profile. The lookahead applies default_corridor_mi
+ * everywhere except inside urban_segments, where the segment's narrower
+ * corridor_mi wins. closest_approach POIs are exempt from the profile
+ * and instead capped at CLOSEST_APPROACH_MAX_MI in the lookahead.
+ */
+export interface CorridorProfile {
+  default_corridor_mi: number;
+  urban_segments: CorridorSegment[];
+  notes?: string;
+}
+
 export interface RoutePreset {
   id: string;
   display_name: string;
@@ -35,6 +59,7 @@ export interface RoutePreset {
   destination: string;
   waypoints: Waypoint[];
   speed_profile: SpeedBreakpoint[];
+  corridor_profile?: CorridorProfile;
   notes?: string;
 }
 
@@ -70,6 +95,15 @@ const LA_MAMMOTH: RoutePreset = {
     { mile_from_start:  25, mph: 65 },  // CA-14 north + US-395 corridor
     { mile_from_start: 295, mph: 35 },  // approach + Mammoth town
   ],
+  corridor_profile: {
+    default_corridor_mi: 25,
+    urban_segments: [
+      { start_mile:   0, end_mile:  27, corridor_mi: 10, label: 'LA basin'    },
+      { start_mile: 290, end_mile: 297, corridor_mi: 10, label: 'Mammoth town' },
+    ],
+    notes:
+      "Rural Eastern Sierra needs the wider corridor to catch Mt. Whitney, Bristlecone, Trona, Kennedy Meadows. Urban LA basin keeps 10mi to avoid POI saturation.",
+  },
   notes:
     "I-5 → CA-14 → US-395 corridor. Exercises LA Basin → Mojave → Owens Valley → Long Valley Caldera region transitions, soul-doctrine flagship POIs (missions early, geology late), and the cluster-suppression mode-dependent significance rule across dense LA vs sparse rural corridor.",
 };
@@ -79,3 +113,48 @@ export const PRESETS: Record<string, RoutePreset> = {
 };
 
 export const PRESET_IDS = Object.keys(PRESETS);
+
+/**
+ * Maximum perpendicular distance (miles) at which a closest_approach POI
+ * is still considered visible from the route. Used by the lookahead's
+ * per-mile filter and by getMaxCorridorMi to widen the SQL spatial filter.
+ */
+export const CLOSEST_APPROACH_MAX_MI = 30;
+
+/**
+ * Returns the corridor half-width (miles) at a given mile along the route.
+ * Linear scan of urban_segments — always small N. First match wins; falls
+ * back to default_corridor_mi outside any urban segment.
+ *
+ * Throws if the route has no corridor_profile (every route consumed by the
+ * per-mile filter must define one).
+ */
+export function getCorridorMiAt(route: RoutePreset, mile: number): number {
+  const profile = route.corridor_profile;
+  if (!profile) {
+    throw new Error(`getCorridorMiAt: route "${route.id}" has no corridor_profile`);
+  }
+  for (const seg of profile.urban_segments) {
+    if (mile >= seg.start_mile && mile < seg.end_mile) {
+      return seg.corridor_mi;
+    }
+  }
+  return profile.default_corridor_mi;
+}
+
+/**
+ * Returns the widest corridor the SQL spatial filter must cover for this
+ * route — the max of (default_corridor_mi, every urban_segment.corridor_mi,
+ * CLOSEST_APPROACH_MAX_MI). Pass this into getCorridorPois so closest_approach
+ * candidates inside the 30mi cap come back from the DB even when the
+ * route's rural corridor is narrower than 30.
+ */
+export function getMaxCorridorMi(route: RoutePreset): number {
+  const profile = route.corridor_profile;
+  if (!profile) return CLOSEST_APPROACH_MAX_MI;
+  let max = Math.max(profile.default_corridor_mi, CLOSEST_APPROACH_MAX_MI);
+  for (const seg of profile.urban_segments) {
+    if (seg.corridor_mi > max) max = seg.corridor_mi;
+  }
+  return max;
+}

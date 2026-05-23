@@ -284,31 +284,25 @@ export async function getAvailableNarrators(userId?: string): Promise<NarratorRe
   return (data as NarratorRecord[]) ?? [];
 }
 
-// ── Save a trip session with narrator + filter configuration ─────────────
-export type TripDensity = 'sparse' | 'balanced' | 'dense';
-
+// ── Save a trip session ───────────────────────────────────────────────────
+// Migration Batch 1 (2026-05-22): trips.depth / density / min_relevance /
+// poi_distance_m columns dropped in 20260522000008. The SaveTripParams
+// shape drops the matching fields; saveTrip's INSERT no longer writes
+// them.
+// Migration Batch 2 (2026-05-22, Track B): legacy 4-narrator preset model
+// retired. SaveTripParams no longer accepts narratorId / userNarratorId /
+// narratorName; saveTrip's INSERT no longer writes the corresponding
+// trips.narrator_id / trips.user_narrator_id / trips.narrator_name
+// columns (they receive their column DEFAULT — NULL — on every write).
+// The columns stay in the live schema (defer-drop bundled with the
+// related trips column cleanup in a future batch); they're inert here.
 export async function saveTrip(params: {
   routeName?: string;
   origin?: string;
   destination?: string;
   distanceMi?: number;
   durationMin?: number;
-  narratorId?: string;
-  userNarratorId?: string;
-  narratorName?: string;
-  depth: string;
   categoryFilter: string[];
-  /**
-   * Per-trip POI corridor in meters; optional post-J1a-followups since the
-   * customize UI no longer exposes a slider for it. trips.poi_distance_m
-   * carries a DB DEFAULT of 500 and has no CHECK constraint, so omitting
-   * the field from the INSERT lets the default apply.
-   */
-  poiDistanceM?: number;
-  /** Curation density preference; columns added in 20260512000001. */
-  density?: TripDensity;
-  /** Minimum significance_score 0–100; columns added in 20260512000001. */
-  minRelevance?: number;
   status?: string;
   startedAt?: string;
 }): Promise<{ id: string } | null> {
@@ -321,16 +315,7 @@ export async function saveTrip(params: {
       destination:      params.destination,
       distance_mi:      params.distanceMi,
       duration_min:     params.durationMin,
-      narrator_id:      params.narratorId ?? null,
-      user_narrator_id: params.userNarratorId ?? null,
-      narrator_name:    params.narratorName,
-      depth:            params.depth,
       category_filter:  params.categoryFilter,
-      // poi_distance_m omitted when undefined so the trips DB DEFAULT (500)
-      // applies — J1a-followups dropped the customize-side slider.
-      ...(params.poiDistanceM !== undefined && { poi_distance_m: params.poiDistanceM }),
-      density:          params.density ?? 'balanced',
-      min_relevance:    params.minRelevance ?? 0,
       status:           params.status ?? 'pending',
       started_at:       params.startedAt ?? null,
     })

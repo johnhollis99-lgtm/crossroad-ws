@@ -1,22 +1,31 @@
 /**
  * scripts/spot-check-audience-expansion.ts
  *
- * Phase H Block H1.5.3 — audience-mode prompt template regen for a SINGLE POI
- * (Vasquez Rocks, source_id editorial:la-mammoth-2026-05-18:01) across the
- * 4 active audience templates after the narrator-collapse (H1.5.1).
+ * Migration Batch 2 (Track C, 2026-05-22): repurposed from the prior
+ * audience-mode expansion (4 audiences × narrator-collapse) to the new
+ * NARRATOR-mode expansion (2 narrators × voice-slot 1). The 4-audience
+ * comparison is obsolete post-Track-C — audience-mode addressability is
+ * collapsed into voice_configs.narrator_slug per addendum §5.
  *
- * Active templates (1 voice per audience post-collapse):
- *   family     → narrator_b / Sadachbia
- *   kids       → narrator_a / Sulafat
- *   local      → narrator_a / Iapetus
- *   unfiltered → narrator_b / Schedar
+ * The script still spot-checks a SINGLE POI (Vasquez Rocks,
+ * source_id editorial:la-mammoth-2026-05-18:01) but now across the 2
+ * narrator templates instead of 4 audiences — same POI, side-by-side
+ * tonal comparison for narrator_a (Window Seat) vs narrator_b (Shotgun).
+ *
+ * Active combos:
+ *   narrator_a / voice_slot=1   (Window Seat — reverent / contemplative)
+ *   narrator_b / voice_slot=1   (Shotgun — conversational / Tier-2 SSML)
  *
  * Pipeline (same shape as spot-check-3-pois.ts):
  *   Haiku → ssmlize() → Google TTS → Storage upload → narration_audio upsert
  *
- * Storage path: pois/{poi_id}/{narrator_slug}_{audience_mode}_{depth}.opus
+ * Storage path: pois/{poi_id}/{narrator_slug}_v{voice_slot}_{depth}.opus
  *
  * Cost guardrail: aborts before any API spend if projected cost > $3.
+ *
+ * File name retained for git-history continuity; consider renaming to
+ * `spot-check-narrator-expansion.ts` in a follow-up commit if the
+ * disconnect surfaces in future code review.
  *
  * Run (from project root):
  *   npx tsx scripts/spot-check-audience-expansion.ts
@@ -69,15 +78,13 @@ const HAIKU_OUT_PER_TOK = 5.0 / 1_000_000;
 const COST_CEILING_USD = 3.00;
 const EST_COST_PER_NARRATION = 0.022;
 
-// 4 active audience templates after the H1.5.1 narrator-collapse. The narrator
-// field is no longer used for template lookup (pickPoiPrompt is audience-keyed
-// now) but is preserved here for voice_configs.eq('narrator_slug',...) lookup
-// and for the Storage-path filename pattern {narrator}_{audience}_{depth}.opus.
-const COMBOS: Array<{ narrator: string; audience: string }> = [
-  { narrator: 'narrator_b', audience: 'family'     },
-  { narrator: 'narrator_a', audience: 'kids'       },
-  { narrator: 'narrator_a', audience: 'local'      },
-  { narrator: 'narrator_b', audience: 'unfiltered' },
+// Migration Batch 2 (Track C, 2026-05-22): 2 narrator combos at voice
+// slot 1. The audience-mode axis is gone; voice_slot is pinned to 1 for
+// determinism (matches the precache scripts' FILE_SUFFIX convention).
+const VOICE_SLOT = 1;
+const COMBOS: Array<{ narrator: string }> = [
+  { narrator: 'narrator_a' },
+  { narrator: 'narrator_b' },
 ];
 
 interface PoiRow {
@@ -117,16 +124,16 @@ async function main(): Promise<void> {
     { auth: { persistSession: false } },
   );
 
-  // Template selector. Signature changed in H1.5.1 (2026-05-19) — flat
-  // audience-keyed registry; narrator_slug derivable from template.narratorSlug.
+  // Template selector — Batch 1 narrator-keyed registry. Track C drops
+  // the audience-mode arg; signature is (narratorSlug, depth, poi, sources)
+  // returning an Anthropic Messages array.
   const { pickPoiPrompt } = require(POI_TEMPLATES_PATH) as {
-    pickPoiPrompt: (a: string, d: string) => {
-      systemPrompt: string;
-      buildUserPrompt: (poi: any) => string;
-      narratorSlug: string;
-      audienceMode: string;
-      depth: string;
-    };
+    pickPoiPrompt: (
+      narratorSlug: string,
+      depth: string,
+      poi: any,
+      sources: Array<{ type: string; text: string }>,
+    ) => Array<{ role: 'system' | 'user'; content: string }>;
   };
 
   // POI fetch
@@ -176,19 +183,19 @@ async function main(): Promise<void> {
     off_route_landmark_hint: r.off_route_landmark_hint ?? null,
   };
 
-  // Voice config preload — one row per combo
+  // Voice config preload — one row per narrator (Track C: narrator_slug
+  // is the canonical key; voice_configs.mode column dropped by Track D).
   const voiceByCombo = new Map<string, VoiceRow>();
-  for (const { narrator, audience } of COMBOS) {
+  for (const { narrator } of COMBOS) {
     const { data: rows, error: vErr } = await supabase
       .from('voice_configs')
       .select('voice_id, voice_settings')
-      .eq('mode', audience)
       .eq('narrator_slug', narrator)
       .eq('is_active', true)
       .limit(1);
-    if (vErr) fail(`voice_configs (${narrator}/${audience}): ${vErr.message}`);
-    if (!rows || rows.length === 0) fail(`no active voice_configs row for ${narrator}/${audience}`);
-    voiceByCombo.set(`${narrator}/${audience}`, rows[0] as VoiceRow);
+    if (vErr) fail(`voice_configs (${narrator}): ${vErr.message}`);
+    if (!rows || rows.length === 0) fail(`no active voice_configs row for ${narrator}`);
+    voiceByCombo.set(narrator, rows[0] as VoiceRow);
   }
 
   // Cost projection + guardrail
@@ -202,9 +209,9 @@ async function main(): Promise<void> {
   console.log(`  hint=${poi.off_route_landmark_hint ? 'yes' : 'no'}`);
   console.log('');
   console.log('Combos:');
-  for (const { narrator, audience } of COMBOS) {
-    const v = voiceByCombo.get(`${narrator}/${audience}`)!;
-    console.log(`  ${narrator}/${audience}  voice=${v.voice_id}  rate=${v.voice_settings?.speakingRate ?? 1.0}`);
+  for (const { narrator } of COMBOS) {
+    const v = voiceByCombo.get(narrator)!;
+    console.log(`  ${narrator}  voice=${v.voice_id}  rate=${v.voice_settings?.speakingRate ?? 1.0}`);
   }
   console.log('');
 
@@ -213,7 +220,6 @@ async function main(): Promise<void> {
 
   interface Result {
     narrator: string;
-    audience: string;
     voiceId: string;
     url: string;
     narration: string;
@@ -226,21 +232,29 @@ async function main(): Promise<void> {
   let totalHaikuCost = 0;
   let totalTtsCost = 0;
 
-  for (const { narrator, audience } of COMBOS) {
-    const label = `${narrator}/${audience}`;
+  // Track C: synthesize sources once — same POI across both narrators.
+  const sources: Array<{ type: string; text: string }> = [];
+  if (poi.description) sources.push({ type: 'description', text: poi.description });
+  if (poi.source_citation) sources.push({ type: 'citation', text: poi.source_citation });
+  if (poi.off_route_landmark_hint) sources.push({ type: 'landmark_hint', text: poi.off_route_landmark_hint });
+  if (poi.tags?.length) sources.push({ type: 'tags', text: poi.tags.join(', ') });
+
+  for (const { narrator } of COMBOS) {
+    const label = narrator;
     console.log(`▶ ${label}`);
 
-    const template = pickPoiPrompt(audience, DEPTH);
-    const voice = voiceByCombo.get(label)!;
-
-    const userPrompt = template.buildUserPrompt({
+    const messages = pickPoiPrompt(narrator, DEPTH, {
       name: poi.name,
-      description: poi.description,
+      category_slug: poi.category_slug,
       category_display: poi.category_display,
-      tags: poi.tags,
-      source_citation: poi.source_citation,
-      off_route_landmark_hint: poi.off_route_landmark_hint,
-    });
+      significance_score: null,
+      location_description: null,
+      signature_hook: null,
+      iconic_local: false,
+    }, sources);
+    const systemPrompt = messages.find(m => m.role === 'system')?.content ?? '';
+    const userPrompt = messages.find(m => m.role === 'user')?.content ?? '';
+    const voice = voiceByCombo.get(narrator)!;
 
     // Haiku call (single attempt — no parse-retry, this is a spot check)
     const hr = await fetch('https://api.anthropic.com/v1/messages', {
@@ -253,7 +267,7 @@ async function main(): Promise<void> {
       body: JSON.stringify({
         model: HAIKU_MODEL,
         max_tokens: HAIKU_MAX_TOKENS,
-        system: template.systemPrompt,
+        system: systemPrompt,
         messages: [{ role: 'user', content: userPrompt }],
       }),
     });
@@ -338,8 +352,8 @@ async function main(): Promise<void> {
     const ttsCost = ttsOutput.costUsd;
     totalTtsCost += ttsCost;
 
-    // Canonical storage path: pois/{poi_id}/{narrator}_{audience}_{depth}.opus
-    const fileSuffix = `${narrator}_${audience}_${DEPTH}`;
+    // Canonical storage path (Track C): pois/{poi_id}/{narrator}_v{slot}_{depth}.opus
+    const fileSuffix = `${narrator}_v${VOICE_SLOT}_${DEPTH}`;
     const storagePath = `${STORAGE_PREFIX}/${poi.id}/${fileSuffix}.opus`;
     const { error: upErr } = await supabase.storage
       .from(STORAGE_BUCKET)
@@ -347,16 +361,18 @@ async function main(): Promise<void> {
     if (upErr) fail(`Storage upload for ${label}: ${upErr.message}`);
     const { data: { publicUrl } } = supabase.storage.from(STORAGE_BUCKET).getPublicUrl(storagePath);
 
-    // audience_mode added 2026-05-19 (H1.6.2) — disambiguates rows that share
-    // a narrator_slug across audiences. Unique index na_unique widened to
-    // include audience_mode by migration 20260519000002.
+    // Migration Batch 2 (Track C, 2026-05-22): audience_mode written as
+    // NULL — narrator_slug fully disambiguates rows post-collapse. The
+    // column stays in the schema (defer-drop with the audience-mode
+    // cleanup); the na_unique constraint's NULLS NOT DISTINCT semantics
+    // treat NULL as a stable value.
     const { error: naErr } = await supabase
       .from('narration_audio')
       .upsert({
         poi_id: poi.id,
         region_id: null,
         narrator_slug: narrator,
-        audience_mode: audience,
+        audience_mode: null,
         depth: DEPTH,
         mode: TRIP_MODE,
         audio_url: publicUrl,
@@ -372,7 +388,6 @@ async function main(): Promise<void> {
 
     results.push({
       narrator,
-      audience,
       voiceId: voice.voice_id,
       url: publicUrl,
       narration: narrationText,
@@ -389,12 +404,12 @@ async function main(): Promise<void> {
 
   // Final report
   console.log('═══════════════════════════════════════════════════════════════════');
-  console.log('  Audience-expansion spot-check results');
+  console.log('  Narrator-expansion spot-check results (Track C)');
   console.log('═══════════════════════════════════════════════════════════════════');
   console.log('');
   for (let i = 0; i < results.length; i++) {
     const r = results[i]!;
-    console.log(`── ${r.narrator} / ${r.audience} ──`);
+    console.log(`── ${r.narrator} ──`);
     console.log(`  voice:     ${r.voiceId}`);
     console.log(`  audio_url: ${r.url}`);
     console.log(`  duration:  ${(r.durationMs / 1000).toFixed(1)}s`);

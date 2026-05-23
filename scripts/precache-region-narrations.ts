@@ -13,15 +13,18 @@
  *
  * Run:
  *   cd scripts
- *   npx tsx precache-region-narrations.ts                # dry-run (default)
- *   npx tsx precache-region-narrations.ts --live         # actually generate
- *   npx tsx precache-region-narrations.ts --audience family  # filter (default: family only)
+ *   npx tsx precache-region-narrations.ts                                     # dry-run (default)
+ *   npx tsx precache-region-narrations.ts --live                              # actually generate
+ *   npx tsx precache-region-narrations.ts --narrator-slug=narrator_a          # filter (default: narrator_a)
  *   npx tsx precache-region-narrations.ts --regions Sierra\ Nevada,Mono\ Basin  # subset by name
  *
- * Audience filter:
- *   --audience <list>  Comma-separated audience modes to include.
- *                      Default: family (per curator scope for the initial run;
- *                      kids/unfiltered/local generated in a follow-up turn).
+ * Narrator filter:
+ *   --narrator-slug <list>  Comma-separated narrator slugs to include.
+ *                           Default: narrator_a (per curator scope for the
+ *                           initial run; narrator_b follows in a separate run).
+ *                           Migration Batch 2 (Track C, 2026-05-22) renamed
+ *                           the prior `--audience` flag (audience-mode collapsed
+ *                           into narrator_slug per addendum §5).
  *
  * Cost-logging discipline (per CLAUDE.md "Three audit / display quirks" §3):
  *   Each Claude + TTS call is logged to llm_calls IMMEDIATELY after the
@@ -91,22 +94,22 @@ const STORAGE_BUCKET = 'narration-audio';
 // ── Arg parsing ────────────────────────────────────────────────────────────
 interface Args {
   live: boolean;
-  audiences: string[];
+  narratorSlugs: string[];
   regionNames: string[] | null;
 }
 
 function parseArgs(): Args {
   const argv = process.argv.slice(2);
   const live = argv.includes('--live');
-  const audFlag = argv.find(a => a.startsWith('--audience='));
-  const audiences = audFlag
-    ? audFlag.slice('--audience='.length).split(',').map(s => s.trim()).filter(Boolean)
-    : ['family'];
+  const nsFlag = argv.find(a => a.startsWith('--narrator-slug='));
+  const narratorSlugs = nsFlag
+    ? nsFlag.slice('--narrator-slug='.length).split(',').map(s => s.trim()).filter(Boolean)
+    : ['narrator_a'];
   const regFlag = argv.find(a => a.startsWith('--regions='));
   const regionNames = regFlag
     ? regFlag.slice('--regions='.length).split(',').map(s => s.trim()).filter(Boolean)
     : null;
-  return { live, audiences, regionNames };
+  return { live, narratorSlugs, regionNames };
 }
 
 // ── Types ──────────────────────────────────────────────────────────────────
@@ -119,18 +122,16 @@ interface RegionRow {
 }
 
 interface VoiceConfigRow {
-  mode: string;
+  // Migration Batch 2 (Track C, 2026-05-22): `mode` (audience-mode) dropped
+  // by Track D migration 20260522000010. narrator_slug is now the canonical
+  // identifier.
   narrator_slug: string;
   voice_id: string;
   voice_settings: { speakingRate?: number; pitch?: number; volumeGainDb?: number };
 }
 
-interface RegionTemplate {
-  systemPrompt: string;
-  buildUserPrompt: (region: { name: string; display_name: string | null; description: string }) => string;
-  narratorSlug: string;
-  audienceMode: string;
-}
+// Region prompt template returns an Anthropic Messages array post-Track-C.
+type RegionMessages = Array<{ role: 'system' | 'user'; content: string }>;
 
 interface PerCallStats {
   haikuCost: number;
@@ -169,7 +170,7 @@ async function main(): Promise<void> {
 
   console.log('=== Region narration precache ===');
   console.log(`  Mode: ${isDryRun ? 'DRY-RUN (no Claude/TTS, no Storage, no DB writes)' : 'LIVE'}`);
-  console.log(`  Audience filter: ${args.audiences.join(', ')}`);
+  console.log(`  Narrator filter: ${args.narratorSlugs.join(', ')}`);
   if (args.regionNames) console.log(`  Region filter: ${args.regionNames.join(', ')}`);
   console.log('');
 
@@ -186,26 +187,31 @@ async function main(): Promise<void> {
     process.env['SUPABASE_SERVICE_ROLE_KEY']!,
   );
 
-  // 1. Load region prompt templates
-  const { TEMPLATES, pickRegionPrompt } = require(REGION_TEMPLATES_PATH) as {
-    TEMPLATES: Record<string, Record<string, RegionTemplate>>;
-    pickRegionPrompt: (n: string, a: string) => RegionTemplate;
+  // 1. Load region prompt templates (Batch 2 narrator-keyed registry)
+  const { pickRegionPrompt } = require(REGION_TEMPLATES_PATH) as {
+    pickRegionPrompt: (
+      narratorSlug: string,
+      region: any,
+      depth: string,
+      sources: Array<{ type: string; text: string }>,
+    ) => RegionMessages;
   };
-  console.log(`  Loaded ${Object.values(TEMPLATES).flatMap(o => Object.keys(o)).length} region templates`);
+  console.log(`  Loaded 2 region templates (narrator_a, narrator_b)`);
 
-  // 2. Load active voice_configs filtered to requested audiences
+  // 2. Load active voice_configs filtered to requested narrators
+  // Migration Batch 2 (Track C): query by narrator_slug, not audience_mode.
   const { data: voices, error: vcErr } = await supabase
     .from('voice_configs')
-    .select('mode, narrator_slug, voice_id, voice_settings')
+    .select('narrator_slug, voice_id, voice_settings')
     .eq('is_active', true)
-    .in('mode', args.audiences);
+    .in('narrator_slug', args.narratorSlugs);
   if (vcErr) fail(`voice_configs query: ${vcErr.message}`);
-  if (!voices || voices.length === 0) fail(`no active voice_configs rows for audiences=${args.audiences.join(',')}`);
+  if (!voices || voices.length === 0) fail(`no active voice_configs rows for narrator_slugs=${args.narratorSlugs.join(',')}`);
 
   console.log(`  Active voice_configs rows in scope: ${voices.length}`);
   for (const v of voices as VoiceConfigRow[]) {
     const rate = v.voice_settings?.speakingRate ?? 1.0;
-    console.log(`    ${v.mode.padEnd(11)} ${v.narrator_slug.padEnd(11)} ${v.voice_id.padEnd(28)} rate=${rate}`);
+    console.log(`    ${v.narrator_slug.padEnd(11)} ${v.voice_id.padEnd(28)} rate=${rate}`);
   }
 
   // 3. Load regions (filter by name if requested)
@@ -239,12 +245,12 @@ async function main(): Promise<void> {
   console.log(`  Total planned generations: ${planned.length} (= ${regions.length} regions × ${voices.length} voices)`);
 
   // 5. Skip-if-ready: query existing narration_audio for these tuples.
-  // audience_mode added to the keying tuple 2026-05-19 (H1.6.2) — without it
-  // the skip-if-ready bucket would collide across audiences sharing a
-  // narrator_slug (e.g. kids + local both at narrator_a).
+  // Migration Batch 2 (Track C, 2026-05-22): keyed by narrator_slug alone;
+  // audience_mode dropped from the skip-if-ready tuple (post-collapse the
+  // narrator_slug is 1:1 with audience).
   const { data: existing, error: exErr } = await supabase
     .from('narration_audio')
-    .select('region_id, narrator_slug, mode, audience_mode')
+    .select('region_id, narrator_slug, mode')
     .in('region_id', regions.map((r: RegionRow) => r.id))
     .eq('mode', TRIP_MODE)
     .eq('depth', DEPTH)
@@ -253,10 +259,10 @@ async function main(): Promise<void> {
 
   const existingSet = new Set<string>();
   for (const e of existing || []) {
-    existingSet.add(`${e.region_id}|${e.narrator_slug}|${e.audience_mode}`);
+    existingSet.add(`${e.region_id}|${e.narrator_slug}`);
   }
   const toGenerate = planned.filter(
-    p => !existingSet.has(`${p.region.id}|${p.voice.narrator_slug}|${p.voice.mode}`)
+    p => !existingSet.has(`${p.region.id}|${p.voice.narrator_slug}`)
   );
   const skipped = planned.length - toGenerate.length;
   console.log(`  Already cached (skip-if-ready): ${skipped}`);
@@ -310,8 +316,18 @@ async function main(): Promise<void> {
     process.stdout.write(`  ${label} `);
 
     try {
-      const template = pickRegionPrompt(item.voice.narrator_slug, item.voice.mode);
-      const userPrompt = template.buildUserPrompt(item.region);
+      // Migration Batch 2 (Track C, 2026-05-22): synthesize sources array
+      // from the region row for the new narrator-keyed template
+      // (narratorSlug, region, depth, sources) signature.
+      const sources: Array<{ type: string; text: string }> = [];
+      if (item.region.description) sources.push({ type: 'description', text: item.region.description });
+      if (item.region.display_name && item.region.display_name !== item.region.name) {
+        sources.push({ type: 'alias', text: `Also known as: ${item.region.display_name}` });
+      }
+
+      const messages = pickRegionPrompt(item.voice.narrator_slug, item.region, DEPTH, sources);
+      const systemPrompt = messages.find(m => m.role === 'system')?.content ?? '';
+      const userPrompt = messages.find(m => m.role === 'user')?.content ?? '';
 
       // a) Haiku — log cost immediately on return, before TTS
       const hr = await fetch('https://api.anthropic.com/v1/messages', {
@@ -324,7 +340,7 @@ async function main(): Promise<void> {
         body: JSON.stringify({
           model: HAIKU_MODEL,
           max_tokens: HAIKU_MAX_TOKENS,
-          system: template.systemPrompt,
+          system: systemPrompt,
           messages: [{ role: 'user', content: userPrompt }],
         }),
       });
@@ -359,16 +375,18 @@ async function main(): Promise<void> {
       if (!narrationText) throw new Error('Haiku returned empty narration');
 
       // b) Insert pending narration_audio row.
-      // audience_mode added 2026-05-19 (H1.6.2). For regions, audience_mode is
-      // sourced from the voice_config.mode (which is the audience-mode column
-      // per voice_configs schema, NOT the trip-mode that lives on narration_audio).
+      // Migration Batch 2 (Track C, 2026-05-22): audience_mode is written
+      // as NULL — narrator_slug fully disambiguates rows post-collapse.
+      // The column stays in the schema (defer-drop with the audience-mode
+      // cleanup in a future batch); the na_unique constraint's NULLS NOT
+      // DISTINCT semantics treat NULL as a stable value.
       const { data: pendingRow, error: insErr } = await supabase
         .from('narration_audio')
         .upsert({
           region_id: item.region.id,
           poi_id: null,
           narrator_slug: item.voice.narrator_slug,
-          audience_mode: item.voice.mode,
+          audience_mode: null,
           depth: DEPTH,
           mode: TRIP_MODE,
           audio_url: null,

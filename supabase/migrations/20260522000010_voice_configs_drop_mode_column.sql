@@ -1,0 +1,82 @@
+-- 20260522000010_voice_configs_drop_mode_column.sql
+--
+-- Migration Batch 2 / Track D / Migration 10 —
+--   public.voice_configs: drop the legacy `mode` (audience-mode) column.
+--
+-- Pre-flight (Track C completion):
+--   * useTTS.ts now queries voice_configs by narrator_slug (no .eq('mode',...)).
+--   * scripts/precache-popular-routes.ts — fetchActiveVoiceForNarrator()
+--     queries by narrator_slug only.
+--   * scripts/precache-curated-pois.ts — voice lookup keyed by narrator_slug.
+--   * scripts/precache-top-tier-pois.ts — same.
+--   * scripts/spot-check-3-pois.ts — same.
+--   * scripts/spot-check-audience-expansion.ts — same.
+--   * scripts/test-prosody-render.ts — same.
+--   * scripts/precache-region-narrations.ts — same.
+--   * scripts/regen-region-synopses-direct.ts — does not query voice_configs;
+--     voice picks are hardcoded VOICES[] entries by narrator_slug.
+--   * server/routes/narration.ts — Batch 1 already keys voice lookup by
+--     narrator_slug (see Migration 1+2 narrator-collapse work).
+--
+-- Confirmed via repo-wide grep: no live SELECT / INSERT / UPDATE / WHERE /
+-- CHECK statement references voice_configs.mode after Track C lands.
+-- All surviving textual hits are migration comments documenting Track C's
+-- removal of the column.
+--
+-- Dependents that should fail loudly / auto-drop with the column:
+--   * `voice_configs_mode_check` (4-value audience CHECK) — column-bound;
+--     PostgreSQL auto-drops with DROP COLUMN RESTRICT.
+--   * idx_voice_configs_active_mode (legacy partial unique on
+--     (mode) WHERE is_active=true) — already dropped by 20260514000012;
+--     no row in pg_indexes.
+--   * idx_voice_configs_active_mode_narrator — already dropped by Batch 1
+--     Migration 2 (20260522000002 line 78) when the addressability key
+--     swapped to (narrator_slug, voice_slot).
+--
+-- DROP RESTRICT (no CASCADE) per CLAUDE.md "Destructive-op posture" — any
+-- unexpected dependent we missed in pre-flight should fail migration
+-- rather than silently nuke something downstream.
+--
+-- Per CLAUDE.md migration conventions:
+--   * Schema-qualified table names
+--   * BEGIN/COMMIT wrapped
+--   * Trailing verification query
+
+BEGIN;
+
+ALTER TABLE public.voice_configs
+  DROP COLUMN mode RESTRICT;
+
+COMMIT;
+
+-- ============================================================
+-- Verification (run after COMMIT):
+-- ============================================================
+-- (v1) Column gone:
+--   SELECT column_name
+--     FROM information_schema.columns
+--    WHERE table_schema = 'public'
+--      AND table_name   = 'voice_configs'
+--      AND column_name  = 'mode';
+--   -- Expect: zero rows.
+--
+-- (v2) voice_configs_mode_check CHECK constraint dropped with the column:
+--   SELECT conname FROM pg_constraint
+--    WHERE conrelid = 'public.voice_configs'::regclass
+--      AND conname LIKE '%mode_check%';
+--   -- Expect: zero rows.
+--
+-- (v3) Active partial unique index is still
+--      uq_voice_configs_narrator_slot_active per Batch 1 Migration 2:
+--   SELECT indexname, indexdef FROM pg_indexes
+--    WHERE tablename = 'voice_configs' AND schemaname = 'public'
+--      AND indexname = 'uq_voice_configs_narrator_slot_active';
+--   -- Expect: one row, indexdef references (narrator_slug, voice_slot)
+--   --         WHERE is_active = true.
+--
+-- (v4) Active rows still surface correctly by narrator_slug:
+--   SELECT narrator_slug, voice_slot, voice_id
+--     FROM public.voice_configs
+--    WHERE is_active = true
+--    ORDER BY narrator_slug, voice_slot;
+--   -- Expect 4 rows (2 narrators × 2 slots).

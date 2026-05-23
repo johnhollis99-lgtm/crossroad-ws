@@ -41,6 +41,8 @@ admin/out/
 # ── Scripts: caches and generated audio ──────────────────────────────────────
 scripts/poi-import/cache/
 scripts/narrative-extraction/cache/
+scripts/region-import/cache/
+scripts/cache/
 scripts/voice-audition/output/
 scripts/audition-output/
 scripts/narration-preview/output/

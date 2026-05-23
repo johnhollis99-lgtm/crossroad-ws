@@ -13,8 +13,13 @@
  * other vestiges).
  */
 
-export { AudienceMark }       from './AudienceMark';
-export type { AudienceMarkProps, AudienceMarkType, AudienceMarkSize, AudienceMarkTone } from './AudienceMark';
+// Migration Batch 2 (Track C, 2026-05-22): AudienceMark retired and
+// replaced by NarratorMark — addendum §5 collapses the 4-glyph audience
+// taxonomy (family/kids/unfiltered/local) to the 2-narrator model
+// (narrator_a/narrator_b). NarratorMark defaults to letter monograms
+// ("W"/"S") until the J1b 2-card picker lands richer iconography.
+export { NarratorMark }       from './NarratorMark';
+export type { NarratorMarkProps, NarratorMarkType, NarratorMarkSize, NarratorMarkTone } from './NarratorMark';
 
 export { Card }               from './Card';
 export type { CardProps, CardVariant, CardRadius } from './Card';

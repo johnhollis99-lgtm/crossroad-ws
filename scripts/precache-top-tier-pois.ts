@@ -67,14 +67,19 @@ function loadEnv(): void {
 loadEnv();
 
 // ── Config ─────────────────────────────────────────────────────────────────
-const NARRATOR_SLUG = 'narrator_b';
-const AUDIENCE_MODE = 'family';
+// Migration Batch 2 (Track C, 2026-05-22): AUDIENCE_MODE retired in favor
+// of narrator_slug + voice_slot per addendum §5 / Batch 1 narrator-keyed
+// registry. Storage filename follows `{narrator_slug}_v{voice_slot}_{depth}`;
+// voice_slot pinned to 1 here for determinism until the voice-slot picker
+// UI lands.
+const NARRATOR_SLUG = 'narrator_a';
+const VOICE_SLOT = 1;
 const DEPTH = 'standard';
 const TRIP_MODE = 'driving';
 const SCORE_CUTOFF = 80;
 const STORAGE_BUCKET = 'narration-audio';
 const STORAGE_PREFIX = 'pois';
-const FILE_SUFFIX = `${NARRATOR_SLUG}_${AUDIENCE_MODE}_${DEPTH}`;
+const FILE_SUFFIX = `${NARRATOR_SLUG}_v${VOICE_SLOT}_${DEPTH}`;
 const INTER_CALL_PAUSE_MS = 600;
 const HAIKU_MODEL = 'claude-haiku-4-5-20251001';
 const HAIKU_MAX_TOKENS = 900;
@@ -157,28 +162,29 @@ async function main(): Promise<void> {
     { auth: { persistSession: false } },
   );
 
-  // Template lookup. Signature changed in H1.5.1 (2026-05-19) — flat
-  // audience-keyed registry; narrator_slug derivable from template.narratorSlug
-  // (NARRATOR_SLUG const kept for Storage-path filename construction).
+  // Template lookup — Batch 1 narrator-keyed registry. Signature is
+  // (narratorSlug, depth, poi, sources) and returns an Anthropic messages
+  // array; the prior {systemPrompt, buildUserPrompt} indirection is gone.
   const { pickPoiPrompt } = require(POI_TEMPLATES_PATH) as {
-    pickPoiPrompt: (a: string, d: string) => {
-      systemPrompt: string;
-      buildUserPrompt: (poi: any) => string;
-      narratorSlug: string;
-    };
+    pickPoiPrompt: (
+      narratorSlug: string,
+      depth: string,
+      poi: any,
+      sources: Array<{ type: string; text: string }>,
+    ) => Array<{ role: 'system' | 'user'; content: string }>;
   };
-  const template = pickPoiPrompt(AUDIENCE_MODE, DEPTH);
 
-  // Voice config lookup
+  // Voice config lookup — Batch 2 / Track C: narrator_slug is now the
+  // canonical key; voice_configs.mode column is dropped by Track D
+  // migration 20260522000010.
   const { data: voiceRows, error: vcErr } = await supabase
     .from('voice_configs')
     .select('voice_id, voice_settings')
-    .eq('mode', AUDIENCE_MODE)
     .eq('narrator_slug', NARRATOR_SLUG)
     .eq('is_active', true)
     .limit(1);
   if (vcErr) fail(`voice_configs query: ${vcErr.message}`);
-  if (!voiceRows || voiceRows.length === 0) fail(`no active voice_configs row for ${NARRATOR_SLUG} × ${AUDIENCE_MODE}`);
+  if (!voiceRows || voiceRows.length === 0) fail(`no active voice_configs row for ${NARRATOR_SLUG}`);
   const voice = voiceRows[0] as VoiceRow;
   console.log(`  Voice: ${voice.voice_id} @ rate ${voice.voice_settings?.speakingRate ?? 1.0}`);
 
@@ -286,13 +292,25 @@ async function main(): Promise<void> {
     process.stdout.write(`  ${label} `);
 
     try {
-      const userPrompt = template.buildUserPrompt({
+      // Migration Batch 2 (Track C, 2026-05-22): synthesize sources array
+      // from the existing description / citation fields for the Batch-1
+      // narrator-keyed template (poi, depth, sources) schema.
+      const sources: Array<{ type: string; text: string }> = [];
+      if (poi.description) sources.push({ type: 'description', text: poi.description });
+      if (poi.source_citation) sources.push({ type: 'citation', text: poi.source_citation });
+      if (poi.tags?.length) sources.push({ type: 'tags', text: poi.tags.join(', ') });
+
+      const messages = pickPoiPrompt(NARRATOR_SLUG, DEPTH, {
         name: poi.name,
-        description: poi.description,
+        category_slug: poi.category_slug,
         category_display: poi.category_display,
-        tags: poi.tags,
-        source_citation: poi.source_citation,
-      });
+        significance_score: poi.significance_score,
+        location_description: null,
+        signature_hook: null,
+        iconic_local: false,
+      }, sources);
+      const systemPrompt = messages.find(m => m.role === 'system')?.content ?? '';
+      const userPrompt = messages.find(m => m.role === 'user')?.content ?? '';
 
       // Haiku
       const hr = await fetch('https://api.anthropic.com/v1/messages', {
@@ -305,7 +323,7 @@ async function main(): Promise<void> {
         body: JSON.stringify({
           model: HAIKU_MODEL,
           max_tokens: HAIKU_MAX_TOKENS,
-          system: template.systemPrompt,
+          system: systemPrompt,
           messages: [{ role: 'user', content: userPrompt }],
         }),
       });

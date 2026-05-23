@@ -1,32 +1,36 @@
 'use strict';
 
 /**
- * Production narration route — Phase 06 rewrite (Move 3b.2, 2026-05-20).
+ * Production narration route — Migration Batch 1 rewrite (2026-05-22).
  *
  * POST /api/narration/generate
- *   Body: { poi_id, mode, depth, audience_mode? } + ignored legacy fields
+ *   Body: { poi_id, mode, depth, narrator_slug? } + ignored legacy fields
  *   Returns: { audio_url }
  *
  * POST /api/narration/preview
  *   Body: { text, voice_id }
  *   Returns: { audio_url }
  *
- * /generate pipeline (matches the curator-approved precache pattern):
- *   POI fetch → voice_configs lookup (axis-fixed: audience_mode + narrator_slug)
- *     → pickPoiPrompt(audience, depth)           — server/prompts/pois registry
- *     → Haiku (claude-haiku-4-5-20251001), JSON parse with single retry
+ * /generate pipeline:
+ *   POI fetch → voice_configs lookup by (narrator_slug, is_active) — random
+ *               slot pick when both slots are active for the narrator
+ *     → pickPoiPrompt(narratorSlug, depth, poi, sources) — server/prompts/pois
+ *       (narrator-keyed registry; returns Anthropic messages array directly)
+ *     → Haiku (claude-haiku-4-5-20251001), plain-prose output (no JSON parse)
  *     → ssmlize() (server/lib/ssml.ts)
  *     → generateNarration() via scripts/lib/tts/ provider abstraction
  *         (handles SSML auto-detection, HD→Neural2 fallback, retry, TTS cost logging)
- *     → Storage upload at pois/{poi_id}/{narrator_slug}_{audience_mode}_{depth}.opus
+ *     → Storage upload at pois/{poi_id}/{narrator_slug}_{voice_slot}_{depth}.opus
  *     → narration_audio 2-phase write (pending → ready, or → failed on exception)
+ *         (audience_mode written as NULL — collapsed per Migration 3)
  *     → llm_calls per-Claude-attempt + per-ssml-skip + per-ssml-fallback marker
  *         (TTS rows logged automatically by the abstraction; route does NOT log them)
- *     → pois.narration_cache jsonb merge with new key shape {mode}-{depth}-{audience_mode}
+ *     → pois.narration_cache jsonb merge with key shape {mode}-{depth}-{narrator_slug}
  *
- * /preview is unchanged from the pre-rewrite route — direct Google TTS client,
- * no registry, no narration_audio row, no llm_calls (preview is treated as
- * non-billable user-facing voice audition surface).
+ * PROMPT_VERSION bumped 2→3 to mark the registry shape change.
+ *
+ * /preview is unchanged — direct Google TTS client, no registry, no
+ * narration_audio row, no llm_calls.
  */
 
 import express, { Request, Response, Router } from 'express';
@@ -37,13 +41,12 @@ import { registerProvider, generateNarration } from '../../scripts/lib/tts/index
 import { GoogleTTSProvider } from '../../scripts/lib/tts/providers/google.js';
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const { pickPoiPrompt } = require('../prompts/pois') as {
-  pickPoiPrompt: (audienceMode: string, depth: string) => {
-    systemPrompt: string;
-    buildUserPrompt: (poi: Record<string, unknown>) => string;
-    narratorSlug: string;
-    audienceMode?: string;
-    depth?: string;
-  };
+  pickPoiPrompt: (
+    narratorSlug: string,
+    depth: string,
+    poi: Record<string, unknown>,
+    sources: Array<{ type: string; text: string }>,
+  ) => Array<{ role: 'system' | 'user' | 'assistant'; content: string }>;
 };
 
 const router: Router = express.Router();
@@ -55,14 +58,15 @@ registerProvider(new GoogleTTSProvider());
 const ANTHROPIC_BASE = 'https://api.anthropic.com/v1';
 const STORAGE_BUCKET = 'narration-audio';
 const STORAGE_PREFIX = 'pois';
-const PROMPT_VERSION = 2; // bumped from 1 in Move 3b.2 — registry-shaped narrations
+const PROMPT_VERSION = 3; // bumped 2→3 in Migration Batch 1 — narrator-keyed registry
 const HAIKU_MODEL = 'claude-haiku-4-5-20251001';
 const HAIKU_MAX_TOKENS = 900;
 const HAIKU_IN_PER_TOK = 1.0 / 1_000_000;
 const HAIKU_OUT_PER_TOK = 5.0 / 1_000_000;
 
-const ALLOWED_AUDIENCES = ['family', 'kids', 'unfiltered', 'local'] as const;
-type AudienceMode = typeof ALLOWED_AUDIENCES[number];
+const ALLOWED_NARRATORS = ['narrator_a', 'narrator_b'] as const;
+type NarratorSlug = typeof ALLOWED_NARRATORS[number];
+const DEFAULT_NARRATOR_SLUG: NarratorSlug = 'narrator_a'; // Default per soul-doctrine bias of the catalog (most narrating-eligible POIs are soul-tier).
 const ALLOWED_MODES = ['driving', 'hiking', 'city'] as const;
 type TripMode = typeof ALLOWED_MODES[number];
 const ALLOWED_DEPTHS = ['standard'] as const;
@@ -73,16 +77,21 @@ interface PoiForPrompt {
   id: string;
   name: string;
   description: string | null;
+  category_slug: string | null;
   category_display: string | null;
   tags: string[];
   source_citation: string | null;
   off_route_landmark_hint: string | null;
+  significance_score: number | null;
+  signature_hook: string | null;
+  iconic_local: boolean;
 }
 
 interface VoiceConfig {
   voiceId: string;
   speakingRate: number;
   narratorSlug: string;
+  voiceSlot: number;
 }
 
 // ── Google TTS client (lazy init — only used by /preview now) ───────────────
@@ -92,24 +101,30 @@ function getTTSClient(): TextToSpeechClient {
   return ttsClient;
 }
 
-// ── Voice config lookup (drift-5.41 axis fix: audience_mode + narrator_slug) ──
-async function lookupVoiceConfig(audienceMode: AudienceMode): Promise<VoiceConfig> {
+// ── Voice config lookup (narrator-keyed; random slot pick if both active) ──
+// Migration Batch 1: dispatch axis changed from audience_mode to narrator_slug.
+// voice_configs may carry 1 or 2 active rows per narrator (slot 1 + slot 2);
+// when both are active we pick at random — slot semantics are equivalent at
+// the runtime level (curator-controlled variant, not audience-targeted).
+async function lookupVoiceConfig(narratorSlug: NarratorSlug): Promise<VoiceConfig> {
   const { data, error } = await supabase
     .from('voice_configs')
-    .select('voice_id, narrator_slug, voice_settings')
-    .eq('mode', audienceMode)
-    .eq('is_active', true)
-    .single();
-  if (error || !data) {
+    .select('voice_id, narrator_slug, voice_slot, voice_settings')
+    .eq('narrator_slug', narratorSlug)
+    .eq('is_active', true);
+  if (error || !data || data.length === 0) {
     throw new Error(
-      `[narration] voice_configs has no active row for audience '${audienceMode}' — run pnpm audition --commit to set one`,
+      `[narration] voice_configs has no active row for narrator '${narratorSlug}' — run pnpm audition --commit to set one`,
     );
   }
-  const settings = (data.voice_settings as { speakingRate?: number } | null) ?? {};
+  // Random pick across active slots (1 or 2 rows post-Migration-2).
+  const picked = data[Math.floor(Math.random() * data.length)];
+  const settings = (picked.voice_settings as { speakingRate?: number } | null) ?? {};
   return {
-    voiceId: data.voice_id as string,
+    voiceId: picked.voice_id as string,
     speakingRate: settings.speakingRate ?? 1.0,
-    narratorSlug: data.narrator_slug as string,
+    narratorSlug: picked.narrator_slug as string,
+    voiceSlot: (picked.voice_slot as number | null) ?? 1,
   };
 }
 
@@ -119,7 +134,8 @@ async function fetchPoiForNarration(poiId: string): Promise<PoiForPrompt> {
     .from('pois')
     .select(`
       id, name, description, tags, source_citation,
-      off_route_landmark_hint, category_id,
+      off_route_landmark_hint, significance_score,
+      signature_hook, iconic_local, category_id,
       poi_categories!inner(slug, display_name)
     `)
     .eq('id', poiId)
@@ -128,124 +144,124 @@ async function fetchPoiForNarration(poiId: string): Promise<PoiForPrompt> {
   if (error || !data) {
     throw new Error(`POI not found or merged: ${poiId}`);
   }
-  const cat = (data as { poi_categories?: { display_name?: string } }).poi_categories;
+  const cat = (data as { poi_categories?: { slug?: string; display_name?: string } }).poi_categories;
   return {
     id: data.id as string,
     name: data.name as string,
     description: (data.description as string | null) ?? null,
+    category_slug: cat?.slug ?? null,
     category_display: cat?.display_name ?? null,
     tags: (data.tags as string[] | null) ?? [],
     source_citation: (data.source_citation as string | null) ?? null,
     off_route_landmark_hint: (data.off_route_landmark_hint as string | null) ?? null,
+    significance_score: (data.significance_score as number | null) ?? null,
+    signature_hook: (data.signature_hook as string | null) ?? null,
+    iconic_local: Boolean(data.iconic_local),
   };
 }
 
-// ── Haiku narration generation (JSON output + single parse-retry) ───────────
+// ── Sources derivation for the new registry ─────────────────────────────────
+// Migration Batch 1: pickPoiPrompt now takes a structured `sources` array
+// (shape: [{type, text}]). The curator workflow will refine source aggregation
+// in Batch 2; v1 derives a minimal single-item source from the POI's existing
+// description + source_citation. Empty array is the safe fallback when neither
+// is set — the templates handle the empty-sources case gracefully (the mapped
+// join just produces an empty string).
+function buildSourcesForPrompt(poi: PoiForPrompt): Array<{ type: string; text: string }> {
+  const sources: Array<{ type: string; text: string }> = [];
+  if (poi.description) {
+    sources.push({
+      type: poi.source_citation ? 'description' : 'description (no citation)',
+      text: poi.description,
+    });
+  }
+  if (poi.source_citation && !poi.description) {
+    sources.push({ type: 'citation', text: poi.source_citation });
+  }
+  return sources;
+}
+
+// ── Haiku narration generation (plain prose — registry returns messages array) ─
+// Migration Batch 1: the JSON parse-retry loop is gone. Templates output
+// plain prose (per their OUTPUT directive); we read content[0].text (or the
+// concatenated text-type content blocks) directly as the narration string.
 async function generateNarrationViaHaiku(
-  template: ReturnType<typeof pickPoiPrompt>,
-  poi: PoiForPrompt,
+  messages: ReturnType<typeof pickPoiPrompt>,
   pendingId: string,
-): Promise<{ narrationText: string; haikuCost: number; retryUsed: boolean }> {
+): Promise<{ narrationText: string; haikuCost: number; userPromptLen: number }> {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) throw new Error('ANTHROPIC_API_KEY not set');
 
-  const userPrompt = template.buildUserPrompt({
-    name: poi.name,
-    description: poi.description,
-    category_display: poi.category_display,
-    tags: poi.tags,
-    source_citation: poi.source_citation,
-    off_route_landmark_hint: poi.off_route_landmark_hint,
-  });
-
-  let narrationText: string | null = null;
-  let haikuCost = 0;
-  let retryUsed = false;
-  let lastParseErr: string | null = null;
-
-  for (let attempt = 1; attempt <= 2; attempt++) {
-    const systemForAttempt =
-      attempt === 1
-        ? template.systemPrompt
-        : template.systemPrompt +
-          '\n\nRETRY NOTE: The previous response could not be parsed as JSON. ' +
-          'Return ONLY a single valid JSON object exactly matching the schema {"narration": "...", "key_themes": [...]}. ' +
-          'No prose outside the JSON, no markdown fences, no commentary. ' +
-          'Escape any embedded newlines or quotes inside the narration string.';
-
-    const res = await fetch(`${ANTHROPIC_BASE}/messages`, {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        'x-api-key': apiKey,
-        'anthropic-version': '2023-06-01',
-      },
-      body: JSON.stringify({
-        model: HAIKU_MODEL,
-        max_tokens: HAIKU_MAX_TOKENS,
-        system: systemForAttempt,
-        messages: [{ role: 'user', content: userPrompt }],
-      }),
-    });
-    if (!res.ok) {
-      const body = await res.text().catch(() => '');
-      throw new Error(`Haiku HTTP ${res.status} (attempt ${attempt}): ${body.slice(0, 200)}`);
-    }
-    const json = (await res.json()) as {
-      content?: Array<{ type: string; text?: string }>;
-      usage?: { input_tokens?: number; output_tokens?: number };
-    };
-    const inTok = json.usage?.input_tokens ?? 0;
-    const outTok = json.usage?.output_tokens ?? 0;
-    const attemptCost = +(inTok * HAIKU_IN_PER_TOK + outTok * HAIKU_OUT_PER_TOK).toFixed(6);
-    haikuCost += attemptCost;
-
-    logCost({
-      callType: 'claude',
-      provider: 'anthropic',
-      modelOrVoice: attempt === 1 ? HAIKU_MODEL : `${HAIKU_MODEL}__parse_retry`,
-      inputChars: userPrompt.length,
-      inputTokens: inTok,
-      outputTokens: outTok,
-      costUsd: attemptCost,
-      relatedId: pendingId,
-    }).catch(err => console.error('[narration] logCost(claude) failed:', err));
-
-    const raw = (json.content ?? [])
-      .filter(b => b.type === 'text')
-      .map(b => b.text ?? '')
-      .join('')
-      .trim();
-    const cleaned = raw.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
-    try {
-      const parsed = JSON.parse(cleaned) as { narration?: string };
-      if (!parsed.narration) {
-        lastParseErr = 'empty narration field';
-        continue;
-      }
-      narrationText = parsed.narration;
-      if (attempt === 2) retryUsed = true;
-      break;
-    } catch (e) {
-      lastParseErr = e instanceof Error ? e.message : String(e);
-    }
+  // Split the system message off the front (Anthropic API takes `system` as
+  // a top-level string param, not as a role-tagged messages entry).
+  if (messages.length === 0 || messages[0].role !== 'system') {
+    throw new Error('pickPoiPrompt must return a messages array with role:system at index 0');
   }
+  const systemPrompt = messages[0].content;
+  const conversation = messages.slice(1);
+  const userPromptLen = conversation.map(m => m.content.length).reduce((a, b) => a + b, 0);
+
+  const res = await fetch(`${ANTHROPIC_BASE}/messages`, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      'x-api-key': apiKey,
+      'anthropic-version': '2023-06-01',
+    },
+    body: JSON.stringify({
+      model: HAIKU_MODEL,
+      max_tokens: HAIKU_MAX_TOKENS,
+      system: systemPrompt,
+      messages: conversation,
+    }),
+  });
+  if (!res.ok) {
+    const body = await res.text().catch(() => '');
+    throw new Error(`Haiku HTTP ${res.status}: ${body.slice(0, 200)}`);
+  }
+  const json = (await res.json()) as {
+    content?: Array<{ type: string; text?: string }>;
+    usage?: { input_tokens?: number; output_tokens?: number };
+  };
+  const inTok = json.usage?.input_tokens ?? 0;
+  const outTok = json.usage?.output_tokens ?? 0;
+  const haikuCost = +(inTok * HAIKU_IN_PER_TOK + outTok * HAIKU_OUT_PER_TOK).toFixed(6);
+
+  logCost({
+    callType: 'claude',
+    provider: 'anthropic',
+    modelOrVoice: HAIKU_MODEL,
+    inputChars: userPromptLen,
+    inputTokens: inTok,
+    outputTokens: outTok,
+    costUsd: haikuCost,
+    relatedId: pendingId,
+  }).catch(err => console.error('[narration] logCost(claude) failed:', err));
+
+  const narrationText = (json.content ?? [])
+    .filter(b => b.type === 'text')
+    .map(b => b.text ?? '')
+    .join('')
+    .trim();
 
   if (!narrationText) {
-    throw new Error(`Haiku JSON parse failed after retry: ${lastParseErr ?? 'unknown'}`);
+    throw new Error('Haiku returned empty narration text');
   }
-  return { narrationText, haikuCost, retryUsed };
+  return { narrationText, haikuCost, userPromptLen };
 }
 
 // ── Storage upload ──────────────────────────────────────────────────────────
+// Migration Batch 1: audience_mode dropped from Storage path. New shape is
+// pois/{poi_id}/{narratorSlug}_{voiceSlot}_{depth}.opus, mirroring the new
+// voice_configs (narrator_slug, voice_slot) addressability key.
 async function uploadAudio(
   poiId: string,
   narratorSlug: string,
-  audienceMode: string,
+  voiceSlot: number,
   depth: string,
   audioBuffer: Buffer,
 ): Promise<{ audioUrl: string; storagePath: string }> {
-  const storagePath = `${STORAGE_PREFIX}/${poiId}/${narratorSlug}_${audienceMode}_${depth}.opus`;
+  const storagePath = `${STORAGE_PREFIX}/${poiId}/${narratorSlug}_${voiceSlot}_${depth}.opus`;
   const { error } = await supabase.storage
     .from(STORAGE_BUCKET)
     .upload(storagePath, audioBuffer, {
@@ -258,10 +274,12 @@ async function uploadAudio(
 }
 
 // ── Phase 1: insert pending row before generation begins ────────────────────
+// Migration Batch 1: audience_mode written as NULL. The na_unique constraint
+// is UNIQUE NULLS NOT DISTINCT, so NULL values collide-as-equal under the
+// onConflict shape — one new-schema row per (poi, narrator, depth, mode).
 async function insertNarrationAudioPending(args: {
   poiId: string;
   narratorSlug: string;
-  audienceMode: AudienceMode;
   depth: Depth;
   mode: TripMode;
 }): Promise<string> {
@@ -272,7 +290,7 @@ async function insertNarrationAudioPending(args: {
         poi_id: args.poiId,
         region_id: null,
         narrator_slug: args.narratorSlug,
-        audience_mode: args.audienceMode,
+        audience_mode: null,
         depth: args.depth,
         mode: args.mode,
         audio_url: null,
@@ -313,16 +331,18 @@ async function updateNarrationAudioReady(args: {
 }
 
 // ── pois.narration_cache jsonb merge ─────────────────────────────────────────
-// Cache key shape changed in Move 3b.2: {mode}-{depth}-{audience_mode}.
-// Mobile's buildCacheKey + checkPoiJsonCache use the same shape.
+// Cache key shape (Migration Batch 1): {mode}-{depth}-{narrator_slug}.
+// Audience_mode is no longer a dispatch axis; narrator_slug carries the
+// per-trip variant identity. Mobile's checkPoiJsonCache should match this
+// shape after the Batch 2 mobile refit.
 async function updatePoiNarrationCache(
   poiId: string,
   mode: string,
   depth: string,
-  audienceMode: string,
+  narratorSlug: string,
   audioUrl: string,
 ): Promise<void> {
-  const cacheKey = `${mode}-${depth}-${audienceMode}`;
+  const cacheKey = `${mode}-${depth}-${narratorSlug}`;
   const { error } = await supabase.rpc('update_poi_narration_cache', {
     p_poi_id: poiId,
     p_cache_key: cacheKey,
@@ -368,22 +388,25 @@ async function logCost(record: CostRecord): Promise<void> {
 // ── POST /api/narration/generate ────────────────────────────────────────────
 router.post('/generate', async (req: Request, res: Response) => {
   // Loose validation — unknown fields silently ignored. Deprecated voice_id
-  // tolerated (legacy mobile clients) with a debug log.
+  // and audience_mode tolerated (legacy mobile clients) with a debug log.
   const body = req.body as Record<string, unknown>;
   if (body.voice_id !== undefined) {
     console.debug('[narration] /generate ignoring deprecated voice_id field');
+  }
+  if (body.audience_mode !== undefined) {
+    console.debug('[narration] /generate ignoring deprecated audience_mode field — narrator_slug is the dispatch axis');
   }
 
   const poi_id = body.poi_id as string | undefined;
   const mode = body.mode as string | undefined;
   const depth = body.depth as string | undefined;
-  const audience_mode_raw = (body.audience_mode as string | undefined) ?? 'family';
+  const narrator_slug_raw = (body.narrator_slug as string | undefined) ?? DEFAULT_NARRATOR_SLUG;
 
   if (!poi_id || !mode || !depth) {
     return res.status(400).json({ error: 'poi_id, mode, depth are required' });
   }
-  if (!ALLOWED_AUDIENCES.includes(audience_mode_raw as AudienceMode)) {
-    return res.status(400).json({ error: `audience_mode must be one of ${ALLOWED_AUDIENCES.join(', ')}` });
+  if (!ALLOWED_NARRATORS.includes(narrator_slug_raw as NarratorSlug)) {
+    return res.status(400).json({ error: `narrator_slug must be one of ${ALLOWED_NARRATORS.join(', ')}` });
   }
   if (!ALLOWED_MODES.includes(mode as TripMode)) {
     return res.status(400).json({ error: `mode must be one of ${ALLOWED_MODES.join(', ')}` });
@@ -391,14 +414,14 @@ router.post('/generate', async (req: Request, res: Response) => {
   if (!ALLOWED_DEPTHS.includes(depth as Depth)) {
     return res.status(400).json({ error: `depth must be one of ${ALLOWED_DEPTHS.join(', ')}` });
   }
-  const audience_mode = audience_mode_raw as AudienceMode;
+  const narratorSlug = narrator_slug_raw as NarratorSlug;
   const tripMode = mode as TripMode;
   const narrationDepth = depth as Depth;
 
-  // 1. Voice config (axis-fixed: audience_mode + narrator_slug + is_active)
+  // 1. Voice config (narrator-keyed; random slot pick across active rows)
   let voice: VoiceConfig;
   try {
-    voice = await lookupVoiceConfig(audience_mode);
+    voice = await lookupVoiceConfig(narratorSlug);
   } catch (err) {
     const msg = err instanceof Error ? err.message : 'voice lookup failed';
     return res.status(500).json({ error: msg });
@@ -413,10 +436,21 @@ router.post('/generate', async (req: Request, res: Response) => {
     return res.status(500).json({ error: msg });
   }
 
-  // 3. Template selection (registry — throws on unknown audience/depth)
-  let template: ReturnType<typeof pickPoiPrompt>;
+  // 3. Template selection (registry returns full messages array)
+  // Includes derived sources from POI description + citation; Batch 2 will
+  // refine source aggregation (curator-curated source lists per POI).
+  let messages: ReturnType<typeof pickPoiPrompt>;
   try {
-    template = pickPoiPrompt(audience_mode, narrationDepth);
+    const poiForPrompt = {
+      name: poi.name,
+      category_slug: poi.category_slug ?? 'unknown',
+      location_description: null, // Reserved for Batch 2 (geocoded address etc.)
+      significance_score: poi.significance_score ?? 0,
+      signature_hook: poi.signature_hook,
+      iconic_local: poi.iconic_local,
+    };
+    const sources = buildSourcesForPrompt(poi);
+    messages = pickPoiPrompt(narratorSlug, narrationDepth, poiForPrompt, sources);
   } catch (err) {
     const msg = err instanceof Error ? err.message : 'template lookup failed';
     return res.status(500).json({ error: msg });
@@ -428,7 +462,6 @@ router.post('/generate', async (req: Request, res: Response) => {
     pendingId = await insertNarrationAudioPending({
       poiId: poi_id,
       narratorSlug: voice.narratorSlug,
-      audienceMode: audience_mode,
       depth: narrationDepth,
       mode: tripMode,
     });
@@ -439,8 +472,8 @@ router.post('/generate', async (req: Request, res: Response) => {
   }
 
   try {
-    // 5. Haiku narration text (with single parse-retry)
-    const { narrationText, haikuCost } = await generateNarrationViaHaiku(template, poi, pendingId);
+    // 5. Haiku narration text (plain prose, no JSON parse)
+    const { narrationText, haikuCost } = await generateNarrationViaHaiku(messages, pendingId);
 
     // 6. SSML post-processing — skip events logged for adherence audit
     const { ssml, skips } = ssmlize(narrationText);
@@ -495,11 +528,11 @@ router.post('/generate', async (req: Request, res: Response) => {
       ? ttsOutput.audioBuffer
       : Buffer.from(ttsOutput.audioBuffer);
 
-    // 8. Storage upload — precache path shape
+    // 8. Storage upload — narrator-keyed path (Migration Batch 1)
     const { audioUrl } = await uploadAudio(
       poi_id,
       voice.narratorSlug,
-      audience_mode,
+      voice.voiceSlot,
       narrationDepth,
       audioBuffer,
     );
@@ -515,7 +548,7 @@ router.post('/generate', async (req: Request, res: Response) => {
     });
 
     // 10. Patch pois.narration_cache (fire-and-forget — JSON cache is best-effort)
-    updatePoiNarrationCache(poi_id, tripMode, narrationDepth, audience_mode, audioUrl).catch(err =>
+    updatePoiNarrationCache(poi_id, tripMode, narrationDepth, voice.narratorSlug, audioUrl).catch(err =>
       console.error('[narration] narration_cache update failed:', err),
     );
 

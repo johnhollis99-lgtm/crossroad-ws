@@ -32,11 +32,10 @@ import { LinearGradient } from 'expo-linear-gradient';
 
 import {
   countPOIsAlongRoute,
-  getAvailableNarrators,
   getPOIsAlongRoute,
   saveTrip,
 } from '../lib/supabase';
-import type { NarratorRecord, POI } from '../lib/supabase';
+import type { POI } from '../lib/supabase';
 import { MapStyleId, MAP_STYLES, loadMapStyle, saveMapStyle } from '../lib/mapStyle';
 import { MapStylePicker } from '../components/MapStylePicker';
 import { useTheme } from '../src/design/theme';
@@ -55,7 +54,6 @@ import {
   IconRoadside,
   IconScience,
   IconWeird,
-  NarratorCard,
   OptionCard,
   PoiMarkerX,
   TripStat,
@@ -120,99 +118,20 @@ const CAT_SLUG: Record<string, string> = {
 
 const SERVER_URL = (process.env.EXPO_PUBLIC_SERVER_URL ?? 'http://localhost:3001');
 
-// Per Pine Phase 2 spec: narrator avatar colors constrained to Pine-coherent
-// hues. Map slug → avatar bg. Fallback uses the persona's stored color.
-const NARRATOR_AVATAR_PALETTE: Record<string, string> = {
-  'the-professor':      '#60A5FA', // cobalt — matches secondary
-  'the-local':          '#9F7AEA', // lilac — replaces the legacy brown
-  'the-junior-ranger':  '#10B981', // emerald — matches primary
-  'the-truck-driver':   '#F59E0B', // amber — matches CVD-safe accent
-};
-
-// ── Preset narrators (fallback if Supabase RPC not yet migrated) ─────────────
-
-const PRESET_NARRATORS: NarratorRecord[] = [
-  {
-    id: '00000000-0000-0000-0000-000000000001',
-    slug: 'the-professor',
-    name: 'The Professor',
-    subtitle: 'Knows everything',
-    description: 'Your encyclopedic companion for every mile.',
-    audience_mode: 'family',
-    content_rating: 'everyone',
-    content_guardrails: 'Universally appropriate, educational, no profanity.',
-    tone_keywords: ['confident', 'encyclopedic', 'warm', 'authoritative'],
-    voice_id: null,
-    voice_descriptor: 'Male, deep, measured',
-    intro_line: "Alright, I've been looking at your route — there's more out here than you'd think. Let me walk you through it.",
-    system_prompt_fragment: 'You are The Professor, a confident and encyclopedic road-trip narrator.',
-    avatar_color_bg: NARRATOR_AVATAR_PALETTE['the-professor'],
-    avatar_color_text: '#FFFFFF',
-    avatar_initials: 'TP',
-    is_preset: true,
-    source: 'preset',
-  },
-  {
-    id: '00000000-0000-0000-0000-000000000002',
-    slug: 'the-truck-driver',
-    name: 'The Truck Driver',
-    subtitle: 'Has driven every highway twice',
-    description: 'Real talk from 400,000 miles of American asphalt.',
-    audience_mode: 'unfiltered',
-    content_rating: 'rated_r',
-    content_guardrails: '18+ age-gate required. No slurs, no punching down.',
-    tone_keywords: ['irreverent', 'sharp', 'funny', 'opinionated'],
-    voice_id: null,
-    voice_descriptor: 'Male, gravelly, no-nonsense',
-    intro_line: "Alright, I've done this run about 400 times. Let me tell you what's actually worth looking at.",
-    system_prompt_fragment: 'You are The Truck Driver, a road-trip narrator who has driven every highway in America.',
-    avatar_color_bg: NARRATOR_AVATAR_PALETTE['the-truck-driver'],
-    avatar_color_text: '#FFFFFF',
-    avatar_initials: 'TD',
-    is_preset: true,
-    source: 'preset',
-  },
-  {
-    id: '00000000-0000-0000-0000-000000000003',
-    slug: 'the-junior-ranger',
-    name: 'The Junior Ranger',
-    subtitle: 'Explorer for ages 4–12',
-    description: "Every road trip is a wild adventure. Let's go!",
-    audience_mode: 'kids',
-    content_rating: 'everyone',
-    content_guardrails: 'Strict. No violence, death, or disturbing content. Everything framed as discovery.',
-    tone_keywords: ['enthusiastic', 'wonder', 'encouraging', 'curious'],
-    voice_id: null,
-    voice_descriptor: 'Youthful, bright, energetic',
-    intro_line: "Hey explorer! I'm your Junior Ranger and we've got SO many cool things to find on this trip!",
-    system_prompt_fragment: 'You are The Junior Ranger, a road-trip narrator for children ages 4–12.',
-    avatar_color_bg: NARRATOR_AVATAR_PALETTE['the-junior-ranger'],
-    avatar_color_text: '#FFFFFF',
-    avatar_initials: 'JR',
-    is_preset: true,
-    source: 'preset',
-  },
-  {
-    id: '00000000-0000-0000-0000-000000000004',
-    slug: 'the-local',
-    name: 'The Local',
-    subtitle: 'Skips the tourist traps',
-    description: "Deep cuts only. The guidebook doesn't know this.",
-    audience_mode: 'local',
-    content_rating: 'everyone',
-    content_guardrails: 'Appropriate for all ages but tone is adult and insider. No explicit content.',
-    tone_keywords: ['insider', 'conversational', 'knowing', 'opinionated', 'dry'],
-    voice_id: null,
-    voice_descriptor: 'Conversational, relaxed, knowing',
-    intro_line: "Look — the guidebook stuff is fine but I'll tell you what the guidebooks don't know.",
-    system_prompt_fragment: 'You are The Local, a road-trip narrator who is an insider in every region.',
-    avatar_color_bg: NARRATOR_AVATAR_PALETTE['the-local'],
-    avatar_color_text: '#FFFFFF',
-    avatar_initials: 'TL',
-    is_preset: true,
-    source: 'preset',
-  },
-];
+// ── Narrator selection ──────────────────────────────────────────────────────
+//
+// Migration Batch 2 (Track B, 2026-05-22): the legacy 4-narrator preset grid
+// (Professor / Truck Driver / Junior Ranger / Local — keyed to the
+// `voice_configs.mode` audience taxonomy: family / kids / unfiltered / local)
+// was retired here. The runtime narration route locks to one voice per
+// audience and the addendum collapses on-screen narrator choice to the
+// two-narrator model (`narrator_a` / `narrator_b`), persisted via Zustand
+// (`useTripStore.narratorSlug`). The J1b 2-card narrator picker (Window
+// Seat / Shotgun) lands on top of this state in a later batch.
+//
+// Until then, `narratorSlug` defaults to 'narrator_a' (see tripStore
+// DEFAULTS) and the customize page emits no UI — Start trip writes the
+// reserved slug into the drive nav payload's `filters.narratorSlug`.
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -237,11 +156,6 @@ function fmtDuration(min: number): string {
 function fmtMiles(mi: number): string {
   if (mi === 0) return '0 mi';
   return mi % 1 === 0 ? `${mi} mi` : `${mi.toFixed(1)} mi`;
-}
-
-function avatarColorFor(narrator: NarratorRecord): string {
-  const slug = narrator.slug ?? '';
-  return NARRATOR_AVATAR_PALETTE[slug] ?? narrator.avatar_color_bg ?? '#10B981';
 }
 
 // Per-marker wrapper mirroring drive's DrivePoiMarker pattern (app/drive.tsx).
@@ -318,9 +232,6 @@ export default function CustomizeScreen() {
   const minRelevance = 0;
 
   // ── State ────────────────────────────────────────────────────────────────
-  const [narrators,        setNarrators]        = useState<NarratorRecord[]>([]);
-  const [loadingNarrators, setLoadingNarrators] = useState(true);
-  const [selectedNarrator, setSelectedNarrator] = useState<NarratorRecord | null>(null);
   const [catsScrolled,     setCatsScrolled]     = useState(false);
   const [saving,           setSaving]           = useState(false);
   const [mapStyleId,       setMapStyleId]       = useState<MapStyleId>('dark');
@@ -468,30 +379,9 @@ export default function CustomizeScreen() {
   const handleMapStyleChange = (id: MapStyleId) => { setMapStyleId(id); saveMapStyle(id); };
   const activeMapStyle = MAP_STYLES[mapStyleId];
 
-  // ── Load narrators ────────────────────────────────────────────────────────
-  useEffect(() => {
-    getAvailableNarrators()
-      .then(data => {
-        const list = data.length > 0 ? data : PRESET_NARRATORS;
-        setNarrators(list);
-        const prof = list.find(n => n.slug === 'the-professor') ?? list[0] ?? null;
-        setSelectedNarrator(prof);
-      })
-      .catch(() => {
-        setNarrators(PRESET_NARRATORS);
-        setSelectedNarrator(PRESET_NARRATORS[0]);
-      })
-      .finally(() => setLoadingNarrators(false));
-  }, []);
-
   // ── Start trip ────────────────────────────────────────────────────────────
   const handleStartTrip = useCallback(async () => {
     if (saving) return;
-
-    if (!selectedNarrator) {
-      Alert.alert('Select a narrator', 'Choose a narrator before starting your trip.');
-      return;
-    }
 
     setSaving(true);
 
@@ -501,21 +391,18 @@ export default function CustomizeScreen() {
       destination:     routeInfo.destination,
       distanceMi:      routeInfo.distance_mi,
       durationMin:     routeInfo.duration_minutes,
-      narratorId:      selectedNarrator.is_preset ? selectedNarrator.id : undefined,
-      userNarratorId:  !selectedNarrator.is_preset ? selectedNarrator.id : undefined,
-      narratorName:    selectedNarrator.name,
-      // J1a: depth UI removed; hardcoded until trips.depth column
-      // is dropped in a follow-up migration. See CLAUDE.md
-      // deferred-migration backlog.
-      depth:           'ride_along',
       categoryFilter:  selectedCats,
-      // J1a-followups: density + min_relevance UI removed; hardcoded
-      // until the trips.density / trips.min_relevance CHECK columns
-      // are dropped. Same pattern as `depth` above. poi_distance_m has
-      // no CHECK and is omitted from the payload entirely so the DB
-      // DEFAULT 500 applies. See CLAUDE.md J1a-followups-deferred note.
-      density:         'balanced' as const,
-      minRelevance:    0,
+      // Migration Batch 1 (2026-05-22): J1a + J1a-followups columns
+      // (depth / density / min_relevance / poi_distance_m) dropped in
+      // 20260522000008 — saveTrip's INSERT no longer writes them.
+      // Migration Batch 2 (2026-05-22, Track B): legacy 4-narrator preset
+      // picker retired; narratorId / userNarratorId / narratorName no
+      // longer written by Pine customize.tsx. The legacy `trips.narrator_id`
+      // / `trips.user_narrator_id` / `trips.narrator_name` columns stay in
+      // the schema (defer-drop to Batch 3) but receive NULL on every
+      // INSERT going forward. narrator selection is now session state
+      // (tripStore.narratorSlug; default 'narrator_a'); drive reads it via
+      // the filters nav payload below.
       status:          'active',
       startedAt:       new Date().toISOString(),
     };
@@ -540,21 +427,21 @@ export default function CustomizeScreen() {
       routePreview:   params.routePreview   ?? '',
       originLocation: params.originLocation ?? '',
       tripId,
-      narrator:       JSON.stringify(selectedNarrator),
       filters: JSON.stringify({
-        // J1a: legacy `depth` removed from filters payload. drive.tsx
-        // never reads it; legacy driving.tsx / trail.tsx fall through
-        // their `?? 'ride_along'` defaults inside useTTS.
-        // J1a-followups: density/minRelevance still emitted with the
-        // mode-aware defaults so drive.tsx's curation pass keeps
-        // matching the home preview; corridorMi seeds drive.tsx's
-        // story-corridor slider initial value.
+        // Migration Batch 1 (2026-05-22): density + minRelevance dropped
+        // from the filters payload alongside the trips column drops in
+        // 20260522000008. drive.tsx's `?? 'balanced'` / `?? 0` fallbacks
+        // remain (defensive against legacy serialized state). corridorMi
+        // stays — seeds drive.tsx's story-corridor slider initial value.
+        // Migration Batch 2 (2026-05-22, Track B): `voice` field removed
+        // (was `selectedNarrator.slug`); voice resolution now happens
+        // server-side via the narrator_a/narrator_b lookup against
+        // voice_configs.narrator_slug. The reserved `narratorSlug` field
+        // below is the session-state default ('narrator_a' until J1b
+        // wires the 2-card picker).
         categoryFilter: selectedCats.map(c => CAT_SLUG[c] ?? c.toLowerCase()),
         corridorMi,
         tone:           'warm',
-        voice:          selectedNarrator.slug ?? 'canyon_guide',
-        density,
-        minRelevance,
         tripMode:       isHiking ? 'hiking' : 'driving',
         // J1a additions — detail (was `pace`) + focus + reserved
         // narrator slug.
@@ -563,11 +450,7 @@ export default function CustomizeScreen() {
         narratorSlug,
       }),
     });
-  }, [selectedNarrator, saving, selectedCats, routeInfo, params, navigation, isHiking, corridorMi, density, minRelevance, detail, narrativeFocus, narratorSlug]);
-
-  // ── Narrator grid: chunk into rows of 2 ──────────────────────────────────
-  const narratorRows: NarratorRecord[][] = [];
-  for (let i = 0; i < narrators.length; i += 2) narratorRows.push(narrators.slice(i, i + 2));
+  }, [saving, selectedCats, routeInfo, params, navigation, isHiking, corridorMi, detail, narrativeFocus, narratorSlug]);
 
   const paceLabel = avgPaceMin === null || avgPaceMin === 0
     ? '—'
@@ -750,43 +633,11 @@ export default function CustomizeScreen() {
         showsVerticalScrollIndicator={false}
         keyboardShouldPersistTaps="handled"
       >
-        {/* ── Narrator grid ──────────────────────────────────────────────── */}
-        {/* J1a: legacy 4-narrator preset grid. Replaced in J1b with the
-            2-card narrator picker (Window Seat / Shotgun) once the second
-            narrator's voice_configs rows are seeded (Phase J0). */}
-        <Text style={[theme.textVariants.eyebrow, styles.sectionLabel, { color: theme.colors.inkSoft }]}>
-          Your narrator
-        </Text>
-
-        {loadingNarrators ? (
-          <View style={styles.narratorGrid}>
-            {[0, 1].map(r => (
-              <View key={r} style={styles.narratorRow}>
-                <View style={[styles.skel, { backgroundColor: theme.colors.paperWarm }]} />
-                <View style={[styles.skel, { backgroundColor: theme.colors.paperWarm }]} />
-              </View>
-            ))}
-          </View>
-        ) : (
-          <View style={styles.narratorGrid}>
-            {narratorRows.map((row, ri) => (
-              <View key={ri} style={styles.narratorRow}>
-                {row.map(narrator => (
-                  <NarratorCard
-                    key={narrator.id}
-                    initials={narrator.avatar_initials ?? '??'}
-                    avatarColor={avatarColorFor(narrator)}
-                    name={narrator.name}
-                    subtitle={narrator.subtitle ?? ''}
-                    selected={selectedNarrator?.id === narrator.id}
-                    onSelect={() => setSelectedNarrator(narrator)}
-                  />
-                ))}
-                {row.length === 1 && <View style={{ flex: 1 }} />}
-              </View>
-            ))}
-          </View>
-        )}
+        {/* Migration Batch 2 (Track B, 2026-05-22): legacy 4-narrator preset
+            grid removed (Professor / Truck Driver / Junior Ranger / Local).
+            Narrator selection is now session state via tripStore — defaults
+            to 'narrator_a' until J1b lands the 2-card picker (Window Seat /
+            Shotgun) per addendum §5. */}
 
         {/* ── Narrative Focus (J1a — addendum §1.2) ───────────────────────── */}
         <Text style={[theme.textVariants.eyebrow, styles.sectionLabel, { color: theme.colors.inkSoft }]}>
@@ -842,12 +693,25 @@ export default function CustomizeScreen() {
         </View>
 
         {/* ── Categories ───────────────────────────────────────────────────── */}
-        <Text
+        {/* Header row carries a small static legend (ON green / OFF black)
+            so the user sees at a glance what the pill colors below mean.
+            Legend is purely visual — no tap target, no state. */}
+        <View
           onLayout={e => setCategoriesY(e.nativeEvent.layout.y)}
-          style={[theme.textVariants.eyebrow, styles.sectionLabel, { color: theme.colors.inkSoft }]}
+          style={styles.categoriesHeaderRow}
         >
-          Categories
-        </Text>
+          <Text style={[theme.textVariants.eyebrow, { color: theme.colors.inkSoft }]}>
+            Categories
+          </Text>
+          <View style={styles.legendRow}>
+            <View style={[styles.legendBadge, { backgroundColor: theme.colors.primary }]}>
+              <Text style={[theme.textVariants.eyebrow, { color: theme.colors.paper }]}>ON</Text>
+            </View>
+            <View style={[styles.legendBadge, { backgroundColor: theme.colors.paperEdge }]}>
+              <Text style={[theme.textVariants.eyebrow, { color: theme.colors.ink }]}>OFF</Text>
+            </View>
+          </View>
+        </View>
         <View style={styles.pillRowWrap}>
           <ScrollView
             horizontal
@@ -1053,14 +917,30 @@ const styles = StyleSheet.create({
     marginBottom: 10,
   },
 
-  // Narrator grid
-  narratorGrid: { gap: 10 },
-  narratorRow:  { flexDirection: 'row', gap: 10 },
-  skel:         { flex: 1, height: 96, borderRadius: 16, opacity: 0.3 },
-
   // Option-card pair row (J1a — used by Narrative Focus + Pace)
   optionRow:         { flexDirection: 'row', gap: 10 },
   customizeLinkRow:  { marginTop: 8, paddingVertical: 4 },
+
+  // Categories header row — eyebrow label + static ON/OFF legend
+  categoriesHeaderRow: {
+    flexDirection:  'row',
+    alignItems:     'center',
+    justifyContent: 'space-between',
+    marginTop:      18,
+    marginBottom:   10,
+  },
+  legendRow: {
+    flexDirection: 'row',
+    gap:           6,
+  },
+  legendBadge: {
+    paddingHorizontal: 8,
+    paddingVertical:   3,
+    borderRadius:      999,
+    minWidth:          36,
+    alignItems:        'center',
+    justifyContent:    'center',
+  },
 
   // Categories scroll fades
   pillRowWrap:   { position: 'relative' },

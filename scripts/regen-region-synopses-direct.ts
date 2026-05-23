@@ -68,10 +68,12 @@ function loadEnv(): void {
 loadEnv();
 
 // ── Targets ───────────────────────────────────────────────────────────────
+// Migration Batch 2 (Track C, 2026-05-22): AUDIENCE constant retired —
+// narration_audio rows now write audience_mode: null and the narrator_slug
+// (already present per VOICES entries) carries the disambiguation.
 const STORAGE_BUCKET = 'narration-audio';
 const TRIP_MODE = 'driving' as const;
 const DEPTH = 'standard' as const;
-const AUDIENCE = 'family' as const;
 
 interface VoicePick {
   narrator_slug: 'narrator_a' | 'narrator_b';
@@ -164,14 +166,19 @@ async function main() {
 
     try {
       // 1. Insert pending narration_audio row first so a failure leaves
-      //    a row the sweeper can clean up. audience_mode='family' (H1.6.2).
+      //    a row the sweeper can clean up. Migration Batch 2 (Track C,
+      //    2026-05-22): audience_mode written as NULL — narrator_slug
+      //    fully disambiguates rows post-collapse. The column stays in
+      //    the schema (defer-drop with the audience-mode cleanup in a
+      //    future batch); the na_unique constraint's NULLS NOT DISTINCT
+      //    semantics treat NULL as a stable value.
       const { data: pendingRow, error: insErr } = await supabase
         .from('narration_audio')
         .upsert({
           region_id:     p.region_id,
           poi_id:        null,
           narrator_slug: p.voice.narrator_slug,
-          audience_mode: AUDIENCE,
+          audience_mode: null,
           depth:         DEPTH,
           mode:          TRIP_MODE,
           audio_url:     null,

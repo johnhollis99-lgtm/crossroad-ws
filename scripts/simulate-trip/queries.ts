@@ -36,6 +36,8 @@ export interface CorridorPoi {
   lon: number;
   dist_from_route_mi: number;
   route_position_fraction: number; // 0..1 along the route
+  trigger_mode: 'proximity' | 'closest_approach';
+  off_route_landmark_hint: string | null;
 }
 
 /**
@@ -68,7 +70,9 @@ export async function getCorridorPois(
       ST_LineLocatePoint(
         route.geom,
         ST_ClosestPoint(route.geom, p.location::geometry)
-      ) AS route_position_fraction
+      ) AS route_position_fraction,
+      p.trigger_mode,
+      p.off_route_landmark_hint
     FROM public.pois p
     JOIN public.poi_categories pc ON pc.id = p.category_id
     CROSS JOIN route
@@ -76,7 +80,7 @@ export async function getCorridorPois(
       AND p.editorial_curated = TRUE
       AND p.parent_poi_id IS NULL
       AND ST_DWithin(p.location, route.geog, $2)
-    ORDER BY route_position_fraction
+    ORDER BY route_position_fraction ASC, p.significance_score DESC, p.id ASC
   `;
   const res = await pool.query(sql, [routeWkt, corridorM]);
   return res.rows.map(r => ({
@@ -91,6 +95,8 @@ export async function getCorridorPois(
     lon: Number(r.lon),
     dist_from_route_mi: Number(r.dist_from_route_mi),
     route_position_fraction: Number(r.route_position_fraction),
+    trigger_mode: r.trigger_mode as 'proximity' | 'closest_approach',
+    off_route_landmark_hint: r.off_route_landmark_hint,
   }));
 }
 

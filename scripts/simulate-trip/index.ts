@@ -27,7 +27,7 @@ import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import pkg from 'pg';
 
-import { PRESETS, PRESET_IDS, type RoutePreset } from './routes.js';
+import { PRESETS, PRESET_IDS, getMaxCorridorMi, type RoutePreset } from './routes.js';
 import { routeLengthMi } from './geo.js';
 import {
   waypointsToLineStringWkt,
@@ -44,7 +44,6 @@ const { Pool } = pkg;
 const __dirname = dirname(fileURLToPath(import.meta.url));
 dotenvConfig({ path: resolve(__dirname, '..', '..', '.env') });
 
-const DEFAULT_CORRIDOR_MI = 10;
 const STORAGE_PREFIX = 'pois';
 const AUDIO_SUFFIX = 'narrator_b_family_standard.opus';
 
@@ -54,7 +53,13 @@ interface Args {
   narrator: string;
   audience: string;
   output: string;
-  corridorMi: number;
+  /**
+   * Optional uniform override of the route's corridor_profile. When set,
+   * SQL fetches at this width and the per-mile filter treats every mile
+   * as having this corridor (no urban narrowing). When undefined, the
+   * route's corridor_profile drives both.
+   */
+  corridorOverrideMi: number | undefined;
 }
 
 function parseArgs(): Args {
@@ -103,13 +108,17 @@ function parseArgs(): Args {
     process.exit(1);
   }
   const corridorRaw = get('--corridor-mi');
-  const corridorMi = corridorRaw ? parseFloat(corridorRaw) : DEFAULT_CORRIDOR_MI;
-  if (Number.isNaN(corridorMi) || corridorMi <= 0) {
-    console.error(`FATAL: --corridor-mi must be a positive number (got "${corridorRaw}")`);
-    process.exit(1);
+  let corridorOverrideMi: number | undefined;
+  if (corridorRaw !== null) {
+    const parsed = parseFloat(corridorRaw);
+    if (Number.isNaN(parsed) || parsed <= 0) {
+      console.error(`FATAL: --corridor-mi must be a positive number (got "${corridorRaw}")`);
+      process.exit(1);
+    }
+    corridorOverrideMi = parsed;
   }
 
-  return { route, pace, narrator, audience, output, corridorMi };
+  return { route, pace, narrator, audience, output, corridorOverrideMi };
 }
 
 function publicUrlBase(): string {
@@ -130,12 +139,34 @@ async function main(): Promise<void> {
   const preset: RoutePreset = PRESETS[args.route]!;
   const pool = new Pool({ connectionString: process.env['DATABASE_URL'], max: 2 });
 
+  // Resolve the spatial corridor for the SQL filter. When the user passes
+  // --corridor-mi, it's a uniform override; otherwise the route's
+  // corridor_profile widest envelope (incl. CLOSEST_APPROACH_MAX_MI) wins.
+  const sqlCorridorMi = args.corridorOverrideMi ?? getMaxCorridorMi(preset);
+  const corridorLabel = args.corridorOverrideMi !== undefined
+    ? `±${sqlCorridorMi} mi (uniform override)`
+    : `±${sqlCorridorMi} mi (max of profile + closest_approach cap)`;
+
+  // When override is set, the lookahead's per-mile filter should treat
+  // the corridor as uniform. Synthesize a flat profile so passesPerMileFilter
+  // returns the override width at every mile (no urban narrowing).
+  const presetForLookahead: RoutePreset = args.corridorOverrideMi !== undefined
+    ? {
+        ...preset,
+        corridor_profile: {
+          default_corridor_mi: args.corridorOverrideMi,
+          urban_segments: [],
+          notes: '[CLI uniform override via --corridor-mi]',
+        },
+      }
+    : preset;
+
   try {
     console.log('=== Trip simulator — Phase I MVP ===');
     console.log(`  Route:     ${preset.display_name} (${preset.id})`);
     console.log(`  Pace:      ${args.pace}`);
     console.log(`  Narrator:  ${args.narrator} × ${args.audience}`);
-    console.log(`  Corridor:  ±${args.corridorMi} mi`);
+    console.log(`  Corridor:  ${corridorLabel}`);
     console.log(`  Waypoints: ${preset.waypoints.length} → straight-line route length will be computed`);
     console.log('');
 
@@ -147,8 +178,8 @@ async function main(): Promise<void> {
 
     console.log('▶ Querying corridor POIs (editorial_curated = TRUE only, parent_poi_id IS NULL)...');
     const t0 = Date.now();
-    const corridorPois = await getCorridorPois(pool, routeWkt, args.corridorMi);
-    console.log(`  ${corridorPois.length} POIs in ±${args.corridorMi}mi corridor (${Date.now() - t0}ms)`);
+    const corridorPois = await getCorridorPois(pool, routeWkt, sqlCorridorMi);
+    console.log(`  ${corridorPois.length} POIs in ±${sqlCorridorMi}mi spatial filter (${Date.now() - t0}ms — per-mile narrowing applied in lookahead)`);
 
     console.log('▶ Querying region intersections...');
     const t1 = Date.now();
@@ -177,6 +208,7 @@ async function main(): Promise<void> {
     const output = runLookahead({
       routeLengthMi: totalRouteMi,
       speedProfile: preset.speed_profile,
+      preset: presetForLookahead,
       corridorPois,
       regionEntries,
       categoryFloors,
@@ -194,7 +226,7 @@ async function main(): Promise<void> {
       narrator: args.narrator,
       audience: args.audience,
       depth: 'standard',
-      corridorMi: args.corridorMi,
+      corridorMi: sqlCorridorMi,
       timestamp,
     });
 

@@ -56,7 +56,12 @@
 import { milesToMinutes, fmtElapsed } from './geo.js';
 import { weightFor, type NarratorWeights } from './narrator-weights.js';
 import type { CorridorPoi, RegionEntry, PoiAudioMeta } from './queries.js';
-import type { SpeedBreakpoint } from './routes.js';
+import {
+  CLOSEST_APPROACH_MAX_MI,
+  getCorridorMiAt,
+  type RoutePreset,
+  type SpeedBreakpoint,
+} from './routes.js';
 
 // Tunable defaults (per addendum §10.3 + §10.5 + §10 step 3)
 export const CLUSTER_MIN_COUNT = 3;
@@ -76,6 +81,7 @@ export const REGION_DURATION_SEC_DEFAULT = 80;
 export interface SimulationInput {
   routeLengthMi: number;
   speedProfile: SpeedBreakpoint[];
+  preset: RoutePreset; // carries corridor_profile for the per-mile filter
   corridorPois: CorridorPoi[];
   regionEntries: RegionEntry[];
   categoryFloors: Map<string, number>;
@@ -149,6 +155,36 @@ export interface SimulationOutput {
     total_trip_minutes: number;
     total_corridor_silence_minutes: number;
   };
+}
+
+/**
+ * Per-mile corridor filter. Hard gate applied right after the SQL query
+ * returns — POIs that fail are dropped from the candidate set entirely
+ * (no event emitted; they're outside the route's effective corridor at
+ * their projection mile).
+ *
+ *   - trigger_mode = 'proximity'        → dist_from_route_mi must be <= the
+ *                                          route's corridor_mi at this mile
+ *                                          (per corridor_profile).
+ *   - trigger_mode = 'closest_approach' → dist_from_route_mi must be <=
+ *                                          CLOSEST_APPROACH_MAX_MI (30 mi),
+ *                                          independent of the route's
+ *                                          per-mile corridor.
+ *
+ * The mile is computed as route_position_fraction * totalMiles (the SQL
+ * returns the 0..1 fraction; total mileage lives TS-side).
+ */
+function passesPerMileFilter(
+  poi: CorridorPoi,
+  route: RoutePreset,
+  totalMiles: number,
+): boolean {
+  if (poi.trigger_mode === 'closest_approach') {
+    return poi.dist_from_route_mi <= CLOSEST_APPROACH_MAX_MI;
+  }
+  const mile = poi.route_position_fraction * totalMiles;
+  const corridor_mi = getCorridorMiAt(route, mile);
+  return poi.dist_from_route_mi <= corridor_mi;
 }
 
 interface ClusterMembership {
@@ -239,6 +275,16 @@ export function runLookahead(input: SimulationInput): SimulationOutput {
     minute: 0,
   });
 
+  // Step 1.5 — per-mile corridor filter (hard gate, no event emitted).
+  // SQL widened to maxCorridorMi so closest_approach candidates outside
+  // the rural corridor still come back; here we narrow per-mile:
+  //   proximity        → must be within getCorridorMiAt(route, mile)
+  //   closest_approach → must be within CLOSEST_APPROACH_MAX_MI
+  // POIs that fail are dropped silently from the candidate set.
+  const eligiblePois = input.corridorPois.filter(p =>
+    passesPerMileFilter(p, input.preset, input.routeLengthMi)
+  );
+
   // Step 2 — annotate POIs with mile, effective_score, audio meta.
   // No floor filter: editorial_curated = TRUE is the gate (see header
   // comment §1). Every POI returned by the corridor query is eligible.
@@ -250,7 +296,7 @@ export function runLookahead(input: SimulationInput): SimulationOutput {
     audio_url: string | undefined;
     audio_est_sec: number;
   }> = [];
-  for (const p of input.corridorPois) {
+  for (const p of eligiblePois) {
     const mile = p.route_position_fraction * input.routeLengthMi;
     const minute = milesToMinutes(mile, input.speedProfile);
     const narratorWeight = weightFor(input.narratorWeights, p.category_slug);
@@ -364,11 +410,22 @@ export function runLookahead(input: SimulationInput): SimulationOutput {
         continue;
       }
 
-      // Density gap: drop POIs with raw significance < threshold if
+      // Density gap: drop POIs with effective_score below threshold if
       // they would fire too close to the last narration's end time.
+      //
+      // Read effective_score (raw + boost), not raw significance. Curator
+      // boost mechanism is meant to surface late-in-trip POIs; it must
+      // also save them from gap suppression, not just from candidate filter.
+      //
+      // closest_approach POIs are anchored to perpendicular visibility,
+      // not corridor entry — the user is passing the landmark NOW, so
+      // the "too close to previous narration" rule doesn't apply the
+      // same way. Bypass density-gap; keep cluster + region rules.
       const sinceLastEndSec = (c.minute - lastNarrationEndMin) * 60;
+      const effectiveSig = c.poi.significance_score + c.poi.editorial_score_boost;
       if (
-        c.poi.significance_score < cfg.densityGapSigOverride &&
+        c.poi.trigger_mode !== 'closest_approach' &&
+        effectiveSig < cfg.densityGapSigOverride &&
         sinceLastEndSec < cfg.densityGapSec
       ) {
         events.push({
@@ -384,7 +441,7 @@ export function runLookahead(input: SimulationInput): SimulationOutput {
           poi_distance_off_route_mi: c.poi.dist_from_route_mi,
           gap_blocked_by_poi_id: lastNarrationFiredEvent?.poi_id ?? lastNarrationFiredEvent?.region_id,
           gap_blocked_by_poi_name: lastNarrationFiredEvent?.poi_name ?? lastNarrationFiredEvent?.region_name,
-          suppression_reason: `density gap (${Math.round(sinceLastEndSec)}s after last narration end; sig ${c.poi.significance_score} < ${cfg.densityGapSigOverride} override floor)`,
+          suppression_reason: `density gap (${Math.round(sinceLastEndSec)}s after last narration end; effective ${effectiveSig} (sig=${c.poi.significance_score}+boost=${c.poi.editorial_score_boost}) < ${cfg.densityGapSigOverride} override floor)`,
         });
         pois_gap_suppressed++;
         continue;
@@ -424,7 +481,7 @@ export function runLookahead(input: SimulationInput): SimulationOutput {
   });
 
   const stats: SimulationOutput['stats'] = {
-    total_pois_in_corridor: input.corridorPois.length,
+    total_pois_in_corridor: eligiblePois.length,
     pois_below_floor: 0, // editorial-gate-as-the-gate; no runtime floor filter
     pois_cluster_suppressed,
     pois_gap_suppressed,
